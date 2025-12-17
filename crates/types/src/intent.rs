@@ -71,9 +71,14 @@ impl Intent {
         IntentBuilder::default()
     }
 
-    /// Get the trading pair for this intent
+    /// Get the trading pair for this intent (alphabetically ordered for consistency)
     pub fn pair(&self) -> TradingPair {
-        TradingPair::new(&self.input.denom, &self.output.denom)
+        // Alphabetically order to ensure buy and sell intents map to the same pair
+        if self.input.denom < self.output.denom {
+            TradingPair::new(&self.input.denom, &self.output.denom)
+        } else {
+            TradingPair::new(&self.output.denom, &self.input.denom)
+        }
     }
 
     /// Determine if this is a buy or sell relative to the base asset
