@@ -1,0 +1,52 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/types",
+    "crates/solver",
+    "crates/matching-engine",
+    "crates/settlement",
+    "crates/relayer",
+    "contracts/escrow",
+    "contracts/settlement",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "Apache-2.0"
+repository = "https://github.com/iqlusioninc/atom-intents"
+authors = ["Iqlusion Inc."]
+
+[workspace.dependencies]
+# Core
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+thiserror = "2.0"
+anyhow = "1.0"
+async-trait = "0.1"
+tokio = { version = "1.0", features = ["full"] }
+futures = "0.3"
+tracing = "0.1"
+tracing-subscriber = "0.3"
+
+# Cosmos/CosmWasm
+cosmwasm-std = "2.2"
+cosmwasm-schema = "2.2"
+cw-storage-plus = "2.0"
+
+# Crypto
+sha2 = "0.10"
+ed25519-dalek = "2.0"
+
+# Numeric
+rust_decimal = { version = "1.0", features = ["serde"] }
+
+# Time
+chrono = { version = "0.4", features = ["serde"] }
+
+# Internal crates
+atom-intents-types = { path = "crates/types" }
+atom-intents-solver = { path = "crates/solver" }
+atom-intents-matching-engine = { path = "crates/matching-engine" }
+atom-intents-settlement = { path = "crates/settlement" }
+atom-intents-relayer = { path = "crates/relayer" }

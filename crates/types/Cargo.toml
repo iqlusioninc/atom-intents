@@ -1,0 +1,18 @@
+[package]
+name = "atom-intents-types"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "Core types for ATOM Intent-Based Liquidity System"
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+cosmwasm-std = { workspace = true }
+cosmwasm-schema = { workspace = true }
+rust_decimal = { workspace = true }
+sha2 = { workspace = true }
+hex = "0.4"

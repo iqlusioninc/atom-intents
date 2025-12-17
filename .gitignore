@@ -1,0 +1,21 @@
+# Generated files
+/target/
+**/*.rs.bk
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Artifacts
+*.wasm
+artifacts/
+
+# Local configuration
+.env
+.env.local
