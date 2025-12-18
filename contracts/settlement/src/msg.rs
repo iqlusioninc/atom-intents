@@ -84,7 +84,10 @@ pub enum ExecuteMsg {
     UpdateReputation { solver_id: String },
 
     /// Decay reputation scores (called periodically)
-    DecayReputation {},
+    DecayReputation {
+        start_after: Option<String>,
+        limit: Option<u32>,
+    },
 }
 
 #[cw_serde]

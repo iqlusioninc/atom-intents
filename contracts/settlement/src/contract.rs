@@ -130,7 +130,9 @@ pub fn execute(
         ExecuteMsg::UpdateReputation { solver_id } => {
             execute_update_reputation(deps, env, solver_id)
         }
-        ExecuteMsg::DecayReputation {} => execute_decay_reputation(deps, env),
+        ExecuteMsg::DecayReputation { start_after, limit } => {
+            execute_decay_reputation(deps, env, start_after, limit)
+        }
     }
 }
 
@@ -214,7 +216,7 @@ fn execute_deregister_solver(
 fn execute_create_settlement(
     deps: DepsMut,
     env: Env,
-    _info: MessageInfo,
+    info: MessageInfo,
     settlement_id: String,
     intent_id: String,
     solver_id: String,
@@ -225,9 +227,12 @@ fn execute_create_settlement(
     solver_output_denom: String,
     expires_at: u64,
 ) -> Result<Response, ContractError> {
-    // Verify solver exists
-    if !SOLVERS.has(deps.storage, &solver_id) {
-        return Err(ContractError::SolverNotRegistered { id: solver_id });
+    // Verify solver exists and sender is authorized
+    let solver = SOLVERS.load(deps.storage, &solver_id)
+        .map_err(|_| ContractError::SolverNotRegistered { id: solver_id.clone() })?;
+
+    if info.sender != solver.operator {
+        return Err(ContractError::Unauthorized {});
     }
 
     // Check settlement doesn't exist
@@ -971,20 +976,31 @@ fn execute_update_reputation(
         .add_attribute("reputation_score", reputation.reputation_score.to_string()))
 }
 
-fn execute_decay_reputation(deps: DepsMut, env: Env) -> Result<Response, ContractError> {
+fn execute_decay_reputation(
+    deps: DepsMut,
+    env: Env,
+    start_after: Option<String>,
+    limit: Option<u32>,
+) -> Result<Response, ContractError> {
     // Decay rate: 1% per day (86400 seconds)
     const DECAY_PERIOD: u64 = 86400; // 1 day in seconds
     const DECAY_BPS: u64 = 100; // 1% decay
+    
+    let limit = limit.unwrap_or(30).min(100) as usize;
+    let start = start_after.as_ref().map(|s| cw_storage_plus::Bound::exclusive(s.as_str()));
 
     let mut updated_count = 0u32;
+    let mut last_processed: Option<String> = None;
 
-    // Iterate through all reputations
+    // Iterate through reputations with pagination
     let all_reps: Vec<(String, SolverReputation)> = REPUTATIONS
-        .range(deps.storage, None, None, cosmwasm_std::Order::Ascending)
+        .range(deps.storage, start, None, cosmwasm_std::Order::Ascending)
+        .take(limit)
         .filter_map(|r| r.ok())
         .collect();
 
     for (solver_id, mut rep) in all_reps {
+        last_processed = Some(solver_id.clone());
         let time_since_update = env.block.time.seconds().saturating_sub(rep.last_updated);
 
         if time_since_update >= DECAY_PERIOD {
@@ -992,7 +1008,7 @@ fn execute_decay_reputation(deps: DepsMut, env: Env) -> Result<Response, Contrac
 
             // Apply decay for each period
             for _ in 0..periods.min(30) {
-                // Cap at 30 periods to avoid excessive computation
+                // Cap at 30 periods to avoid excessive computation per record
                 let decay = (rep.reputation_score * DECAY_BPS) / 10000;
                 rep.reputation_score = rep.reputation_score.saturating_sub(decay);
             }
@@ -1003,9 +1019,15 @@ fn execute_decay_reputation(deps: DepsMut, env: Env) -> Result<Response, Contrac
         }
     }
 
-    Ok(Response::new()
+    let mut response = Response::new()
         .add_attribute("action", "decay_reputation")
-        .add_attribute("updated_count", updated_count.to_string()))
+        .add_attribute("updated_count", updated_count.to_string());
+        
+    if let Some(last_id) = last_processed {
+        response = response.add_attribute("last_processed_solver", last_id);
+    }
+
+    Ok(response)
 }
 
 fn query_solver_reputation(deps: Deps, solver_id: String) -> StdResult<SolverReputationResponse> {
@@ -1211,7 +1233,7 @@ mod tests {
         settlement_id: &str,
         solver_id: &str,
     ) {
-        let info = message_info(&addrs.admin, &[]);
+        let info = message_info(&addrs.solver_operator, &[]);
         execute(
             deps.as_mut(),
             env.clone(),
@@ -1347,7 +1369,7 @@ mod tests {
         let (mut deps, env, addrs) = setup_contract();
         register_solver(&mut deps, &env, &addrs, "solver-1", 2_000_000);
 
-        let info = message_info(&addrs.admin, &[]);
+        let info = message_info(&addrs.solver_operator, &[]);
         let res = execute(
             deps.as_mut(),
             env.clone(),
@@ -2494,7 +2516,7 @@ mod tests {
         let (mut deps, mut env, addrs) = setup_contract();
         register_solver(&mut deps, &env, &addrs, "solver-1", 2_000_000);
 
-        // Create initial reputation
+        // Manually set initial reputation
         let initial_rep = SolverReputation {
             solver_id: "solver-1".to_string(),
             total_settlements: 10,
@@ -2520,7 +2542,10 @@ mod tests {
             deps.as_mut(),
             env.clone(),
             info,
-            ExecuteMsg::DecayReputation {},
+            ExecuteMsg::DecayReputation {
+                start_after: None,
+                limit: None,
+            },
         )
         .unwrap();
 
@@ -2541,6 +2566,82 @@ mod tests {
         // After 5 days of 1% decay per day, score should be lower
         assert!(reputation.reputation_score < 8000);
         assert!(reputation.reputation_score > 7000); // But not too much lower
+    }
+
+    #[test]
+    fn test_reputation_decay_pagination() {
+        let (mut deps, mut env, addrs) = setup_contract();
+        
+        // Register multiple solvers
+        for i in 1..=5 {
+            let id = format!("solver-{}", i);
+            register_solver(&mut deps, &env, &addrs, &id, 2_000_000);
+            
+            let rep = SolverReputation {
+                solver_id: id.clone(),
+                total_settlements: 10,
+                successful_settlements: 10,
+                failed_settlements: 0,
+                total_volume: Uint128::new(1_000_000),
+                average_settlement_time: 60,
+                slashing_events: 0,
+                reputation_score: 10000,
+                last_updated: env.block.time.seconds(),
+            };
+            REPUTATIONS.save(deps.as_mut().storage, &id, &rep).unwrap();
+        }
+
+        // Fast forward 5 days
+        env.block.time = Timestamp::from_seconds(env.block.time.seconds() + 5 * 86400);
+
+        // First page: limit 2
+        let info = message_info(&addrs.admin, &[]);
+        let res = execute(
+            deps.as_mut(),
+            env.clone(),
+            info.clone(),
+            ExecuteMsg::DecayReputation {
+                start_after: None,
+                limit: Some(2),
+            },
+        )
+        .unwrap();
+
+        assert_eq!(res.attributes[1].key, "updated_count");
+        assert_eq!(res.attributes[1].value, "2");
+        assert_eq!(res.attributes[2].key, "last_processed_solver");
+        
+        let last_processed = res.attributes[2].value.clone();
+
+        // Second page: limit 2, start after last
+        let res = execute(
+            deps.as_mut(),
+            env.clone(),
+            info.clone(),
+            ExecuteMsg::DecayReputation {
+                start_after: Some(last_processed.clone()),
+                limit: Some(2),
+            },
+        )
+        .unwrap();
+
+        assert_eq!(res.attributes[1].value, "2");
+        let next_last = res.attributes[2].value.clone();
+        assert_ne!(last_processed, next_last);
+
+        // Third page: remaining 1
+        let res = execute(
+            deps.as_mut(),
+            env.clone(),
+            info,
+            ExecuteMsg::DecayReputation {
+                start_after: Some(next_last),
+                limit: Some(2),
+            },
+        )
+        .unwrap();
+
+        assert_eq!(res.attributes[1].value, "1");
     }
 
     #[test]
@@ -2832,5 +2933,35 @@ mod tests {
         .unwrap_err();
 
         assert!(matches!(err, ContractError::InvalidStateTransition { .. }));
+    }
+
+    #[test]
+    fn test_create_settlement_unauthorized_access() {
+        let (mut deps, env, addrs) = setup_contract();
+        register_solver(&mut deps, &env, &addrs, "solver-1", 2_000_000);
+
+        // Attacker tries to create a settlement on behalf of solver-1
+        let info = message_info(&addrs.random_user, &[]);
+        
+        // This should now FAIL with Unauthorized
+        let err = execute(
+            deps.as_mut(),
+            env.clone(),
+            info,
+            ExecuteMsg::CreateSettlement {
+                settlement_id: "fake-settlement".to_string(),
+                intent_id: "intent-123".to_string(),
+                solver_id: "solver-1".to_string(),
+                user: addrs.user.to_string(),
+                user_input_amount: Uint128::new(100),
+                user_input_denom: "uatom".to_string(),
+                solver_output_amount: Uint128::new(100),
+                solver_output_denom: "uusdc".to_string(),
+                expires_at: env.block.time.seconds() + 3600,
+            },
+        ).unwrap_err();
+
+        // Assert that it was rejected
+        assert!(matches!(err, ContractError::Unauthorized {}));
     }
 }

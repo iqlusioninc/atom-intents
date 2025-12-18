@@ -247,3 +247,31 @@ All critical, high, and medium severity issues identified in this audit have bee
 - Functional solver competition in batch auctions
 
 The system is now considered **safe for deployment** pending final integration testing on testnet.
+
+---
+
+## 8. Post-Audit Findings
+
+During the continued audit following the initial resolution, one additional high-severity issue and one low-severity scalability issue were identified and addressed or noted.
+
+### 8.1. Missing Authorization in `create_settlement`
+*   **Severity:** **HIGH**
+*   **Status:** ✅ **RESOLVED**
+*   **Location:** `contracts/settlement/src/contract.rs`, `execute_create_settlement`
+*   **Description:** The `execute_create_settlement` function did not verify the caller's identity. Any user could create a pending settlement on behalf of any registered solver.
+*   **Impact:**
+    *   **Impersonation:** An attacker could attribute fake settlements to a reputable solver.
+    *   **Storage Spam / Griefing:** An attacker could flood the contract with pending settlements, potentially overwriting intent mappings (`INTENT_SETTLEMENTS`) and confusing users/UIs about the status of their intents.
+*   **Resolution:**
+    *   Updated `execute_create_settlement` to verify that `info.sender` matches the `operator` address of the specified `solver_id`.
+    *   Added regression test `test_create_settlement_unauthorized_access` in `contracts/settlement/src/contract.rs` to verify that unauthorized attempts are rejected with `ContractError::Unauthorized`.
+
+### 8.2. Unbounded Loop in `decay_reputation`
+*   **Severity:** **LOW/MEDIUM** (Scalability)
+*   **Status:** ✅ **RESOLVED**
+*   **Location:** `contracts/settlement/src/contract.rs`, `execute_decay_reputation`
+*   **Description:** The function iterates over `REPUTATIONS` without a limit or pagination. As the number of registered solvers grows, this transaction may eventually exceed the gas limit (OOG), preventing reputation decay updates.
+*   **Resolution:**
+    *   Updated `ExecuteMsg::DecayReputation` to accept optional `start_after` (String) and `limit` (u32) parameters.
+    *   Refactored `execute_decay_reputation` to use `cw_storage_plus` range pagination.
+    *   Added `test_reputation_decay_pagination` to verify the new functionality.
