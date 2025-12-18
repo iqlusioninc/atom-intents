@@ -19,6 +19,7 @@ This review builds upon the previous audit (AUDIT_REPORT.md) to identify **addit
 | Liquidity | 0 | 2 | 2 | 1 |
 | Timing Games | 0 | 3 | 2 | 1 |
 | Toxic Flow | 0 | 2 | 3 | 2 |
+| **Architecture** | **1** | 0 | 0 | 0 |
 
 ---
 
@@ -671,14 +672,126 @@ If solver process is compromised, CEX credentials are exposed.
 
 ---
 
-# Part V: Recommendations Summary
+# Part V: Architectural Issues
+
+## 5.1 [CRITICAL] Unnecessary Oracle Dependency
+
+**Location:** `crates/matching-engine/src/engine.rs:47-90`, `crates/solver/src/oracle.rs`, Spec Sections 6-7
+
+**Description:** The system uses an external price oracle as the execution price when crossing internal intents. **This oracle dependency is architecturally unnecessary** and introduces multiple attack vectors identified in this review.
+
+### Current Design (Flawed)
+
+```rust
+// crates/matching-engine/src/engine.rs:148-153
+fn cross_internal(
+    &self,
+    buys: &[&Intent],
+    sells: &[&Intent],
+    oracle_price: Decimal,  // External dependency!
+) -> Result<(Vec<AuctionFill>, Uint128, Uint128), MatchingError>
+
+// Execution price determined by oracle, not by intent limits
+```
+
+### Why Oracle is Unnecessary for Intent Matching
+
+When two intents cross, the execution price can be derived **entirely from the intents themselves**:
+
+```
+Buy intent:  "I'll pay up to 10.50 USDC/ATOM" (limit_price = 10.50)
+Sell intent: "I'll accept at least 10.40 USDC/ATOM" (limit_price = 10.40)
+```
+
+These intents cross because `buy_limit >= sell_limit`. Valid execution prices:
+- **Any price in [10.40, 10.50]** satisfies both parties
+- No external oracle needed to determine this
+
+### Oracle-Free Execution Price Options
+
+| Method | Formula | Properties |
+|--------|---------|------------|
+| Midpoint | `(buy_limit + sell_limit) / 2` | Fair split of surplus |
+| Maker price | Earlier intent's limit | Rewards liquidity provision |
+| Pro-rata | Weighted by size | Size-fair distribution |
+| Uniform clearing | Single price clears all | Batch auction standard |
+
+### Problems Caused by Oracle Dependency
+
+The oracle creates **6 vulnerabilities** identified in this review:
+
+1. **1.1 Oracle Price Manipulation** - Confidence intervals ignored
+2. **2.4 Oracle Failure Cascade** - System halts when oracles fail
+3. **3.1 Last-Look Frontrunning** - Oracle price known before clearing
+4. **3.2 Intent Frontrunning** - Oracle price broadcast enables MEV
+5. **4.3 Flow Correlation Attack** - Matching at oracle subsidizes informed traders
+6. **Single Point of Failure** - External dependency reduces reliability
+
+### Recommended Architecture
+
+```rust
+// PROPOSED: Oracle-free intent crossing
+fn cross_internal(
+    &self,
+    buys: &[&Intent],
+    sells: &[&Intent],
+) -> Result<(Vec<AuctionFill>, Uint128, Uint128), MatchingError> {
+    for (buy, sell) in crossing_pairs(buys, sells) {
+        let buy_limit = buy.output.limit_price_decimal()?;
+        let sell_limit = sell.output.limit_price_decimal()?;
+
+        if buy_limit >= sell_limit {
+            // Execute at midpoint - both parties get price improvement
+            let execution_price = (buy_limit + sell_limit) / Decimal::TWO;
+
+            // Create fill at derived price
+            fills.push(create_fill(buy, sell, execution_price));
+        }
+    }
+    Ok(fills)
+}
+```
+
+### When Oracle IS Appropriate
+
+Oracles should be **limited to**:
+
+| Use Case | Rationale |
+|----------|-----------|
+| **Sanity check** | Reject if execution deviates >X% from oracle |
+| **Circuit breaker** | Halt trading during abnormal conditions |
+| **CEX backstop reference** | Solver needs price when no opposing flow |
+| **Slashing calculation** | Objective value for penalty computation |
+
+### Implementation Roadmap
+
+1. **Phase 1:** Remove oracle from `cross_internal()` - use midpoint pricing
+2. **Phase 2:** Remove oracle from batch auction uniform clearing
+3. **Phase 3:** Retain oracle only for sanity checks and circuit breakers
+4. **Phase 4:** Make oracle optional for solver quotes (they compete on price)
+
+### Impact of Fix
+
+Removing unnecessary oracle dependency:
+- **Eliminates 6 vulnerabilities** in this review
+- **Removes single point of failure**
+- **Simplifies architecture**
+- **Reduces latency** (no oracle query needed)
+- **Improves decentralization** (no external price feed dependency)
+
+**Severity: CRITICAL** - This is an architectural flaw that enables multiple attack vectors. The system should be redesigned to minimize oracle dependency before mainnet launch.
+
+---
+
+# Part VI: Recommendations Summary
 
 ## Critical Actions (Implement Before Mainnet)
 
-1. **Enforce oracle confidence bounds** in matching engine
+1. **Remove unnecessary oracle dependency** from intent matching (use midpoint pricing)
 2. **Implement nonce tracking** to prevent replay attacks
 3. **Add flow toxicity detection** to protect solvers
 4. **Implement commit-reveal** for solver quotes
+5. **Retain oracle only for sanity checks** and circuit breakers
 
 ## High Priority (Implement in Phase 1)
 
