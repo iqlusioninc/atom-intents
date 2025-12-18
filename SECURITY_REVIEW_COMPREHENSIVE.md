@@ -20,6 +20,7 @@ This review builds upon the previous audit (AUDIT_REPORT.md) to identify **addit
 | Timing Games | 0 | 3 | 2 | 1 |
 | Toxic Flow | 0 | 2 | 3 | 2 |
 | **Architecture** | **2** | **4** | **3** | 0 |
+| **TEE/TDX Analysis** | - | - | - | - |
 
 ---
 
@@ -1164,7 +1165,259 @@ If spreads compress (competition), solvers become unprofitable and exit.
 
 ---
 
-# Part VI: Recommendations Summary
+# Part VI: TEE Implementation Analysis (Intel TDX)
+
+Based on the architectural concerns around Skip Select centralization (5.2), this section analyzes implementing the coordination layer within an Intel TDX Trust Domain.
+
+## 6.1 Why Intel TDX
+
+Intel TDX (Trust Domain Extensions) is the recommended TEE platform for this use case:
+
+| Platform | Pros | Cons |
+|----------|------|------|
+| **Intel TDX** | VM-level isolation, larger memory, full Linux support, cloud availability | Newer platform, smaller track record |
+| Intel SGX | Mature, well-documented | Application partitioning complex, limited enclave memory |
+| AMD SEV-SNP | Good VM isolation | Less tooling ecosystem |
+| AWS Nitro | Easy deployment | AWS lock-in, limited attestation |
+
+**TDX advantages for Skip Select:**
+- Full VM isolation (no partitioning required)
+- Native Linux environment
+- Available on Azure, GCP, and dedicated infrastructure
+- Hardware-rooted attestation chain
+
+## 6.2 Components to Run in Trust Domain
+
+### Critical (Must Be in TD)
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                    INTEL TDX TRUST DOMAIN                   │
+│  ┌─────────────────┐  ┌─────────────────┐  ┌─────────────┐  │
+│  │ Matching Engine │  │ Auction Engine  │  │ Intent Pool │  │
+│  │  - Order book   │  │  - Batch clear  │  │  - Storage  │  │
+│  │  - Price calc   │  │  - Quote rank   │  │  - Index    │  │
+│  └─────────────────┘  └─────────────────┘  └─────────────┘  │
+│  ┌─────────────────┐  ┌─────────────────┐                   │
+│  │ Encryption Keys │  │ Quote Decryption│                   │
+│  │  - Intent keys  │  │  - Sealed until │                   │
+│  │  - TLS termini  │  │    batch time   │                   │
+│  └─────────────────┘  └─────────────────┘                   │
+└─────────────────────────────────────────────────────────────┘
+```
+
+### Outside TD (Can Remain Untrusted)
+
+- REST API gateway (rate limiting, auth)
+- WebSocket server (connection management)
+- Settlement submission (on-chain)
+- Monitoring and logging (non-sensitive)
+
+## 6.3 Intel TDX Attestation Flow
+
+```
+┌──────────┐      ┌──────────────┐      ┌──────────────┐      ┌──────────┐
+│  User    │      │   TD (Skip   │      │   Intel      │      │ Attestation│
+│  Client  │      │   Select)    │      │   Platform   │      │  Verifier  │
+└────┬─────┘      └──────┬───────┘      └──────┬───────┘      └─────┬──────┘
+     │  1. Connect       │                     │                    │
+     │──────────────────>│                     │                    │
+     │                   │  2. Generate Quote  │                    │
+     │                   │────────────────────>│                    │
+     │                   │                     │                    │
+     │                   │  3. TD Quote +      │                    │
+     │                   │     Measurement     │                    │
+     │                   │<────────────────────│                    │
+     │  4. Return Quote  │                     │                    │
+     │<──────────────────│                     │                    │
+     │                   │                     │                    │
+     │  5. Verify Quote via DCAP               │                    │
+     │─────────────────────────────────────────────────────────────>│
+     │                   │                     │                    │
+     │  6. Verification Result (MRENCLAVE, MRCONFIGID)             │
+     │<─────────────────────────────────────────────────────────────│
+     │                   │                     │                    │
+     │  7. If valid, send encrypted intent     │                    │
+     │──────────────────>│                     │                    │
+```
+
+### TD Measurements
+
+Users/solvers verify these TDX measurements:
+
+| Measurement | Contains | Purpose |
+|-------------|----------|---------|
+| `MRTD` | TD initial state | Verify correct VM image |
+| `RTMR[0-3]` | Runtime measurements | Verify no runtime tampering |
+| `MRCONFIGID` | Configuration hash | Verify correct config |
+| `REPORTDATA` | Custom claim (pubkey) | Bind TD to specific keys |
+
+## 6.4 Key Management in TDX
+
+### Option A: TD-Generated Keys (Recommended)
+
+```rust
+// Inside Trust Domain - key generation
+fn initialize_td_keys() -> TdKeys {
+    // Generate fresh keys inside TD
+    let intent_encryption_key = generate_x25519_keypair();
+    let tls_key = generate_ed25519_keypair();
+
+    // Seal to TD - survives restart but not migration
+    seal_to_td(&intent_encryption_key, &tls_key);
+
+    // Include public keys in attestation report
+    TdKeys {
+        intent_pubkey: intent_encryption_key.public,
+        tls_pubkey: tls_key.public,
+    }
+}
+```
+
+### Option B: Threshold Key Derivation
+
+```
+┌─────────────┐  ┌─────────────┐  ┌─────────────┐
+│ TD Node 1   │  │ TD Node 2   │  │ TD Node 3   │
+│ (Azure)     │  │ (GCP)       │  │ (Dedicated) │
+└──────┬──────┘  └──────┬──────┘  └──────┬──────┘
+       │                │                │
+       └────────────────┼────────────────┘
+                        │
+                   DKG Protocol
+                        │
+                        ▼
+              ┌─────────────────┐
+              │ Threshold Key   │
+              │ (2-of-3 shares) │
+              └─────────────────┘
+```
+
+This removes single-TD trust assumption via distributed key generation.
+
+## 6.5 Modified Intent Flow with TDX
+
+```
+1. User connects to Skip Select API
+2. User requests TDX attestation quote
+3. User verifies quote against published MRTD
+4. User encrypts intent to TD's public key
+5. Encrypted intent stored until batch time
+6. TD decrypts and matches inside enclave
+7. TD signs settlement instruction
+8. Settlement submitted to chain with TD signature
+```
+
+### New Trust Model
+
+| Without TDX | With TDX | Improvement |
+|-------------|----------|-------------|
+| Trust Skip operator completely | Trust Intel + TD code | Reduced trust |
+| Operator sees all intents | Only TD sees intents | Privacy gain |
+| Operator controls timing | TD code controls timing | Fairness gain |
+| Operator can censor | TD follows deterministic rules | Censorship resistant |
+
+## 6.6 Remaining Attack Vectors with TDX
+
+**TDX does NOT eliminate:**
+
+| Attack Vector | Mitigation Status | Notes |
+|---------------|-------------------|-------|
+| **Side-channel attacks** | Partially mitigated | TDX has better isolation than SGX but not immune |
+| **Denial of service** | NOT mitigated | Operator can halt TD |
+| **TD availability** | NOT mitigated | Operator controls uptime |
+| **Collusion with Intel** | NOT mitigated | Nation-state threat |
+| **Supply chain attacks** | NOT mitigated | Compromised TD image |
+| **Network-level MEV** | NOT mitigated | Can observe encrypted traffic timing |
+| **Firmware attacks** | Partially mitigated | TDX verifies firmware measurements |
+
+### Specific TDX Vulnerabilities
+
+1. **TDX.FAIL (CVE-2023-XXXX family)**
+   - Recent TDX vulnerabilities disclosed
+   - Require firmware patches
+   - Monitor Intel Security Advisories
+
+2. **MRTD Pre-image Attacks**
+   - If MRTD value is known, fake TD could be constructed
+   - Mitigate: Include randomness in REPORTDATA
+
+3. **Migration/Snapshot Attacks**
+   - Cloud provider could snapshot TD state
+   - Mitigate: Bind keys to specific TD instance
+
+## 6.7 Implementation Roadmap
+
+### Phase 1: Development Environment (4-6 weeks)
+- Set up TDX development environment (Azure Confidential VMs)
+- Port Skip Select core to run as Linux VM in TD
+- Implement basic attestation flow
+- Unit test within TD environment
+
+### Phase 2: Attestation Integration (4-6 weeks)
+- Integrate DCAP attestation verification
+- Publish expected MRTD/MRCONFIGID values
+- Build client-side attestation verification
+- Implement key generation and sealing
+
+### Phase 3: Production Hardening (6-8 weeks)
+- Security audit of TD implementation
+- Side-channel hardening
+- Monitoring and observability (without leaking secrets)
+- Failover and recovery procedures
+- Multi-cloud deployment (avoid single cloud trust)
+
+### Phase 4: Threshold Distribution (4-6 weeks) [Optional]
+- Implement 2-of-3 threshold key generation
+- Deploy across Azure + GCP + dedicated
+- Cross-TD consensus protocol
+- Attestation for distributed setup
+
+**Total: 18-26 weeks** for production-ready TDX implementation
+
+## 6.8 Hybrid Recommendation
+
+Even with TDX, consider a **hybrid approach**:
+
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│                         TRUST LAYERS                                 │
+├─────────────────────────────────────────────────────────────────────┤
+│ Layer 1: On-chain commit                                            │
+│   - Intent hash committed to chain before revealing to TD           │
+│   - Prevents TD from selective censorship                           │
+├─────────────────────────────────────────────────────────────────────┤
+│ Layer 2: TDX confidential computation                               │
+│   - Matching and auction logic in TD                                │
+│   - Keys never leave TD                                             │
+├─────────────────────────────────────────────────────────────────────┤
+│ Layer 3: On-chain settlement verification                           │
+│   - Settlement must match committed intents                         │
+│   - TD signature verified on-chain                                  │
+├─────────────────────────────────────────────────────────────────────┤
+│ Layer 4: Threshold decentralization (future)                        │
+│   - Multiple TDs across clouds                                      │
+│   - No single point of trust                                        │
+└─────────────────────────────────────────────────────────────────────┘
+```
+
+This provides defense-in-depth: even if TDX is compromised, on-chain commits limit damage.
+
+## 6.9 TDX vs. Alternative Approaches
+
+| Approach | Privacy | Fairness | Availability | Complexity |
+|----------|---------|----------|--------------|------------|
+| **TDX alone** | High | High | Medium | Medium |
+| TDX + threshold | High | High | Medium | High |
+| On-chain commit-reveal | Low | High | High | Low |
+| Threshold encryption only | High | Medium | High | Medium |
+| **TDX + on-chain commit** | High | High | High | Medium-High |
+
+**Recommendation:** TDX + on-chain commit provides the best security/complexity tradeoff.
+
+---
+
+# Part VII: Recommendations Summary
 
 ## Critical Actions (Implement Before Mainnet)
 
