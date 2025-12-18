@@ -295,11 +295,22 @@ impl Default for CexBackstopConfig {
     }
 }
 
-/// Inventory position tracker
+/// Pending inventory update for rollback capability
+#[derive(Clone, Debug)]
+struct PendingInventoryUpdate {
+    input_denom: String,
+    output_denom: String,
+    amount: i128,
+    timestamp: u64,
+}
+
+/// Inventory position tracker with rollback support for settlement failures
 #[derive(Clone, Debug, Default)]
 struct InventoryPosition {
     /// Net position per asset (positive = long, negative = short)
     positions: HashMap<String, i128>,
+    /// Pending updates keyed by intent_id for rollback on settlement failure
+    pending_updates: HashMap<String, PendingInventoryUpdate>,
 }
 
 impl InventoryPosition {
@@ -309,6 +320,67 @@ impl InventoryPosition {
 
     fn get_position(&self, asset: &str) -> i128 {
         *self.positions.get(asset).unwrap_or(&0)
+    }
+
+    /// Record a pending inventory update that can be rolled back
+    fn record_pending(
+        &mut self,
+        intent_id: &str,
+        input_denom: &str,
+        output_denom: &str,
+        amount: i128,
+    ) {
+        let timestamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+
+        self.pending_updates.insert(
+            intent_id.to_string(),
+            PendingInventoryUpdate {
+                input_denom: input_denom.to_string(),
+                output_denom: output_denom.to_string(),
+                amount,
+                timestamp,
+            },
+        );
+    }
+
+    /// Confirm a pending update (settlement succeeded) - just removes from pending
+    fn confirm_pending(&mut self, intent_id: &str) {
+        self.pending_updates.remove(intent_id);
+    }
+
+    /// Rollback a pending update (settlement failed) - reverse the inventory change
+    fn rollback_pending(&mut self, intent_id: &str) -> Option<PendingInventoryUpdate> {
+        if let Some(pending) = self.pending_updates.remove(intent_id) {
+            // Reverse the inventory update
+            self.update(&pending.input_denom, pending.amount);  // Was sold, now add back
+            self.update(&pending.output_denom, -pending.amount); // Was bought, now remove
+            Some(pending)
+        } else {
+            None
+        }
+    }
+
+    /// Clean up stale pending updates older than max_age_secs
+    fn cleanup_stale_pending(&mut self, max_age_secs: u64) {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+
+        let stale_ids: Vec<String> = self
+            .pending_updates
+            .iter()
+            .filter(|(_, update)| now - update.timestamp > max_age_secs)
+            .map(|(id, _)| id.clone())
+            .collect();
+
+        for id in stale_ids {
+            // Rollback stale pending updates
+            self.rollback_pending(&id);
+        }
     }
 }
 

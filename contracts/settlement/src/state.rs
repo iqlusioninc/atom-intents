@@ -52,6 +52,66 @@ pub enum SettlementStatus {
     Slashed { amount: Uint128 },
 }
 
+impl SettlementStatus {
+    /// SECURITY FIX: Validate state transitions to prevent invalid state manipulation
+    ///
+    /// Valid transitions:
+    /// - Pending -> UserLocked (user locks escrow)
+    /// - UserLocked -> SolverLocked (solver commits)
+    /// - SolverLocked -> Executing (IBC transfer initiated)
+    /// - Executing -> Completed (IBC success)
+    /// - Executing -> Failed (IBC timeout/error)
+    /// - Pending/UserLocked/SolverLocked -> Failed (timeout or cancellation)
+    /// - Any non-terminal -> Slashed (admin slashing for misbehavior)
+    pub fn can_transition_to(&self, next: &SettlementStatus) -> bool {
+        match (self, next) {
+            // Normal flow
+            (SettlementStatus::Pending, SettlementStatus::UserLocked) => true,
+            (SettlementStatus::UserLocked, SettlementStatus::SolverLocked) => true,
+            (SettlementStatus::SolverLocked, SettlementStatus::Executing) => true,
+            (SettlementStatus::Executing, SettlementStatus::Completed) => true,
+            (SettlementStatus::Executing, SettlementStatus::Failed { .. }) => true,
+
+            // Failure/cancellation from early states
+            (SettlementStatus::Pending, SettlementStatus::Failed { .. }) => true,
+            (SettlementStatus::UserLocked, SettlementStatus::Failed { .. }) => true,
+            (SettlementStatus::SolverLocked, SettlementStatus::Failed { .. }) => true,
+
+            // Slashing allowed from any non-terminal state
+            (SettlementStatus::Pending, SettlementStatus::Slashed { .. }) => true,
+            (SettlementStatus::UserLocked, SettlementStatus::Slashed { .. }) => true,
+            (SettlementStatus::SolverLocked, SettlementStatus::Slashed { .. }) => true,
+            (SettlementStatus::Executing, SettlementStatus::Slashed { .. }) => true,
+
+            // All other transitions are invalid
+            _ => false,
+        }
+    }
+
+    /// Check if this is a terminal state (no further transitions allowed except slashing)
+    pub fn is_terminal(&self) -> bool {
+        matches!(
+            self,
+            SettlementStatus::Completed
+                | SettlementStatus::Failed { .. }
+                | SettlementStatus::Slashed { .. }
+        )
+    }
+
+    /// Get a string representation for error messages
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            SettlementStatus::Pending => "Pending",
+            SettlementStatus::UserLocked => "UserLocked",
+            SettlementStatus::SolverLocked => "SolverLocked",
+            SettlementStatus::Executing => "Executing",
+            SettlementStatus::Completed => "Completed",
+            SettlementStatus::Failed { .. } => "Failed",
+            SettlementStatus::Slashed { .. } => "Slashed",
+        }
+    }
+}
+
 #[cw_serde]
 pub struct SolverReputation {
     pub solver_id: String,

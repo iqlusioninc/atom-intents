@@ -115,6 +115,13 @@ fn execute_release(
         return Err(ContractError::EscrowNotFound { id: escrow_id });
     }
 
+    // SECURITY FIX: Prevent race condition between release and refund
+    // If escrow has expired, the user has the right to refund instead
+    // Settlement should have completed before expiration
+    if env.block.time.seconds() >= escrow.expires_at {
+        return Err(ContractError::EscrowExpired { id: escrow_id });
+    }
+
     // Update status
     escrow.status = EscrowStatus::Released {
         recipient: recipient.clone(),
