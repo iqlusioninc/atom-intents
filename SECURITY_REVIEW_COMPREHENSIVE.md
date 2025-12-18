@@ -21,6 +21,7 @@ This review builds upon the previous audit (AUDIT_REPORT.md) to identify **addit
 | Toxic Flow | 0 | 2 | 3 | 2 |
 | **Architecture** | **2** | **4** | **3** | 0 |
 | **TEE/TDX Analysis** | - | - | - | - |
+| **Adversarial Tests** | 0 | 0 | 2 | 1 |
 
 ---
 
@@ -1417,7 +1418,150 @@ This provides defense-in-depth: even if TDX is compromised, on-chain commits lim
 
 ---
 
-# Part VII: Recommendations Summary
+# Part VII: Adversarial Test Findings
+
+This section documents security issues discovered during comprehensive adversarial testing. These tests simulate attack scenarios and edge cases that could lead to fund loss or system exploitation.
+
+## 7.1 [MEDIUM] Settlement Double-Completion Allowed
+
+**Location:** `contracts/settlement/src/handlers.rs:execute_mark_completed`
+
+**Description:** The settlement contract currently allows marking a settlement as "completed" multiple times. There is no guard preventing transition from `Completed` back to `Completed`.
+
+**Discovery:** Adversarial test `test_double_completion_behavior` in `contracts/settlement/tests/adversarial_settlement_tests.rs`
+
+**Attack Vector:**
+1. Settlement reaches `Completed` status via normal flow
+2. Attacker (or buggy code) calls `MarkCompleted` again
+3. Solver stats updated twice (inflated `total_settlements` count)
+4. Potential for double reward claims if tied to completion events
+
+**Impact:** Solver reputation inflation, potential accounting errors
+
+**Current Status:** Documented in tests as improvement opportunity
+
+**Recommended Fix:**
+```rust
+fn execute_mark_completed(...) {
+    // Add explicit state check
+    if !matches!(settlement.status, SettlementStatus::Executing) {
+        return Err(ContractError::InvalidStateTransition {
+            from: settlement.status.as_str().to_string(),
+            to: "Completed".to_string(),
+        });
+    }
+    // ...
+}
+```
+
+---
+
+## 7.2 [LOW] Escrow Refund Timing Edge Case
+
+**Location:** `contracts/escrow/src/contract.rs:execute_refund`
+
+**Description:** The escrow contract uses strict less-than (`<`) comparison for expiration checks, allowing refunds to be processed exactly at the expiration timestamp:
+
+```rust
+if env.block.time.seconds() < escrow.expires_at {
+    return Err(ContractError::EscrowNotExpired { .. });
+}
+```
+
+**Discovery:** Adversarial test `test_refund_at_exact_expiration` in `contracts/escrow/tests/adversarial_escrow_tests.rs`
+
+**Behavior:** At exactly `expires_at` timestamp, both conditions are true:
+- `time < expires_at` is FALSE → refund allowed
+- Depending on execution order, settlement could still be in progress
+
+**Impact:** Narrow race window at exact expiration time. Low severity because:
+- Window is only 1 second
+- Block times add natural jitter
+- Practical exploitation requires precise timing
+
+**Recommendation:** Consider using `<=` for clearer semantics, or document the behavior explicitly.
+
+---
+
+## 7.3 [MEDIUM] Large Amount Overflow with rust_decimal
+
+**Location:** `crates/matching-engine/src/engine.rs`, price calculations using `rust_decimal::Decimal`
+
+**Description:** Tests with amounts approaching `u128::MAX` cause `rust_decimal` to panic due to internal overflow during arithmetic operations.
+
+**Discovery:** Adversarial test `test_large_amounts_no_overflow` in `crates/matching-engine/tests/adversarial_matching_tests.rs`
+
+**Technical Details:**
+- `rust_decimal::Decimal` has a maximum value of approximately 79,228,162,514,264,337,593,543,950,335
+- This is roughly 7.9 × 10^28, significantly less than `u128::MAX` (3.4 × 10^38)
+- Multiplication during price calculations can exceed this limit
+
+**Test Values:**
+- Failed: `u128::MAX / 2` ≈ 1.7 × 10^38 (causes panic)
+- Passed: `10^24` (safe "whale" transaction size)
+
+**Impact:** Very large transactions (> 10^28 base units) will panic the matching engine
+
+**Recommendation:**
+1. Add explicit bounds checking before decimal conversion
+2. Document maximum supported transaction size
+3. Consider using arbitrary-precision arithmetic for whale orders
+
+```rust
+const MAX_SAFE_AMOUNT: u128 = 10_000_000_000_000_000_000_000_000_000; // 10^28
+
+fn validate_amount(amount: Uint128) -> Result<(), MatchingError> {
+    if amount.u128() > MAX_SAFE_AMOUNT {
+        return Err(MatchingError::AmountTooLarge {
+            amount: amount.u128(),
+            max: MAX_SAFE_AMOUNT,
+        });
+    }
+    Ok(())
+}
+```
+
+---
+
+## 7.4 Summary of Adversarial Test Coverage
+
+The adversarial test suite covers the following attack categories:
+
+| Category | Test File | Tests | Key Scenarios |
+|----------|-----------|-------|---------------|
+| **Signature** | `crates/types/tests/adversarial_signature_tests.rs` | 15 | Replay, malleability, forgery, nonce manipulation |
+| **Escrow** | `contracts/escrow/tests/adversarial_escrow_tests.rs` | 19 | Double-release, unauthorized access, time manipulation |
+| **Settlement** | `contracts/settlement/tests/adversarial_settlement_tests.rs` | 21 | State bypass, solver impersonation, double-settlement |
+| **Matching** | `crates/matching-engine/tests/adversarial_matching_tests.rs` | 31 | Price manipulation, limit bypass, overflow |
+| **IBC** | `crates/relayer/tests/adversarial_ibc_tests.rs` | 17 | Timeout exploitation, packet replay, double-spend |
+| **Economic** | `tests/adversarial_economic_tests.rs` | 15 | Front-running, sandwich attacks, oracle manipulation |
+
+**Total:** 118 adversarial tests covering 6 attack categories
+
+### Tests Validating Security Properties
+
+The following security properties were validated by the test suite:
+
+1. **Signature integrity:** All intent fields are included in signing hash (no bypass possible)
+2. **Authorization checks:** Only authorized parties can trigger state transitions
+3. **Replay protection:** Nonce tracking prevents intent replay
+4. **Overflow safety:** Arithmetic operations handle large values safely (with documented limits)
+5. **State machine integrity:** Invalid state transitions are rejected (with documented exceptions)
+
+### Known Issues for Future Work
+
+| Issue | Severity | Status |
+|-------|----------|--------|
+| Double-completion allowed | Medium | Document as technical debt |
+| Exact-expiration refund edge case | Low | Document behavior |
+| Large amount overflow | Medium | Add bounds checking |
+| State transition guards (from PR #2) | High | Needs implementation |
+| Minimum slash threshold | Medium | Needs implementation |
+| Midpoint pricing | Medium | Needs implementation |
+
+---
+
+# Part VIII: Recommendations Summary
 
 ## Critical Actions (Implement Before Mainnet)
 
