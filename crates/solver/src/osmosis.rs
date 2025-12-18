@@ -112,10 +112,7 @@ impl DexClient for OsmosisClient {
             let status = response.status();
             let body = response.text().await.unwrap_or_default();
             warn!("Osmosis SQS error: {} - {}", status, body);
-            return Err(DexError::QueryFailed(format!(
-                "HTTP {}: {}",
-                status, body
-            )));
+            return Err(DexError::QueryFailed(format!("HTTP {}: {}", status, body)));
         }
 
         let quote: SqsQuoteResponse = response
@@ -130,7 +127,9 @@ impl DexClient for OsmosisClient {
             .flat_map(|r| {
                 r.pools.iter().enumerate().map(|(i, pool)| {
                     let in_denom = if i == 0 {
-                        r.token_in_denom.clone().unwrap_or_else(|| input_denom.to_string())
+                        r.token_in_denom
+                            .clone()
+                            .unwrap_or_else(|| input_denom.to_string())
                     } else {
                         r.pools[i - 1].token_out_denom.clone()
                     };
@@ -222,7 +221,11 @@ mod tests {
     async fn test_osmosis_quote() {
         let client = OsmosisClient::mainnet();
         let quote = client
-            .get_quote("uosmo", "ibc/27394FB092D2ECCD56123C74F36E4C1F926001CEADA9CA97EA622B25F41E5EB2", 1_000_000)
+            .get_quote(
+                "uosmo",
+                "ibc/27394FB092D2ECCD56123C74F36E4C1F926001CEADA9CA97EA622B25F41E5EB2",
+                1_000_000,
+            )
             .await;
 
         match quote {

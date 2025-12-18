@@ -28,10 +28,10 @@ pub struct SettlementConfig {
 impl Default for SettlementConfig {
     fn default() -> Self {
         Self {
-            default_timeout_secs: 1800,      // 30 minutes
+            default_timeout_secs: 1800, // 30 minutes
             max_concurrent_per_solver: 10,
             enable_auto_recovery: true,
-            stuck_threshold_secs: 3600,      // 1 hour
+            stuck_threshold_secs: 3600, // 1 hour
         }
     }
 }
@@ -148,41 +148,46 @@ impl<S: SettlementStore> SettlementManager<S> {
         let old_status = settlement.status.clone();
 
         let (new_status, details) = match event {
-            SettlementEvent::UserLocked { escrow_id, tx_hash: _ } => {
+            SettlementEvent::UserLocked {
+                escrow_id,
+                tx_hash: _,
+            } => {
                 settlement.escrow_id = Some(escrow_id.clone());
                 (
                     SettlementStatus::UserLocked,
                     Some(format!("Escrow locked: {}", escrow_id)),
                 )
             }
-            SettlementEvent::SolverLocked { bond_id, tx_hash: _ } => {
+            SettlementEvent::SolverLocked {
+                bond_id,
+                tx_hash: _,
+            } => {
                 settlement.solver_bond_id = Some(bond_id.clone());
                 (
                     SettlementStatus::SolverLocked,
                     Some(format!("Solver bond locked: {}", bond_id)),
                 )
             }
-            SettlementEvent::IbcTransferStarted { sequence, tx_hash: _ } => {
+            SettlementEvent::IbcTransferStarted {
+                sequence,
+                tx_hash: _,
+            } => {
                 settlement.ibc_packet_sequence = Some(sequence);
                 (
                     SettlementStatus::Executing,
                     Some(format!("IBC transfer started: seq {}", sequence)),
                 )
             }
-            SettlementEvent::IbcTransferComplete { tx_hash: _ } => {
-                (
-                    SettlementStatus::Complete,
-                    Some("IBC transfer complete".to_string()),
-                )
-            }
-            SettlementEvent::IbcTransferFailed { reason } => {
-                (
-                    SettlementStatus::Failed {
-                        reason: reason.clone(),
-                    },
-                    Some(format!("IBC transfer failed: {}", reason)),
-                )
-            }
+            SettlementEvent::IbcTransferComplete { tx_hash: _ } => (
+                SettlementStatus::Complete,
+                Some("IBC transfer complete".to_string()),
+            ),
+            SettlementEvent::IbcTransferFailed { reason } => (
+                SettlementStatus::Failed {
+                    reason: reason.clone(),
+                },
+                Some(format!("IBC transfer failed: {}", reason)),
+            ),
         };
 
         settlement.status = new_status.clone();
@@ -227,8 +232,13 @@ impl<S: SettlementStore> SettlementManager<S> {
                     .await
                     .map_err(SettlementManagerError::StoreError)?;
             }
-            SettlementResult::Failure { reason, recoverable } => {
-                let status = SettlementStatus::Failed { reason: reason.clone() };
+            SettlementResult::Failure {
+                reason,
+                recoverable,
+            } => {
+                let status = SettlementStatus::Failed {
+                    reason: reason.clone(),
+                };
                 let details = if recoverable {
                     format!("Settlement failed (recoverable): {}", reason)
                 } else {
@@ -241,7 +251,11 @@ impl<S: SettlementStore> SettlementManager<S> {
             }
             SettlementResult::Timeout => {
                 self.store
-                    .update_status(id, SettlementStatus::TimedOut, Some("Settlement timed out".to_string()))
+                    .update_status(
+                        id,
+                        SettlementStatus::TimedOut,
+                        Some("Settlement timed out".to_string()),
+                    )
                     .await
                     .map_err(SettlementManagerError::StoreError)?;
             }
@@ -251,7 +265,11 @@ impl<S: SettlementStore> SettlementManager<S> {
     }
 
     /// Mark a settlement as failed
-    pub async fn fail_settlement(&self, id: &str, error: &str) -> Result<(), SettlementManagerError> {
+    pub async fn fail_settlement(
+        &self,
+        id: &str,
+        error: &str,
+    ) -> Result<(), SettlementManagerError> {
         let status = SettlementStatus::Failed {
             reason: error.to_string(),
         };
@@ -264,7 +282,9 @@ impl<S: SettlementStore> SettlementManager<S> {
     }
 
     /// Find settlements that are stuck (past timeout and not complete)
-    pub async fn find_stuck_settlements(&self) -> Result<Vec<SettlementRecord>, SettlementManagerError> {
+    pub async fn find_stuck_settlements(
+        &self,
+    ) -> Result<Vec<SettlementRecord>, SettlementManagerError> {
         let now = Utc::now().timestamp() as u64;
         let threshold = now.saturating_sub(self.config.stuck_threshold_secs);
 
@@ -275,7 +295,10 @@ impl<S: SettlementStore> SettlementManager<S> {
     }
 
     /// Get settlement by ID
-    pub async fn get_settlement(&self, id: &str) -> Result<Option<SettlementRecord>, SettlementManagerError> {
+    pub async fn get_settlement(
+        &self,
+        id: &str,
+    ) -> Result<Option<SettlementRecord>, SettlementManagerError> {
         self.store
             .get(id)
             .await
@@ -283,7 +306,10 @@ impl<S: SettlementStore> SettlementManager<S> {
     }
 
     /// Get settlement by intent ID
-    pub async fn get_by_intent(&self, intent_id: &str) -> Result<Option<SettlementRecord>, SettlementManagerError> {
+    pub async fn get_by_intent(
+        &self,
+        intent_id: &str,
+    ) -> Result<Option<SettlementRecord>, SettlementManagerError> {
         self.store
             .get_by_intent(intent_id)
             .await
@@ -315,7 +341,10 @@ impl<S: SettlementStore> SettlementManager<S> {
     }
 
     /// Get transition history for a settlement
-    pub async fn get_history(&self, id: &str) -> Result<Vec<StateTransition>, SettlementManagerError> {
+    pub async fn get_history(
+        &self,
+        id: &str,
+    ) -> Result<Vec<StateTransition>, SettlementManagerError> {
         self.store
             .get_history(id)
             .await
@@ -471,7 +500,11 @@ mod tests {
             .await
             .unwrap();
 
-        let updated = manager.get_settlement(&settlement.id).await.unwrap().unwrap();
+        let updated = manager
+            .get_settlement(&settlement.id)
+            .await
+            .unwrap()
+            .unwrap();
         assert_eq!(updated.status, SettlementStatus::Complete);
         assert!(updated.completed_at.is_some());
     }
@@ -491,7 +524,11 @@ mod tests {
             .await
             .unwrap();
 
-        let updated = manager.get_settlement(&settlement.id).await.unwrap().unwrap();
+        let updated = manager
+            .get_settlement(&settlement.id)
+            .await
+            .unwrap()
+            .unwrap();
         match updated.status {
             SettlementStatus::Failed { reason } => {
                 assert_eq!(reason, "Test error");

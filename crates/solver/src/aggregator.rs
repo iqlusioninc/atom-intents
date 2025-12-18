@@ -199,10 +199,7 @@ impl SolutionAggregator {
                 break;
             }
 
-            let take_amount = std::cmp::min(
-                remaining - total_input,
-                solution.fill.input_amount,
-            );
+            let take_amount = std::cmp::min(remaining - total_input, solution.fill.input_amount);
 
             selected.push((solution, take_amount));
             total_input += take_amount;

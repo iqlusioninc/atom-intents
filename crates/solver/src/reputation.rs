@@ -1,3 +1,4 @@
+use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
 use cosmwasm_std::Uint128;
 use serde::{Deserialize, Serialize};
 
@@ -43,17 +44,17 @@ impl ReputationClient {
     }
 
     /// Get reputation for a specific solver
-    pub async fn get_reputation(&self, solver_id: &str) -> Result<SolverReputation, ReputationError> {
-        let query = format!(
-            r#"{{"solver_reputation":{{"solver_id":"{}"}}}}"#,
-            solver_id
-        );
+    pub async fn get_reputation(
+        &self,
+        solver_id: &str,
+    ) -> Result<SolverReputation, ReputationError> {
+        let query = format!(r#"{{"solver_reputation":{{"solver_id":"{}"}}}}"#, solver_id);
 
         let url = format!(
             "{}/cosmwasm/wasm/v1/contract/{}/smart/{}",
             self.rpc_endpoint,
             self.contract_address,
-            base64::encode(query)
+            BASE64.encode(&query)
         );
 
         let client = reqwest::Client::new();
@@ -87,14 +88,17 @@ impl ReputationClient {
     }
 
     /// Get top solvers by reputation score
-    pub async fn get_top_solvers(&self, limit: u32) -> Result<Vec<SolverReputation>, ReputationError> {
+    pub async fn get_top_solvers(
+        &self,
+        limit: u32,
+    ) -> Result<Vec<SolverReputation>, ReputationError> {
         let query = format!(r#"{{"top_solvers":{{"limit":{}}}}}"#, limit);
 
         let url = format!(
             "{}/cosmwasm/wasm/v1/contract/{}/smart/{}",
             self.rpc_endpoint,
             self.contract_address,
-            base64::encode(query)
+            BASE64.encode(&query)
         );
 
         let client = reqwest::Client::new();
@@ -142,7 +146,7 @@ impl ReputationClient {
             "{}/cosmwasm/wasm/v1/contract/{}/smart/{}",
             self.rpc_endpoint,
             self.contract_address,
-            base64::encode(query)
+            BASE64.encode(&query)
         );
 
         let client = reqwest::Client::new();
@@ -191,8 +195,9 @@ impl ReputationClient {
             return Ok(0.0);
         }
 
-        let success_rate =
-            (reputation.successful_settlements as f64 / reputation.total_settlements as f64) * 100.0;
+        let success_rate = (reputation.successful_settlements as f64
+            / reputation.total_settlements as f64)
+            * 100.0;
         Ok(success_rate)
     }
 
@@ -258,8 +263,11 @@ mod tests {
         assert_eq!(success_rate, 90.0);
 
         rep.total_settlements = 0;
-        let success_rate =
-            if rep.total_settlements == 0 { 0.0 } else { (rep.successful_settlements as f64 / rep.total_settlements as f64) * 100.0 };
+        let success_rate = if rep.total_settlements == 0 {
+            0.0
+        } else {
+            (rep.successful_settlements as f64 / rep.total_settlements as f64) * 100.0
+        };
         assert_eq!(success_rate, 0.0);
     }
 }

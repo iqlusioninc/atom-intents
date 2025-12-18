@@ -1,5 +1,5 @@
-use thiserror::Error;
 use rust_decimal::Decimal;
+use thiserror::Error;
 
 #[derive(Debug, Error)]
 pub enum MatchingError {
@@ -18,13 +18,17 @@ pub enum MatchingError {
     #[error("partial fill not allowed")]
     PartialFillNotAllowed,
 
-    #[error("buy order price exceeds limit: oracle_price={oracle_price}, limit_price={limit_price}")]
+    #[error(
+        "buy order price exceeds limit: oracle_price={oracle_price}, limit_price={limit_price}"
+    )]
     PriceExceedsLimit {
         oracle_price: Decimal,
         limit_price: Decimal,
     },
 
-    #[error("sell order price below limit: oracle_price={oracle_price}, limit_price={limit_price}")]
+    #[error(
+        "sell order price below limit: oracle_price={oracle_price}, limit_price={limit_price}"
+    )]
     PriceBelowLimit {
         oracle_price: Decimal,
         limit_price: Decimal,

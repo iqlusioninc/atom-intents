@@ -163,10 +163,7 @@ impl DexClient for SkipGoClient {
             let status = response.status();
             let body = response.text().await.unwrap_or_default();
             warn!("Skip Go API error: {} - {}", status, body);
-            return Err(DexError::QueryFailed(format!(
-                "HTTP {}: {}",
-                status, body
-            )));
+            return Err(DexError::QueryFailed(format!("HTTP {}: {}", status, body)));
         }
 
         let route: RouteResponse = response
@@ -269,20 +266,14 @@ impl SkipGoClient {
             "injective-1".to_string()
         } else {
             // Default to osmosis as the primary hub
-            warn!(
-                "Unknown denom {}. Defaulting to osmosis-1.",
-                denom
-            );
+            warn!("Unknown denom {}. Defaulting to osmosis-1.", denom);
             "osmosis-1".to_string()
         }
     }
 
     /// Get supported assets for a chain
     pub async fn get_assets(&self, chain_id: &str) -> Result<Vec<Asset>, DexError> {
-        let url = format!(
-            "{}/v2/fungible/assets?chain_id={}",
-            self.base_url, chain_id
-        );
+        let url = format!("{}/v2/fungible/assets?chain_id={}", self.base_url, chain_id);
 
         let response = self
             .client
@@ -319,13 +310,7 @@ mod tests {
     #[ignore] // Requires network access
     async fn test_skip_go_route() {
         let client = SkipGoClient::mainnet();
-        let quote = client
-            .get_quote(
-                "uosmo",
-                "uatom",
-                1_000_000,
-            )
-            .await;
+        let quote = client.get_quote("uosmo", "uatom", 1_000_000).await;
 
         match quote {
             Ok(q) => {

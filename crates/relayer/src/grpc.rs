@@ -21,14 +21,13 @@ pub struct GrpcChainClient {
 
 impl GrpcChainClient {
     pub async fn new(config: ChainConfig) -> Result<Self, ChainError> {
-        let grpc_url = config.grpc_url.as_ref().ok_or_else(|| {
-            ChainError::ConnectionFailed("gRPC URL not configured".to_string())
-        })?;
+        let grpc_url = config
+            .grpc_url
+            .as_ref()
+            .ok_or_else(|| ChainError::ConnectionFailed("gRPC URL not configured".to_string()))?;
 
         let channel = Channel::from_shared(grpc_url.clone())
-            .map_err(|e| {
-                ChainError::ConnectionFailed(format!("Invalid gRPC URL: {}", e))
-            })?
+            .map_err(|e| ChainError::ConnectionFailed(format!("Invalid gRPC URL: {}", e)))?
             .connect()
             .await
             .map_err(|e| {
@@ -46,14 +45,13 @@ impl GrpcChainClient {
 
     /// Reconnect to gRPC endpoint
     pub async fn reconnect(&self) -> Result<(), ChainError> {
-        let grpc_url = self.config.grpc_url.as_ref().ok_or_else(|| {
-            ChainError::ConnectionFailed("gRPC URL not configured".to_string())
-        })?;
+        let grpc_url =
+            self.config.grpc_url.as_ref().ok_or_else(|| {
+                ChainError::ConnectionFailed("gRPC URL not configured".to_string())
+            })?;
 
         let _new_channel = Channel::from_shared(grpc_url.clone())
-            .map_err(|e| {
-                ChainError::ConnectionFailed(format!("Invalid gRPC URL: {}", e))
-            })?
+            .map_err(|e| ChainError::ConnectionFailed(format!("Invalid gRPC URL: {}", e)))?
             .connect()
             .await
             .map_err(|e| {
@@ -152,11 +150,7 @@ impl ChainClient for GrpcChainClient {
         Ok(sequences.to_vec())
     }
 
-    async fn submit_tx(
-        &self,
-        msgs: Vec<CosmosMsg>,
-        memo: &str,
-    ) -> Result<TxResponse, ChainError> {
+    async fn submit_tx(&self, msgs: Vec<CosmosMsg>, memo: &str) -> Result<TxResponse, ChainError> {
         let gas = self.estimate_gas(&msgs);
 
         tracing::info!(
@@ -174,8 +168,7 @@ impl ChainClient for GrpcChainClient {
         // 4. Wait for confirmation
 
         Ok(TxResponse {
-            hash: "0000000000000000000000000000000000000000000000000000000000000000"
-                .to_string(),
+            hash: "0000000000000000000000000000000000000000000000000000000000000000".to_string(),
             height: 1,
             gas_used: gas,
             code: 0,
@@ -220,7 +213,7 @@ impl ChainClient for GrpcChainClient {
         Ok(ConsensusState {
             timestamp: std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
+                .expect("System time is before UNIX epoch - clock error")
                 .as_secs(),
             root: vec![0u8; 32],
             next_validators_hash: vec![0u8; 32],
@@ -274,9 +267,8 @@ impl ChainClient for GrpcChainClient {
         let key = self.packet_commitment_key(channel, sequence);
         let merkle_proof = self.get_proof(&key, height).await?;
 
-        let proof_bytes = serde_json::to_vec(&merkle_proof).map_err(|e| {
-            ChainError::EncodingError(format!("Failed to encode proof: {}", e))
-        })?;
+        let proof_bytes = serde_json::to_vec(&merkle_proof)
+            .map_err(|e| ChainError::EncodingError(format!("Failed to encode proof: {}", e)))?;
 
         Ok(PacketProof {
             proof: proof_bytes,

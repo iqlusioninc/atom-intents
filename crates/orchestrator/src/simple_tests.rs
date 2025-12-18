@@ -3,10 +3,9 @@
 #[cfg(test)]
 mod simple_tests {
     use crate::validator::IntentValidator;
-    use atom_intents_types::{Asset, ExecutionConstraints, FillConfig, FillStrategy, Intent, OutputSpec, TradingPair};
+    use atom_intents_types::{Asset, ExecutionConstraints, FillConfig, Intent, OutputSpec, TradingPair};
     use cosmwasm_std::{Binary, Uint128};
     use std::collections::HashSet;
-    use std::sync::Arc;
 
     #[test]
     fn test_validator_creation() {

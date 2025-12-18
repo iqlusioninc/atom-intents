@@ -5,8 +5,8 @@ use atom_intents_types::{
 };
 use cosmwasm_std::Uint128;
 use hmac::{Hmac, Mac};
-use rust_decimal::Decimal;
 use rust_decimal::prelude::ToPrimitive;
+use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
 use sha2::Sha256;
 use std::collections::HashMap;
@@ -93,10 +93,9 @@ impl Orderbook {
                 break;
             }
 
-            let price = Decimal::from_str(&ask.price)
-                .map_err(|_| CexError::InvalidOrderbook)?;
-            let quantity = Decimal::from_str(&ask.quantity)
-                .map_err(|_| CexError::InvalidOrderbook)?;
+            let price = Decimal::from_str(&ask.price).map_err(|_| CexError::InvalidOrderbook)?;
+            let quantity =
+                Decimal::from_str(&ask.quantity).map_err(|_| CexError::InvalidOrderbook)?;
 
             let fill_qty = remaining.min(quantity);
             total_cost += fill_qty * price;
@@ -123,10 +122,9 @@ impl Orderbook {
                 break;
             }
 
-            let price = Decimal::from_str(&bid.price)
-                .map_err(|_| CexError::InvalidOrderbook)?;
-            let quantity = Decimal::from_str(&bid.quantity)
-                .map_err(|_| CexError::InvalidOrderbook)?;
+            let price = Decimal::from_str(&bid.price).map_err(|_| CexError::InvalidOrderbook)?;
+            let quantity =
+                Decimal::from_str(&bid.quantity).map_err(|_| CexError::InvalidOrderbook)?;
 
             let fill_qty = remaining.min(quantity);
             total_revenue += fill_qty * price;
@@ -290,7 +288,7 @@ impl Default for CexBackstopConfig {
             withdrawal_fees,
             max_position_usd: 1_000_000,
             surplus_capture_rate: Decimal::from_str("0.10").unwrap(), // 10%
-            ibc_transfer_time_secs: 300, // 5 minutes
+            ibc_transfer_time_secs: 300,                              // 5 minutes
         }
     }
 }
@@ -387,10 +385,15 @@ impl CexBackstopSolver {
     ) -> Result<(u128, String), SolveError> {
         let pair = TradingPair::new(input_denom, output_denom);
 
-        let symbol = self.client.pair_to_symbol(&pair)
+        let symbol = self
+            .client
+            .pair_to_symbol(&pair)
             .ok_or_else(|| SolveError::CexQueryFailed("unsupported pair".to_string()))?;
 
-        let orderbook = self.client.get_orderbook(&symbol).await
+        let orderbook = self
+            .client
+            .get_orderbook(&symbol)
+            .await
             .map_err(|e| SolveError::CexQueryFailed(e.to_string()))?;
 
         // Convert input amount to decimal (assuming 6 decimals)
@@ -402,13 +405,15 @@ impl CexBackstopSolver {
 
         let (output_before_fees, avg_price) = if symbol.starts_with(&base_asset) {
             // Selling base asset
-            let revenue = orderbook.estimate_sell(input_decimal)
+            let revenue = orderbook
+                .estimate_sell(input_decimal)
                 .map_err(|e| SolveError::CexQueryFailed(e.to_string()))?;
             let price = revenue / input_decimal;
             (revenue, price)
         } else {
             // Buying base asset (spending quote)
-            let cost = orderbook.estimate_buy(input_decimal)
+            let cost = orderbook
+                .estimate_buy(input_decimal)
                 .map_err(|e| SolveError::CexQueryFailed(e.to_string()))?;
             let price = cost / input_decimal;
             (cost, price)
@@ -418,10 +423,8 @@ impl CexBackstopSolver {
         let after_trading_fee = output_before_fees * (Decimal::ONE - self.config.cex_fee_rate);
 
         // Apply withdrawal fee
-        let withdrawal_fee = Decimal::from_i128_with_scale(
-            self.get_withdrawal_fee(output_denom) as i128,
-            6,
-        );
+        let withdrawal_fee =
+            Decimal::from_i128_with_scale(self.get_withdrawal_fee(output_denom) as i128, 6);
 
         let output_after_fees = after_trading_fee - withdrawal_fee;
 
@@ -429,7 +432,8 @@ impl CexBackstopSolver {
         let output_in_base_units = output_after_fees * Decimal::from(1_000_000);
         let mut scaled = output_in_base_units;
         scaled.rescale(0); // Convert to integer
-        let output_amount = scaled.to_u128()
+        let output_amount = scaled
+            .to_u128()
             .ok_or_else(|| SolveError::Internal("output amount overflow".to_string()))?;
 
         Ok((output_amount, avg_price.to_string()))
@@ -439,13 +443,15 @@ impl CexBackstopSolver {
     fn update_inventory(&self, input_denom: &str, output_denom: &str, amount: i128) {
         if let Ok(mut inventory) = self.inventory.write() {
             inventory.update(input_denom, -amount); // Sold
-            inventory.update(output_denom, amount);  // Bought
+            inventory.update(output_denom, amount); // Bought
         }
     }
 
     /// Get current inventory position
     pub fn get_position(&self, asset: &str) -> i128 {
-        self.inventory.read().ok()
+        self.inventory
+            .read()
+            .ok()
             .map(|inv| inv.get_position(asset))
             .unwrap_or(0)
     }
@@ -473,11 +479,13 @@ impl Solver for CexBackstopSolver {
         }
 
         // Get CEX fill estimate
-        let (output_amount, _avg_price) = self.estimate_cex_fill(
-            &intent.input.denom,
-            &intent.output.denom,
-            ctx.remaining.u128(),
-        ).await?;
+        let (output_amount, _avg_price) = self
+            .estimate_cex_fill(
+                &intent.input.denom,
+                &intent.output.denom,
+                ctx.remaining.u128(),
+            )
+            .await?;
 
         // Check if output meets minimum requirement
         if Uint128::new(output_amount) < intent.output.min_amount {
@@ -488,17 +496,24 @@ impl Solver for CexBackstopSolver {
         }
 
         // Calculate surplus and solver fee
-        let limit_price = intent.output.limit_price_decimal()
-            .map_err(|e| SolveError::InvalidIntent {
-                reason: format!("invalid limit price: {}", e),
-            })?;
+        let limit_price =
+            intent
+                .output
+                .limit_price_decimal()
+                .map_err(|e| SolveError::InvalidIntent {
+                    reason: format!("invalid limit price: {}", e),
+                })?;
 
         let remaining_dec = Decimal::from(ctx.remaining.u128());
         let user_min_output_dec = remaining_dec * limit_price;
         let output_amount_dec = Decimal::from(output_amount);
         let surplus_dec = (output_amount_dec - user_min_output_dec).max(Decimal::ZERO);
         let solver_fee_dec = surplus_dec * self.config.surplus_capture_rate;
-        let solver_fee = solver_fee_dec.trunc().to_string().parse::<u128>().unwrap_or(0);
+        let solver_fee = solver_fee_dec
+            .trunc()
+            .to_string()
+            .parse::<u128>()
+            .unwrap_or(0);
 
         let output_to_user = output_amount.saturating_sub(solver_fee);
         let output_to_user_dec = Decimal::from(output_to_user);
@@ -538,10 +553,15 @@ impl Solver for CexBackstopSolver {
             return Err(SolveError::NoViableRoute);
         }
 
-        let symbol = self.client.pair_to_symbol(pair)
+        let symbol = self
+            .client
+            .pair_to_symbol(pair)
             .ok_or_else(|| SolveError::CexQueryFailed("unsupported pair".to_string()))?;
 
-        let orderbook = self.client.get_orderbook(&symbol).await
+        let orderbook = self
+            .client
+            .get_orderbook(&symbol)
+            .await
             .map_err(|e| SolveError::CexQueryFailed(e.to_string()))?;
 
         // Calculate available liquidity from orderbook depth
@@ -569,7 +589,10 @@ impl Solver for CexBackstopSolver {
 
     async fn health_check(&self) -> bool {
         // Try to fetch a sample orderbook
-        if let Some(symbol) = self.client.pair_to_symbol(&TradingPair::new("uatom", "uusdc")) {
+        if let Some(symbol) = self
+            .client
+            .pair_to_symbol(&TradingPair::new("uatom", "uusdc"))
+        {
             self.client.get_orderbook(&symbol).await.is_ok()
         } else {
             false
@@ -676,12 +699,16 @@ impl CexClient for MockCexClient {
 
         let (avg_price, _) = match order.side {
             OrderSide::Buy => {
-                let ask = orderbook.asks.first()
+                let ask = orderbook
+                    .asks
+                    .first()
                     .ok_or_else(|| CexError::OrderRejected("no liquidity".to_string()))?;
                 (ask.price.clone(), ask.quantity.clone())
             }
             OrderSide::Sell => {
-                let bid = orderbook.bids.first()
+                let bid = orderbook
+                    .bids
+                    .first()
                     .ok_or_else(|| CexError::OrderRejected("no liquidity".to_string()))?;
                 (bid.price.clone(), bid.quantity.clone())
             }
@@ -867,7 +894,11 @@ impl BinanceClient {
     }
 
     /// Execute a signed GET request with retry logic
-    async fn signed_get(&self, path: &str, params: Vec<(&str, String)>) -> Result<reqwest::Response, CexError> {
+    async fn signed_get(
+        &self,
+        path: &str,
+        params: Vec<(&str, String)>,
+    ) -> Result<reqwest::Response, CexError> {
         let timestamp = Self::get_timestamp();
 
         // Build query string with timestamp
@@ -893,11 +924,16 @@ impl BinanceClient {
                 .header("X-MBX-APIKEY", &self.config.api_key)
                 .send()
                 .await
-        }).await
+        })
+        .await
     }
 
     /// Execute a signed POST request with retry logic
-    async fn signed_post(&self, path: &str, params: Vec<(&str, String)>) -> Result<reqwest::Response, CexError> {
+    async fn signed_post(
+        &self,
+        path: &str,
+        params: Vec<(&str, String)>,
+    ) -> Result<reqwest::Response, CexError> {
         let timestamp = Self::get_timestamp();
 
         // Build query string with timestamp
@@ -923,7 +959,8 @@ impl BinanceClient {
                 .header("X-MBX-APIKEY", &self.config.api_key)
                 .send()
                 .await
-        }).await
+        })
+        .await
     }
 
     /// Execute request with retry logic for transient failures
@@ -944,8 +981,9 @@ impl BinanceClient {
                     if status.as_u16() == 429 {
                         if attempt < MAX_RETRIES - 1 {
                             tokio::time::sleep(tokio::time::Duration::from_millis(
-                                RETRY_DELAY_MS * (attempt as u64 + 1)
-                            )).await;
+                                RETRY_DELAY_MS * (attempt as u64 + 1),
+                            ))
+                            .await;
                             continue;
                         }
                         return Err(CexError::RateLimitExceeded);
@@ -953,11 +991,14 @@ impl BinanceClient {
 
                     // Handle other errors
                     if !status.is_success() {
-                        let error_text = response.text().await
+                        let error_text = response
+                            .text()
+                            .await
                             .unwrap_or_else(|_| "unknown error".to_string());
 
                         // Try to parse Binance error response
-                        if let Ok(binance_error) = serde_json::from_str::<BinanceError>(&error_text) {
+                        if let Ok(binance_error) = serde_json::from_str::<BinanceError>(&error_text)
+                        {
                             return Err(match binance_error.code {
                                 -1022 => CexError::AuthFailed(binance_error.msg),
                                 -2010 => CexError::InsufficientBalance {
@@ -976,7 +1017,8 @@ impl BinanceClient {
                 }
                 Err(e) => {
                     if attempt < MAX_RETRIES - 1 && e.is_timeout() {
-                        tokio::time::sleep(tokio::time::Duration::from_millis(RETRY_DELAY_MS)).await;
+                        tokio::time::sleep(tokio::time::Duration::from_millis(RETRY_DELAY_MS))
+                            .await;
                         continue;
                     }
                     return Err(CexError::NetworkError(e.to_string()));
@@ -1005,14 +1047,17 @@ impl CexClient for BinanceClient {
     async fn get_orderbook(&self, symbol: &str) -> Result<Orderbook, CexError> {
         let url = self.endpoint(&format!("/api/v3/depth?symbol={}&limit=100", symbol));
 
-        let response = self.http_client
+        let response = self
+            .http_client
             .get(&url)
             .send()
             .await
             .map_err(|e| CexError::NetworkError(e.to_string()))?;
 
         if !response.status().is_success() {
-            let error_text = response.text().await
+            let error_text = response
+                .text()
+                .await
                 .unwrap_or_else(|_| "unknown error".to_string());
             return Err(CexError::ApiError(error_text));
         }
@@ -1023,12 +1068,14 @@ impl CexClient for BinanceClient {
             .map_err(|e| CexError::ParseError(e.to_string()))?;
 
         // Convert Binance format to our Orderbook format
-        let bids = binance_book.bids
+        let bids = binance_book
+            .bids
             .into_iter()
             .map(|(price, quantity)| OrderbookLevel { price, quantity })
             .collect();
 
-        let asks = binance_book.asks
+        let asks = binance_book
+            .asks
             .into_iter()
             .map(|(price, quantity)| OrderbookLevel { price, quantity })
             .collect();
@@ -1050,7 +1097,8 @@ impl CexClient for BinanceClient {
             .map_err(|e| CexError::ParseError(e.to_string()))?;
 
         // Find the requested asset in the balances
-        let balance_info = account.balances
+        let balance_info = account
+            .balances
             .into_iter()
             .find(|b| b.asset == asset)
             .ok_or_else(|| CexError::ApiError(format!("asset not found: {}", asset)))?;
@@ -1065,14 +1113,20 @@ impl CexClient for BinanceClient {
     async fn place_order(&self, order: CexOrder) -> Result<CexOrderResult, CexError> {
         let mut params = vec![
             ("symbol", order.symbol.clone()),
-            ("side", match order.side {
-                OrderSide::Buy => "BUY".to_string(),
-                OrderSide::Sell => "SELL".to_string(),
-            }),
-            ("type", match order.order_type {
-                OrderType::Market => "MARKET".to_string(),
-                OrderType::Limit => "LIMIT".to_string(),
-            }),
+            (
+                "side",
+                match order.side {
+                    OrderSide::Buy => "BUY".to_string(),
+                    OrderSide::Sell => "SELL".to_string(),
+                },
+            ),
+            (
+                "type",
+                match order.order_type {
+                    OrderType::Market => "MARKET".to_string(),
+                    OrderType::Limit => "LIMIT".to_string(),
+                },
+            ),
         ];
 
         // Add quantity parameter
@@ -1094,7 +1148,9 @@ impl CexClient for BinanceClient {
                     params.push(("price", price.clone()));
                     params.push(("timeInForce", "GTC".to_string())); // Good Till Cancel
                 } else {
-                    return Err(CexError::OrderRejected("limit order requires price".to_string()));
+                    return Err(CexError::OrderRejected(
+                        "limit order requires price".to_string(),
+                    ));
                 }
             }
         }
@@ -1114,10 +1170,10 @@ impl CexClient for BinanceClient {
             .map_err(|e| CexError::ParseError(e.to_string()))?;
 
         for fill in &binance_order.fills {
-            let fill_price = Decimal::from_str(&fill.price)
-                .map_err(|e| CexError::ParseError(e.to_string()))?;
-            let fill_qty = Decimal::from_str(&fill.qty)
-                .map_err(|e| CexError::ParseError(e.to_string()))?;
+            let fill_price =
+                Decimal::from_str(&fill.price).map_err(|e| CexError::ParseError(e.to_string()))?;
+            let fill_qty =
+                Decimal::from_str(&fill.qty).map_err(|e| CexError::ParseError(e.to_string()))?;
             let commission = Decimal::from_str(&fill.commission)
                 .map_err(|e| CexError::ParseError(e.to_string()))?;
 
@@ -1167,7 +1223,9 @@ impl CexClient for BinanceClient {
             ("network", network.to_string()),
         ];
 
-        let response = self.signed_post("/sapi/v1/capital/withdraw/apply", params).await?;
+        let response = self
+            .signed_post("/sapi/v1/capital/withdraw/apply", params)
+            .await?;
 
         let withdraw_response: BinanceWithdrawResponse = response
             .json()
@@ -1225,11 +1283,15 @@ mod tests {
         };
 
         // Buy 50 ATOM - should fill at 10.50
-        let cost = orderbook.estimate_buy(Decimal::from_str("50").unwrap()).unwrap();
+        let cost = orderbook
+            .estimate_buy(Decimal::from_str("50").unwrap())
+            .unwrap();
         assert_eq!(cost, Decimal::from_str("525").unwrap()); // 50 * 10.50
 
         // Buy 150 ATOM - should fill 100@10.50 + 50@10.55
-        let cost = orderbook.estimate_buy(Decimal::from_str("150").unwrap()).unwrap();
+        let cost = orderbook
+            .estimate_buy(Decimal::from_str("150").unwrap())
+            .unwrap();
         let expected = Decimal::from_str("100").unwrap() * Decimal::from_str("10.50").unwrap()
             + Decimal::from_str("50").unwrap() * Decimal::from_str("10.55").unwrap();
         assert_eq!(cost, expected);
@@ -1254,11 +1316,15 @@ mod tests {
         };
 
         // Sell 50 ATOM - should fill at 10.40
-        let revenue = orderbook.estimate_sell(Decimal::from_str("50").unwrap()).unwrap();
+        let revenue = orderbook
+            .estimate_sell(Decimal::from_str("50").unwrap())
+            .unwrap();
         assert_eq!(revenue, Decimal::from_str("520").unwrap()); // 50 * 10.40
 
         // Sell 150 ATOM - should fill 100@10.40 + 50@10.35
-        let revenue = orderbook.estimate_sell(Decimal::from_str("150").unwrap()).unwrap();
+        let revenue = orderbook
+            .estimate_sell(Decimal::from_str("150").unwrap())
+            .unwrap();
         let expected = Decimal::from_str("100").unwrap() * Decimal::from_str("10.40").unwrap()
             + Decimal::from_str("50").unwrap() * Decimal::from_str("10.35").unwrap();
         assert_eq!(revenue, expected);
@@ -1269,19 +1335,20 @@ mod tests {
         let orderbook = Orderbook {
             symbol: "ATOMUSDC".to_string(),
             bids: vec![],
-            asks: vec![
-                OrderbookLevel {
-                    price: "10.50".to_string(),
-                    quantity: "100".to_string(),
-                },
-            ],
+            asks: vec![OrderbookLevel {
+                price: "10.50".to_string(),
+                quantity: "100".to_string(),
+            }],
             last_update: 0,
         };
 
         // Try to buy more than available
         let result = orderbook.estimate_buy(Decimal::from_str("150").unwrap());
         assert!(result.is_err());
-        assert!(matches!(result.unwrap_err(), CexError::InsufficientBalance { .. }));
+        assert!(matches!(
+            result.unwrap_err(),
+            CexError::InsufficientBalance { .. }
+        ));
     }
 
     #[tokio::test]
@@ -1318,22 +1385,16 @@ mod tests {
 
     #[tokio::test]
     async fn test_cex_backstop_solver() {
-        use atom_intents_types::{Asset, OutputSpec, Intent, ExecutionConstraints, FillConfig};
+        use atom_intents_types::{Asset, ExecutionConstraints, FillConfig, Intent, OutputSpec};
         use cosmwasm_std::Binary;
 
-        let client = Arc::new(
-            MockCexClient::new()
-                .with_orderbook(
-                    "ATOMUSDC",
-                    MockCexClient::simple_orderbook("ATOMUSDC", 10.5, 0.002, 10000.0),
-                )
-        );
+        let client = Arc::new(MockCexClient::new().with_orderbook(
+            "ATOMUSDC",
+            MockCexClient::simple_orderbook("ATOMUSDC", 10.5, 0.002, 10000.0),
+        ));
 
-        let solver = CexBackstopSolver::new(
-            "test-cex-solver",
-            client,
-            CexBackstopConfig::default(),
-        );
+        let solver =
+            CexBackstopSolver::new("test-cex-solver", client, CexBackstopConfig::default());
 
         // Create test intent
         let intent = Intent {
@@ -1384,19 +1445,13 @@ mod tests {
 
     #[tokio::test]
     async fn test_cex_solver_capacity() {
-        let client = Arc::new(
-            MockCexClient::new()
-                .with_orderbook(
-                    "ATOMUSDC",
-                    MockCexClient::simple_orderbook("ATOMUSDC", 10.5, 0.002, 10000.0),
-                )
-        );
+        let client = Arc::new(MockCexClient::new().with_orderbook(
+            "ATOMUSDC",
+            MockCexClient::simple_orderbook("ATOMUSDC", 10.5, 0.002, 10000.0),
+        ));
 
-        let solver = CexBackstopSolver::new(
-            "test-cex-solver",
-            client,
-            CexBackstopConfig::default(),
-        );
+        let solver =
+            CexBackstopSolver::new("test-cex-solver", client, CexBackstopConfig::default());
 
         let pair = TradingPair::new("uatom", "uusdc");
         let capacity = solver.capacity(&pair).await.unwrap();
@@ -1409,11 +1464,8 @@ mod tests {
     #[test]
     fn test_inventory_tracking() {
         let client = Arc::new(MockCexClient::default());
-        let solver = CexBackstopSolver::new(
-            "test-cex-solver",
-            client,
-            CexBackstopConfig::default(),
-        );
+        let solver =
+            CexBackstopSolver::new("test-cex-solver", client, CexBackstopConfig::default());
 
         // Initial position should be zero
         assert_eq!(solver.get_position("uatom"), 0);
@@ -1460,19 +1512,13 @@ mod tests {
 
     #[tokio::test]
     async fn test_solver_health_check() {
-        let client = Arc::new(
-            MockCexClient::new()
-                .with_orderbook(
-                    "ATOMUSDC",
-                    MockCexClient::simple_orderbook("ATOMUSDC", 10.5, 0.002, 1000.0),
-                )
-        );
+        let client = Arc::new(MockCexClient::new().with_orderbook(
+            "ATOMUSDC",
+            MockCexClient::simple_orderbook("ATOMUSDC", 10.5, 0.002, 1000.0),
+        ));
 
-        let solver = CexBackstopSolver::new(
-            "test-cex-solver",
-            client,
-            CexBackstopConfig::default(),
-        );
+        let solver =
+            CexBackstopSolver::new("test-cex-solver", client, CexBackstopConfig::default());
 
         assert!(solver.health_check().await);
     }
@@ -1513,10 +1559,25 @@ mod tests {
     #[test]
     fn test_binance_parse_order_status() {
         assert_eq!(BinanceClient::parse_order_status("NEW"), OrderStatus::New);
-        assert_eq!(BinanceClient::parse_order_status("FILLED"), OrderStatus::Filled);
-        assert_eq!(BinanceClient::parse_order_status("PARTIALLY_FILLED"), OrderStatus::PartiallyFilled);
-        assert_eq!(BinanceClient::parse_order_status("CANCELED"), OrderStatus::Canceled);
-        assert_eq!(BinanceClient::parse_order_status("REJECTED"), OrderStatus::Rejected);
-        assert_eq!(BinanceClient::parse_order_status("EXPIRED"), OrderStatus::Rejected);
+        assert_eq!(
+            BinanceClient::parse_order_status("FILLED"),
+            OrderStatus::Filled
+        );
+        assert_eq!(
+            BinanceClient::parse_order_status("PARTIALLY_FILLED"),
+            OrderStatus::PartiallyFilled
+        );
+        assert_eq!(
+            BinanceClient::parse_order_status("CANCELED"),
+            OrderStatus::Canceled
+        );
+        assert_eq!(
+            BinanceClient::parse_order_status("REJECTED"),
+            OrderStatus::Rejected
+        );
+        assert_eq!(
+            BinanceClient::parse_order_status("EXPIRED"),
+            OrderStatus::Rejected
+        );
     }
 }

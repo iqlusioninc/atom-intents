@@ -24,8 +24,7 @@ impl ConfigLoader {
             "yaml" | "yml" => Self::from_yaml(&content),
             "json" => Self::from_json(&content),
             _ => Err(ConfigError::LoadError(format!(
-                "Unsupported file extension: {}",
-                extension
+                "Unsupported file extension: {extension}"
             ))),
         }
     }
@@ -333,10 +332,7 @@ fee_recipient = "cosmos1fee"
 [chains]
         "#;
 
-        let mut file = tempfile::Builder::new()
-            .suffix(".toml")
-            .tempfile()
-            .unwrap();
+        let mut file = tempfile::Builder::new().suffix(".toml").tempfile().unwrap();
         file.write_all(toml.as_bytes()).unwrap();
 
         let config = ConfigLoader::from_file(file.path()).unwrap();

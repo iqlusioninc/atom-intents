@@ -1,10 +1,12 @@
 use cosmwasm_std::{
-    entry_point, to_json_binary, BankMsg, Binary, Coin, Deps, DepsMut, Env, MessageInfo,
-    Response, StdResult,
+    entry_point, to_json_binary, BankMsg, Binary, Coin, Deps, DepsMut, Env, MessageInfo, Response,
+    StdResult,
 };
 
 use crate::error::ContractError;
-use crate::msg::{ConfigResponse, EscrowResponse, EscrowsResponse, ExecuteMsg, InstantiateMsg, QueryMsg};
+use crate::msg::{
+    ConfigResponse, EscrowResponse, EscrowsResponse, ExecuteMsg, InstantiateMsg, QueryMsg,
+};
 use crate::state::{Config, Escrow, EscrowStatus, CONFIG, ESCROWS, USER_ESCROWS};
 
 #[entry_point]
@@ -50,7 +52,7 @@ pub fn execute(
 
 fn execute_lock(
     deps: DepsMut,
-    env: Env,
+    _env: Env,
     info: MessageInfo,
     escrow_id: String,
     intent_id: String,
@@ -94,7 +96,7 @@ fn execute_lock(
 
 fn execute_release(
     deps: DepsMut,
-    env: Env,
+    _env: Env,
     info: MessageInfo,
     escrow_id: String,
     recipient: String,
@@ -106,9 +108,12 @@ fn execute_release(
         return Err(ContractError::Unauthorized {});
     }
 
-    let mut escrow = ESCROWS
-        .load(deps.storage, &escrow_id)
-        .map_err(|_| ContractError::EscrowNotFound { id: escrow_id.clone() })?;
+    let mut escrow =
+        ESCROWS
+            .load(deps.storage, &escrow_id)
+            .map_err(|_| ContractError::EscrowNotFound {
+                id: escrow_id.clone(),
+            })?;
 
     // Check not already released
     if !matches!(escrow.status, EscrowStatus::Locked) {
@@ -145,9 +150,12 @@ fn execute_refund(
     info: MessageInfo,
     escrow_id: String,
 ) -> Result<Response, ContractError> {
-    let mut escrow = ESCROWS
-        .load(deps.storage, &escrow_id)
-        .map_err(|_| ContractError::EscrowNotFound { id: escrow_id.clone() })?;
+    let mut escrow =
+        ESCROWS
+            .load(deps.storage, &escrow_id)
+            .map_err(|_| ContractError::EscrowNotFound {
+                id: escrow_id.clone(),
+            })?;
 
     // Only owner can refund
     if info.sender != escrow.owner {
@@ -263,7 +271,7 @@ fn query_escrows_by_user(
 fn escrow_to_response(escrow: Escrow) -> EscrowResponse {
     let status = match escrow.status {
         EscrowStatus::Locked => "locked".to_string(),
-        EscrowStatus::Released { recipient } => format!("released to {}", recipient),
+        EscrowStatus::Released { recipient } => format!("released to {recipient}"),
         EscrowStatus::Refunded => "refunded".to_string(),
     };
 
@@ -307,7 +315,15 @@ mod tests {
         }
     }
 
-    fn setup_contract() -> (cosmwasm_std::OwnedDeps<cosmwasm_std::MemoryStorage, cosmwasm_std::testing::MockApi, cosmwasm_std::testing::MockQuerier>, Env, TestAddrs) {
+    fn setup_contract() -> (
+        cosmwasm_std::OwnedDeps<
+            cosmwasm_std::MemoryStorage,
+            cosmwasm_std::testing::MockApi,
+            cosmwasm_std::testing::MockQuerier,
+        >,
+        Env,
+        TestAddrs,
+    ) {
         let mut deps = mock_dependencies();
         let env = mock_env();
         let addrs = test_addrs(&deps.api);
@@ -324,7 +340,11 @@ mod tests {
     }
 
     fn lock_escrow(
-        deps: &mut cosmwasm_std::OwnedDeps<cosmwasm_std::MemoryStorage, cosmwasm_std::testing::MockApi, cosmwasm_std::testing::MockQuerier>,
+        deps: &mut cosmwasm_std::OwnedDeps<
+            cosmwasm_std::MemoryStorage,
+            cosmwasm_std::testing::MockApi,
+            cosmwasm_std::testing::MockQuerier,
+        >,
         env: &Env,
         addrs: &TestAddrs,
         escrow_id: &str,
@@ -406,7 +426,10 @@ mod tests {
 
         let info = message_info(
             &addrs.user,
-            &[Coin::new(100_000u128, "uatom"), Coin::new(50_000u128, "uusdc")],
+            &[
+                Coin::new(100_000u128, "uatom"),
+                Coin::new(50_000u128, "uusdc"),
+            ],
         );
         let err = execute(
             deps.as_mut(),
@@ -1129,6 +1152,7 @@ mod tests {
             from_json(query(deps.as_ref(), env, QueryMsg::Config {}).unwrap()).unwrap();
 
         assert_eq!(config.admin, addrs.admin.to_string()); // Unchanged
-        assert_eq!(config.settlement_contract, addrs.new_settlement.to_string()); // Changed
+        assert_eq!(config.settlement_contract, addrs.new_settlement.to_string());
+        // Changed
     }
 }

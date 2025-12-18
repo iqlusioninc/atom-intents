@@ -379,8 +379,7 @@ pub trait ChainClient: Send + Sync {
     ) -> Result<Vec<u64>, ChainError>;
 
     /// Submit transaction with multiple messages
-    async fn submit_tx(&self, msgs: Vec<CosmosMsg>, memo: &str)
-        -> Result<TxResponse, ChainError>;
+    async fn submit_tx(&self, msgs: Vec<CosmosMsg>, memo: &str) -> Result<TxResponse, ChainError>;
 
     /// Query IBC client state
     async fn query_client_state(&self, client_id: &str) -> Result<ClientState, ChainError>;
@@ -550,10 +549,12 @@ impl CosmosChainClient {
         // Perform health check if needed
         self.maybe_health_check().await?;
 
-        let tm_height = height.map(|h| {
-            TmHeight::try_from(h)
-                .map_err(|e| ChainError::ParseError(format!("Invalid height: {}", e)))
-        }).transpose()?;
+        let tm_height = height
+            .map(|h| {
+                TmHeight::try_from(h)
+                    .map_err(|e| ChainError::ParseError(format!("Invalid height: {}", e)))
+            })
+            .transpose()?;
 
         let response = tokio::time::timeout(
             self.request_timeout,
@@ -594,10 +595,12 @@ impl CosmosChainClient {
         // Perform health check if needed
         self.maybe_health_check().await?;
 
-        let tm_height = height.map(|h| {
-            TmHeight::try_from(h)
-                .map_err(|e| ChainError::ParseError(format!("Invalid height: {}", e)))
-        }).transpose()?;
+        let tm_height = height
+            .map(|h| {
+                TmHeight::try_from(h)
+                    .map_err(|e| ChainError::ParseError(format!("Invalid height: {}", e)))
+            })
+            .transpose()?;
 
         let response = tokio::time::timeout(
             self.request_timeout,
@@ -784,8 +787,9 @@ impl CosmosChainClient {
             "signer": signer,
         });
 
-        let value = serde_json::to_vec(&msg_data)
-            .map_err(|e| ChainError::EncodingError(format!("Failed to encode MsgRecvPacket: {}", e)))?;
+        let value = serde_json::to_vec(&msg_data).map_err(|e| {
+            ChainError::EncodingError(format!("Failed to encode MsgRecvPacket: {}", e))
+        })?;
 
         Ok(CosmosMsg {
             type_url: "/ibc.core.channel.v1.MsgRecvPacket".to_string(),
@@ -842,11 +846,7 @@ impl ChainClient for CosmosChainClient {
         Ok(unreceived)
     }
 
-    async fn submit_tx(
-        &self,
-        msgs: Vec<CosmosMsg>,
-        memo: &str,
-    ) -> Result<TxResponse, ChainError> {
+    async fn submit_tx(&self, msgs: Vec<CosmosMsg>, memo: &str) -> Result<TxResponse, ChainError> {
         let gas = self.estimate_gas(&msgs);
         let fee = self.build_fee(gas);
 
@@ -929,7 +929,7 @@ impl ChainClient for CosmosChainClient {
         Ok(ConsensusState {
             timestamp: std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
+                .expect("System time is before UNIX epoch - clock error")
                 .as_secs(),
             root: vec![0u8; 32],
             next_validators_hash: vec![0u8; 32],

@@ -121,12 +121,13 @@ impl Solver for DexRoutingSolver {
         }
 
         // Find best quote that meets minimum output
-        let limit_price = intent
-            .output
-            .limit_price_decimal()
-            .map_err(|e| SolveError::InvalidIntent {
-                reason: format!("invalid limit price: {}", e),
-            })?;
+        let limit_price =
+            intent
+                .output
+                .limit_price_decimal()
+                .map_err(|e| SolveError::InvalidIntent {
+                    reason: format!("invalid limit price: {}", e),
+                })?;
 
         let best = quotes
             .into_iter()
@@ -140,7 +141,11 @@ impl Solver for DexRoutingSolver {
         let output_amount_dec = Decimal::from(best.output_amount);
         let surplus_dec = (output_amount_dec - user_min_output_dec).max(Decimal::ZERO);
         let solver_fee_dec = surplus_dec * self.surplus_capture_rate;
-        let solver_fee = solver_fee_dec.trunc().to_string().parse::<u128>().unwrap_or(0);
+        let solver_fee = solver_fee_dec
+            .trunc()
+            .to_string()
+            .parse::<u128>()
+            .unwrap_or(0);
 
         let output_to_user = best.output_amount.saturating_sub(solver_fee);
         let output_to_user_dec = Decimal::from(output_to_user);
@@ -243,7 +248,10 @@ impl DexClient for MockDexClient {
         })
     }
 
-    async fn get_pools(&self, _pair: &TradingPair) -> Result<Vec<crate::PoolInfo>, crate::DexError> {
+    async fn get_pools(
+        &self,
+        _pair: &TradingPair,
+    ) -> Result<Vec<crate::PoolInfo>, crate::DexError> {
         Ok(vec![crate::PoolInfo {
             pool_id: "pool-1".to_string(),
             token_a: "uatom".to_string(),

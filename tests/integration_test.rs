@@ -7,7 +7,7 @@ use atom_intents_settlement::{
 };
 use atom_intents_solver::{DexRoutingSolver, MockDexClient, MockOracle, SolutionAggregator};
 use atom_intents_types::{
-    Asset, ExecutionConstraints, FillConfig, FillStrategy, Intent, IbcTransferInfo, OutputSpec,
+    Asset, ExecutionConstraints, FillConfig, FillStrategy, IbcTransferInfo, Intent, OutputSpec,
     SolverQuote, TradingPair,
 };
 use cosmwasm_std::{Binary, Uint128};
@@ -77,11 +77,7 @@ impl EscrowContract for MockEscrowContract {
         Ok(lock)
     }
 
-    async fn release_to(
-        &self,
-        lock: &EscrowLock,
-        _recipient: &str,
-    ) -> Result<(), SettlementError> {
+    async fn release_to(&self, lock: &EscrowLock, _recipient: &str) -> Result<(), SettlementError> {
         self.locks.lock().unwrap().remove(&lock.id);
         Ok(())
     }
@@ -214,9 +210,7 @@ impl RelayerService for MockRelayer {
             });
         }
 
-        Ok(IbcResult::Success {
-            ack: vec![1, 2, 3],
-        })
+        Ok(IbcResult::Success { ack: vec![1, 2, 3] })
     }
 }
 
@@ -290,7 +284,14 @@ async fn test_full_settlement_flow() {
     let oracle = Arc::new(MockOracle::new("test-oracle"));
     // Set up oracle price for the trading pair
     let pair = TradingPair::new("uatom", "uusdc");
-    oracle.set_price(&pair, Decimal::from_str("10.5").unwrap(), Decimal::from_str("0.01").unwrap()).await.unwrap();
+    oracle
+        .set_price(
+            &pair,
+            Decimal::from_str("10.5").unwrap(),
+            Decimal::from_str("0.01").unwrap(),
+        )
+        .await
+        .unwrap();
     let aggregator = SolutionAggregator::new(vec![solver.clone()], oracle);
 
     let escrow = MockEscrowContract::new();
@@ -310,7 +311,7 @@ async fn test_full_settlement_flow() {
         "noble-1",
         "uusdc",
         100_000_000, // 100 USDC minimum
-        "10.0",       // 10 USDC/ATOM limit price
+        "10.0",      // 10 USDC/ATOM limit price
     );
 
     // Step 2: Process through matching engine
@@ -370,7 +371,7 @@ async fn test_batch_auction_with_internal_crossing() {
         "cosmoshub-4",
         "uatom",
         10_000_000, // Want 10 ATOM minimum
-        "0.095",     // Willing to pay ~10.5 USDC/ATOM
+        "0.095",    // Willing to pay ~10.5 USDC/ATOM
     );
 
     let sell_intent = make_test_intent(
@@ -382,7 +383,7 @@ async fn test_batch_auction_with_internal_crossing() {
         "cosmoshub-4",
         "uusdc",
         100_000_000, // Want 100 USDC minimum
-        "10.0",       // Want at least 10 USDC/ATOM
+        "10.0",      // Want at least 10 USDC/ATOM
     );
 
     let intents = vec![buy_intent, sell_intent];
@@ -546,7 +547,14 @@ async fn test_settlement_failure_and_recovery() {
     let oracle = Arc::new(MockOracle::new("test-oracle"));
     // Set up oracle price for the trading pair
     let pair = TradingPair::new("uatom", "uusdc");
-    oracle.set_price(&pair, Decimal::from_str("10.5").unwrap(), Decimal::from_str("0.01").unwrap()).await.unwrap();
+    oracle
+        .set_price(
+            &pair,
+            Decimal::from_str("10.5").unwrap(),
+            Decimal::from_str("0.01").unwrap(),
+        )
+        .await
+        .unwrap();
     let aggregator = SolutionAggregator::new(vec![solver], oracle);
 
     let escrow = MockEscrowContract::new();
@@ -629,7 +637,14 @@ async fn test_solver_vault_lock_failure() {
     let oracle = Arc::new(MockOracle::new("test-oracle"));
     // Set up oracle price for the trading pair
     let pair = TradingPair::new("uatom", "uusdc");
-    oracle.set_price(&pair, Decimal::from_str("10.5").unwrap(), Decimal::from_str("0.01").unwrap()).await.unwrap();
+    oracle
+        .set_price(
+            &pair,
+            Decimal::from_str("10.5").unwrap(),
+            Decimal::from_str("0.01").unwrap(),
+        )
+        .await
+        .unwrap();
     let aggregator = SolutionAggregator::new(vec![solver], oracle);
 
     let fill_plan = aggregator
@@ -642,7 +657,9 @@ async fn test_solver_vault_lock_failure() {
     let current_time = current_time();
 
     // Settlement should fail
-    let result = settlement_engine.execute(&intent, solution, current_time).await;
+    let result = settlement_engine
+        .execute(&intent, solution, current_time)
+        .await;
 
     assert!(result.is_err());
     assert!(matches!(
@@ -767,7 +784,14 @@ async fn test_multiple_solvers_aggregation() {
     let oracle = Arc::new(MockOracle::new("test-oracle"));
     // Set up oracle price for the trading pair
     let pair = TradingPair::new("uatom", "uusdc");
-    oracle.set_price(&pair, Decimal::from_str("10.5").unwrap(), Decimal::from_str("0.01").unwrap()).await.unwrap();
+    oracle
+        .set_price(
+            &pair,
+            Decimal::from_str("10.5").unwrap(),
+            Decimal::from_str("0.01").unwrap(),
+        )
+        .await
+        .unwrap();
     let aggregator = SolutionAggregator::new(vec![solver1, solver2], oracle);
 
     let intent = make_test_intent(

@@ -4,7 +4,6 @@ use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
 use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::str::FromStr;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::RwLock;
@@ -92,9 +91,8 @@ impl AstroportClient {
             "pool": {}
         });
 
-        let pool_response: PoolQueryResponse = self
-            .query_contract(pair_address, &query_msg)
-            .await?;
+        let pool_response: PoolQueryResponse =
+            self.query_contract(pair_address, &query_msg).await?;
 
         // Parse assets and determine pool type
         let (reserve_a, reserve_b, token_a, token_b) = match pool_response.assets.as_slice() {
@@ -217,7 +215,9 @@ impl AstroportClient {
             .and_then(|r| r.get("response"))
             .and_then(|r| r.get("value"))
             .and_then(|v| v.as_str())
-            .ok_or_else(|| DexError::QueryFailed("Missing result data in RPC response".to_string()))?;
+            .ok_or_else(|| {
+                DexError::QueryFailed("Missing result data in RPC response".to_string())
+            })?;
 
         let decoded = BASE64
             .decode(result_data)
@@ -228,12 +228,7 @@ impl AstroportClient {
     }
 
     /// Estimate slippage for a trade
-    pub fn estimate_slippage(
-        &self,
-        pool: &PoolLiquidity,
-        amount: u128,
-        is_buy: bool,
-    ) -> Decimal {
+    pub fn estimate_slippage(&self, pool: &PoolLiquidity, amount: u128, is_buy: bool) -> Decimal {
         match pool.pool_type {
             PoolType::Xyk => self.estimate_xyk_slippage(pool, amount, is_buy),
             PoolType::Stable => self.estimate_stable_slippage(pool, amount, is_buy),
@@ -262,8 +257,7 @@ impl AstroportClient {
         // Price impact = 1 - (actual_price / ideal_price)
         // actual_price = output / amount
         // ideal_price = output_reserve / input_reserve
-        let actual_output =
-            (output_reserve_dec * amount_dec) / (input_reserve_dec + amount_dec);
+        let actual_output = (output_reserve_dec * amount_dec) / (input_reserve_dec + amount_dec);
         let ideal_output = (output_reserve_dec / input_reserve_dec) * amount_dec;
 
         if ideal_output.is_zero() {
@@ -313,14 +307,8 @@ impl AstroportClient {
     ) -> Result<Decimal, DexError> {
         let pool = self.query_pool(pair_address).await?;
 
-        let price_a = prices
-            .get(&pool.token_a)
-            .copied()
-            .unwrap_or(Decimal::ZERO);
-        let price_b = prices
-            .get(&pool.token_b)
-            .copied()
-            .unwrap_or(Decimal::ZERO);
+        let price_a = prices.get(&pool.token_a).copied().unwrap_or(Decimal::ZERO);
+        let price_b = prices.get(&pool.token_b).copied().unwrap_or(Decimal::ZERO);
 
         let value_a = Decimal::from(pool.reserve_a) * price_a;
         let value_b = Decimal::from(pool.reserve_b) * price_b;
@@ -490,10 +478,7 @@ impl DexClient for AstroportClient {
             let status = response.status();
             let body = response.text().await.unwrap_or_default();
             warn!("Astroport API error: {} - {}", status, body);
-            return Err(DexError::QueryFailed(format!(
-                "HTTP {}: {}",
-                status, body
-            )));
+            return Err(DexError::QueryFailed(format!("HTTP {}: {}", status, body)));
         }
 
         let sim: RouterSimulateResponse = response
@@ -607,8 +592,8 @@ impl DexClient for AstroportClient {
                 Ok(liquidity) => {
                     // Determine fee rate based on pool type
                     let fee_rate = match liquidity.pool_type {
-                        PoolType::Xyk => "0.003",       // 0.3%
-                        PoolType::Stable => "0.0005",   // 0.05%
+                        PoolType::Xyk => "0.003",          // 0.3%
+                        PoolType::Stable => "0.0005",      // 0.05%
                         PoolType::Concentrated => "0.002", // 0.2%
                     };
 
@@ -646,6 +631,7 @@ impl DexClient for AstroportClient {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::str::FromStr;
 
     #[test]
     fn test_pool_cache() {
@@ -676,11 +662,7 @@ mod tests {
 
     #[test]
     fn test_estimate_xyk_slippage() {
-        let client = AstroportClient::new(
-            "https://test.com/api",
-            "test-1",
-            "https://test-rpc.com",
-        );
+        let client = AstroportClient::new("https://test.com/api", "test-1", "https://test-rpc.com");
 
         let pool = PoolLiquidity {
             token_a: "token0".to_string(),
@@ -718,11 +700,7 @@ mod tests {
 
     #[test]
     fn test_estimate_stable_slippage() {
-        let client = AstroportClient::new(
-            "https://test.com/api",
-            "test-1",
-            "https://test-rpc.com",
-        );
+        let client = AstroportClient::new("https://test.com/api", "test-1", "https://test-rpc.com");
 
         let pool = PoolLiquidity {
             token_a: "usdc".to_string(),
@@ -744,11 +722,7 @@ mod tests {
 
     #[test]
     fn test_estimate_concentrated_slippage() {
-        let client = AstroportClient::new(
-            "https://test.com/api",
-            "test-1",
-            "https://test-rpc.com",
-        );
+        let client = AstroportClient::new("https://test.com/api", "test-1", "https://test-rpc.com");
 
         let pool = PoolLiquidity {
             token_a: "token0".to_string(),
@@ -774,11 +748,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_pool_tvl_calculation() {
-        let client = AstroportClient::new(
-            "https://test.com/api",
-            "test-1",
-            "https://test-rpc.com",
-        );
+        let client = AstroportClient::new("https://test.com/api", "test-1", "https://test-rpc.com");
 
         // Mock pool data in cache
         let pool = PoolLiquidity {
@@ -907,7 +877,8 @@ mod tests {
 
         let pair = TradingPair {
             base: "untrn".to_string(),
-            quote: "ibc/C4CFF46FD6DE35CA4CF4CE031E643C8FDC9BA4B99AE598E9B0ED98FE3A2319F9".to_string(),
+            quote: "ibc/C4CFF46FD6DE35CA4CF4CE031E643C8FDC9BA4B99AE598E9B0ED98FE3A2319F9"
+                .to_string(),
         };
 
         match client.get_pools(&pair).await {
@@ -930,11 +901,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_cache_expiry() {
-        let client = AstroportClient::new(
-            "https://test.com/api",
-            "test-1",
-            "https://test-rpc.com",
-        );
+        let client = AstroportClient::new("https://test.com/api", "test-1", "https://test-rpc.com");
 
         let pool = PoolLiquidity {
             token_a: "token0".to_string(),

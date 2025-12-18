@@ -57,10 +57,8 @@ mod tests {
 
     #[test]
     fn test_exponential_backoff_initial() {
-        let mut backoff = ExponentialBackoff::new(
-            Duration::from_millis(100),
-            Duration::from_secs(10),
-        );
+        let mut backoff =
+            ExponentialBackoff::new(Duration::from_millis(100), Duration::from_secs(10));
 
         let delay = backoff.next_delay();
         assert_eq!(delay, Duration::from_millis(100));
@@ -69,10 +67,8 @@ mod tests {
 
     #[test]
     fn test_exponential_backoff_progression() {
-        let mut backoff = ExponentialBackoff::new(
-            Duration::from_millis(100),
-            Duration::from_secs(10),
-        );
+        let mut backoff =
+            ExponentialBackoff::new(Duration::from_millis(100), Duration::from_secs(10));
 
         let delay1 = backoff.next_delay();
         assert_eq!(delay1, Duration::from_millis(100));
@@ -89,10 +85,8 @@ mod tests {
 
     #[test]
     fn test_exponential_backoff_max_cap() {
-        let mut backoff = ExponentialBackoff::new(
-            Duration::from_millis(100),
-            Duration::from_secs(1),
-        );
+        let mut backoff =
+            ExponentialBackoff::new(Duration::from_millis(100), Duration::from_secs(1));
 
         // Keep calling until we hit the max
         for _ in 0..20 {
@@ -107,10 +101,8 @@ mod tests {
 
     #[test]
     fn test_exponential_backoff_reset() {
-        let mut backoff = ExponentialBackoff::new(
-            Duration::from_millis(100),
-            Duration::from_secs(10),
-        );
+        let mut backoff =
+            ExponentialBackoff::new(Duration::from_millis(100), Duration::from_secs(10));
 
         backoff.next_delay();
         backoff.next_delay();
@@ -126,11 +118,9 @@ mod tests {
 
     #[test]
     fn test_exponential_backoff_custom_multiplier() {
-        let mut backoff = ExponentialBackoff::new(
-            Duration::from_millis(100),
-            Duration::from_secs(10),
-        )
-        .with_multiplier(3.0);
+        let mut backoff =
+            ExponentialBackoff::new(Duration::from_millis(100), Duration::from_secs(10))
+                .with_multiplier(3.0);
 
         let delay1 = backoff.next_delay();
         assert_eq!(delay1, Duration::from_millis(100));
@@ -163,10 +153,8 @@ mod tests {
 
     #[test]
     fn test_exponential_backoff_sequence() {
-        let mut backoff = ExponentialBackoff::new(
-            Duration::from_millis(50),
-            Duration::from_secs(5),
-        );
+        let mut backoff =
+            ExponentialBackoff::new(Duration::from_millis(50), Duration::from_secs(5));
 
         let expected = vec![
             Duration::from_millis(50),   // 2^0 * 50 = 50

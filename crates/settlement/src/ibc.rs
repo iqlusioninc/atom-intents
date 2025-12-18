@@ -57,7 +57,11 @@ pub fn build_pfm_memo(hops: &[PfmHop]) -> String {
 }
 
 /// Build IBC hooks memo for Wasm execution
-pub fn build_wasm_memo(contract: &str, msg: &serde_json::Value, forward: Option<&PfmHop>) -> String {
+pub fn build_wasm_memo(
+    contract: &str,
+    msg: &serde_json::Value,
+    forward: Option<&PfmHop>,
+) -> String {
     let mut memo = serde_json::json!({
         "wasm": {
             "contract": contract,
@@ -121,18 +125,23 @@ pub fn determine_flow_with_routing(
         }
 
         // Multi-hop route - convert to PfmHops
-        let pfm_hops = route.hops.iter().enumerate().map(|(i, hop)| {
-            PfmHop {
-                receiver: if i == route.hops.len() - 1 {
-                    // Final hop - use actual receiver (will be set by caller)
-                    dest_chain.to_string()
-                } else {
-                    // Intermediate hop - forward to next chain
-                    hop.chain_id.clone()
-                },
-                channel: hop.channel_id.clone(),
-            }
-        }).collect();
+        let pfm_hops = route
+            .hops
+            .iter()
+            .enumerate()
+            .map(|(i, hop)| {
+                PfmHop {
+                    receiver: if i == route.hops.len() - 1 {
+                        // Final hop - use actual receiver (will be set by caller)
+                        dest_chain.to_string()
+                    } else {
+                        // Intermediate hop - forward to next chain
+                        hop.chain_id.clone()
+                    },
+                    channel: hop.channel_id.clone(),
+                }
+            })
+            .collect();
 
         return IbcFlowType::MultiHopPfm { hops: pfm_hops };
     }
@@ -288,11 +297,7 @@ mod tests {
     fn test_ibc_transfer_builder_with_registry() {
         let registry = ChannelRegistry::with_mainnet_channels();
 
-        let builder = IbcTransferBuilder::from_registry(
-            "cosmoshub-4",
-            "osmosis-1",
-            &registry,
-        );
+        let builder = IbcTransferBuilder::from_registry("cosmoshub-4", "osmosis-1", &registry);
 
         assert!(builder.is_ok());
         let builder = builder.unwrap();
@@ -303,11 +308,8 @@ mod tests {
     fn test_ibc_transfer_builder_with_registry_not_found() {
         let registry = ChannelRegistry::new();
 
-        let builder = IbcTransferBuilder::from_registry(
-            "unknown-chain-1",
-            "unknown-chain-2",
-            &registry,
-        );
+        let builder =
+            IbcTransferBuilder::from_registry("unknown-chain-1", "unknown-chain-2", &registry);
 
         assert!(builder.is_err());
         match builder {
@@ -323,19 +325,15 @@ mod tests {
     fn test_ibc_transfer_builder_complete_flow() {
         let registry = ChannelRegistry::with_mainnet_channels();
 
-        let transfer = IbcTransferBuilder::from_registry(
-            "cosmoshub-4",
-            "osmosis-1",
-            &registry,
-        )
-        .unwrap()
-        .denom("uatom")
-        .amount(Uint128::new(1_000_000))
-        .sender("cosmos1sender")
-        .receiver("osmo1receiver")
-        .timeout_secs(300)
-        .memo("test transfer")
-        .build(1000);
+        let transfer = IbcTransferBuilder::from_registry("cosmoshub-4", "osmosis-1", &registry)
+            .unwrap()
+            .denom("uatom")
+            .amount(Uint128::new(1_000_000))
+            .sender("cosmos1sender")
+            .receiver("osmo1receiver")
+            .timeout_secs(300)
+            .memo("test transfer")
+            .build(1000);
 
         assert_eq!(transfer.source_chain, "cosmoshub-4");
         assert_eq!(transfer.dest_chain, "osmosis-1");
@@ -368,7 +366,12 @@ mod tests {
 
         for (source, dest, expected_channel) in pairs {
             let builder = IbcTransferBuilder::from_registry(source, dest, &registry);
-            assert!(builder.is_ok(), "Failed to create builder for {} -> {}", source, dest);
+            assert!(
+                builder.is_ok(),
+                "Failed to create builder for {} -> {}",
+                source,
+                dest
+            );
             assert_eq!(
                 builder.unwrap().channel,
                 expected_channel,
@@ -411,7 +414,10 @@ mod tests {
 
         assert_eq!(parsed["forward"]["receiver"], "osmo1intermediate");
         assert_eq!(parsed["forward"]["channel"], "channel-141");
-        assert_eq!(parsed["forward"]["next"]["forward"]["receiver"], "cosmos1final");
+        assert_eq!(
+            parsed["forward"]["next"]["forward"]["receiver"],
+            "cosmos1final"
+        );
         assert_eq!(parsed["forward"]["next"]["forward"]["channel"], "channel-0");
     }
 
@@ -434,21 +440,34 @@ mod tests {
     fn test_calculate_timeout() {
         assert_eq!(calculate_timeout(&IbcFlowType::SameChain, 60), 60);
         assert_eq!(
-            calculate_timeout(&IbcFlowType::DirectIbc { channel: "channel-0".to_string() }, 60),
+            calculate_timeout(
+                &IbcFlowType::DirectIbc {
+                    channel: "channel-0".to_string()
+                },
+                60
+            ),
             120
         );
         assert_eq!(
-            calculate_timeout(&IbcFlowType::MultiHopPfm { hops: vec![PfmHop {
-                receiver: "test".to_string(),
-                channel: "channel-0".to_string(),
-            }] }, 60),
+            calculate_timeout(
+                &IbcFlowType::MultiHopPfm {
+                    hops: vec![PfmHop {
+                        receiver: "test".to_string(),
+                        channel: "channel-0".to_string(),
+                    }]
+                },
+                60
+            ),
             180
         );
         assert_eq!(
-            calculate_timeout(&IbcFlowType::IbcHooksWasm {
-                contract: "contract".to_string(),
-                msg: "{}".to_string(),
-            }, 60),
+            calculate_timeout(
+                &IbcFlowType::IbcHooksWasm {
+                    contract: "contract".to_string(),
+                    msg: "{}".to_string(),
+                },
+                60
+            ),
             180
         );
     }
@@ -457,12 +476,8 @@ mod tests {
     fn test_determine_flow_with_routing_same_chain() {
         let route_registry = crate::RouteRegistry::with_mainnet_routes();
 
-        let flow = determine_flow_with_routing(
-            "cosmoshub-4",
-            "cosmoshub-4",
-            false,
-            &route_registry,
-        );
+        let flow =
+            determine_flow_with_routing("cosmoshub-4", "cosmoshub-4", false, &route_registry);
 
         assert!(matches!(flow, IbcFlowType::SameChain));
     }
@@ -471,12 +486,7 @@ mod tests {
     fn test_determine_flow_with_routing_direct() {
         let route_registry = crate::RouteRegistry::with_mainnet_routes();
 
-        let flow = determine_flow_with_routing(
-            "cosmoshub-4",
-            "osmosis-1",
-            false,
-            &route_registry,
-        );
+        let flow = determine_flow_with_routing("cosmoshub-4", "osmosis-1", false, &route_registry);
 
         match flow {
             IbcFlowType::DirectIbc { channel } => {
@@ -492,12 +502,7 @@ mod tests {
 
         // neutron-1 -> cosmoshub-4 -> stride-1 should use multi-hop
         // (or direct if there's a direct channel)
-        let flow = determine_flow_with_routing(
-            "neutron-1",
-            "stride-1",
-            false,
-            &route_registry,
-        );
+        let flow = determine_flow_with_routing("neutron-1", "stride-1", false, &route_registry);
 
         match flow {
             IbcFlowType::DirectIbc { .. } => {
@@ -568,16 +573,19 @@ mod tests {
             estimated_cost_units: 100000,
         };
 
-        let pfm_hops: Vec<PfmHop> = route.hops.iter().enumerate().map(|(i, hop)| {
-            PfmHop {
+        let pfm_hops: Vec<PfmHop> = route
+            .hops
+            .iter()
+            .enumerate()
+            .map(|(i, hop)| PfmHop {
                 receiver: if i == route.hops.len() - 1 {
                     "osmosis-1".to_string()
                 } else {
                     hop.chain_id.clone()
                 },
                 channel: hop.channel_id.clone(),
-            }
-        }).collect();
+            })
+            .collect();
 
         assert_eq!(pfm_hops.len(), 2);
         assert_eq!(pfm_hops[0].receiver, "stride-1");
@@ -596,16 +604,19 @@ mod tests {
         if let Some(route) = route_registry.find_route("neutron-1", "stride-1") {
             if route.hops.len() > 1 {
                 // Convert to PfmHops
-                let pfm_hops: Vec<PfmHop> = route.hops.iter().enumerate().map(|(i, hop)| {
-                    PfmHop {
+                let pfm_hops: Vec<PfmHop> = route
+                    .hops
+                    .iter()
+                    .enumerate()
+                    .map(|(i, hop)| PfmHop {
                         receiver: if i == route.hops.len() - 1 {
                             "stride1finalreceiver".to_string()
                         } else {
                             hop.chain_id.clone()
                         },
                         channel: hop.channel_id.clone(),
-                    }
-                }).collect();
+                    })
+                    .collect();
 
                 // Build PFM memo
                 let memo = build_pfm_memo(&pfm_hops);
@@ -627,12 +638,7 @@ mod tests {
         let route_registry = RouteRegistry::with_mainnet_routes();
 
         // Test all known mainnet chain pairs can find routes
-        let chains = vec![
-            "cosmoshub-4",
-            "osmosis-1",
-            "neutron-1",
-            "stride-1",
-        ];
+        let chains = vec!["cosmoshub-4", "osmosis-1", "neutron-1", "stride-1"];
 
         for source in &chains {
             for dest in &chains {

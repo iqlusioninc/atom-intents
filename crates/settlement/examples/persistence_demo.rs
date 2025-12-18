@@ -2,7 +2,6 @@
 ///
 /// This shows how to use InMemoryStore, SqliteStore, and SettlementManager
 /// to persist settlement records and track their state transitions.
-
 use atom_intents_settlement::{
     InMemoryStore, SettlementConfig, SettlementEvent, SettlementManager, SettlementRecord,
     SettlementResult, SettlementStore, SqliteStore,
@@ -47,8 +46,8 @@ async fn demo_inmemory_store() -> Result<(), Box<dyn std::error::Error>> {
         "cosmos1user...".to_string(),
         Asset::new("cosmoshub-4", "uatom", 1_000_000), // 1 ATOM
         Asset::new("osmosis-1", "uosmo", 5_000_000),   // 5 OSMO
-        1700000000,                                     // expires_at
-        1700000000,                                     // created_at
+        1700000000,                                    // expires_at
+        1700000000,                                    // created_at
     );
 
     // Store it
@@ -94,9 +93,7 @@ async fn demo_sqlite_store() -> Result<(), Box<dyn std::error::Error>> {
     println!("  Created settlement in SQLite: {}", settlement.id);
 
     // Query by status
-    let pending = store
-        .list_by_status(SettlementStatus::Pending, 10)
-        .await?;
+    let pending = store.list_by_status(SettlementStatus::Pending, 10).await?;
     println!("  Found {} pending settlements", pending.len());
 
     Ok(())

@@ -14,7 +14,9 @@ pub mod limiter;
 
 pub use backoff::ExponentialBackoff;
 pub use backpressure::{BackpressureError, BackpressureHandler};
-pub use circuit_breaker::{CircuitBreaker, CircuitBreakerConfig, CircuitBreakerError, CircuitState};
+pub use circuit_breaker::{
+    CircuitBreaker, CircuitBreakerConfig, CircuitBreakerError, CircuitState,
+};
 pub use limiter::{RateLimitError, RateLimiter, TokenBucket};
 
 #[cfg(test)]
@@ -27,8 +29,7 @@ mod integration_tests {
     #[tokio::test]
     async fn test_rate_limiter_with_backpressure() {
         let rate_limiter = Arc::new(
-            RateLimiter::new()
-                .with_limit("api", 10) // 10 requests per second
+            RateLimiter::new().with_limit("api", 10), // 10 requests per second
         );
         let backpressure = Arc::new(BackpressureHandler::new(50, 5));
 
@@ -76,10 +77,8 @@ mod integration_tests {
             half_open_requests: 2,
         });
 
-        let mut backoff = ExponentialBackoff::new(
-            Duration::from_millis(20),
-            Duration::from_millis(200),
-        );
+        let mut backoff =
+            ExponentialBackoff::new(Duration::from_millis(20), Duration::from_millis(200));
 
         // Trigger circuit breaker to open
         for _ in 0..3 {
@@ -137,19 +136,20 @@ mod integration_tests {
                 }
 
                 // 2. Apply backpressure
-                let result = bp.submit(async move {
-                    // 3. Execute through circuit breaker
-                    cb.call_async(|| async move {
-                        sleep(Duration::from_millis(50)).await;
-                        if id % 10 == 0 {
-                            Err("simulated failure")
-                        } else {
-                            Ok(id)
-                        }
+                let result = bp
+                    .submit(async move {
+                        // 3. Execute through circuit breaker
+                        cb.call_async(|| async move {
+                            sleep(Duration::from_millis(50)).await;
+                            if id % 10 == 0 {
+                                Err("simulated failure")
+                            } else {
+                                Ok(id)
+                            }
+                        })
+                        .await
                     })
-                    .await
-                })
-                .await;
+                    .await;
 
                 match result {
                     Ok(Ok(val)) => Ok(val),

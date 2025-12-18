@@ -24,7 +24,9 @@ impl MatchingEngine {
 
     /// Get or create order book for a pair
     pub fn get_or_create_book(&mut self, pair: TradingPair) -> &mut OrderBook {
-        self.books.entry(pair.clone()).or_insert_with(|| OrderBook::new(pair))
+        self.books
+            .entry(pair.clone())
+            .or_insert_with(|| OrderBook::new(pair))
     }
 
     /// Get order book for a pair
@@ -54,9 +56,7 @@ impl MatchingEngine {
         self.current_epoch += 1;
 
         // Separate by side
-        let (buys, sells): (Vec<_>, Vec<_>) = intents
-            .iter()
-            .partition(|i| self.is_buy(i, &pair));
+        let (buys, sells): (Vec<_>, Vec<_>) = intents.iter().partition(|i| self.is_buy(i, &pair));
 
         // Cross internal orders first (no solver needed)
         let (internal_fills, remaining_buy, remaining_sell) =
@@ -75,11 +75,8 @@ impl MatchingEngine {
         };
 
         // Calculate uniform clearing price
-        let clearing_price = self.calculate_clearing_price(
-            &internal_fills,
-            &solver_fills,
-            oracle_price,
-        );
+        let clearing_price =
+            self.calculate_clearing_price(&internal_fills, &solver_fills, oracle_price);
 
         Ok(AuctionResult {
             epoch_id: self.current_epoch,
@@ -107,10 +104,9 @@ impl MatchingEngine {
         oracle_price: Decimal,
         side: Side,
     ) -> Result<(), MatchingError> {
-        let limit_price = intent
-            .output
-            .limit_price_decimal()
-            .map_err(|e| MatchingError::InvalidPrice(format!("Failed to parse limit price: {}", e)))?;
+        let limit_price = intent.output.limit_price_decimal().map_err(|e| {
+            MatchingError::InvalidPrice(format!("Failed to parse limit price: {e}"))
+        })?;
 
         match side {
             Side::Buy => {
@@ -120,7 +116,9 @@ impl MatchingEngine {
                 // Invert oracle_price to compare: (1/oracle_price) >= limit_price
                 // Equivalent to: oracle_price <= (1/limit_price)
                 if limit_price.is_zero() {
-                    return Err(MatchingError::InvalidPrice("Limit price cannot be zero".to_string()));
+                    return Err(MatchingError::InvalidPrice(
+                        "Limit price cannot be zero".to_string(),
+                    ));
                 }
                 let max_acceptable_oracle_price = Decimal::ONE / limit_price;
                 if oracle_price > max_acceptable_oracle_price {
@@ -442,13 +440,7 @@ mod tests {
         let mut engine = MatchingEngine::new();
 
         let intent = make_test_intent(
-            "sell-1",
-            "seller",
-            "uatom",
-            1_000_000,
-            "uusdc",
-            10_000_000,
-            "10.0",
+            "sell-1", "seller", "uatom", 1_000_000, "uusdc", 10_000_000, "10.0",
         );
 
         let result = engine.process_intent(&intent, 0).unwrap();
@@ -466,11 +458,15 @@ mod tests {
         let mut engine = MatchingEngine::new();
 
         // Add sell at 10.0 USDC/ATOM
-        let sell = make_test_intent("sell-1", "seller", "uatom", 1_000_000, "uusdc", 10_000_000, "10.0");
+        let sell = make_test_intent(
+            "sell-1", "seller", "uatom", 1_000_000, "uusdc", 10_000_000, "10.0",
+        );
         engine.process_intent(&sell, 0).unwrap();
 
         // Add buy willing to pay ~10.5 USDC/ATOM (0.095 ATOM/USDC)
-        let buy = make_test_intent("buy-1", "buyer", "uusdc", 10_500_000, "uatom", 1_000_000, "0.095");
+        let buy = make_test_intent(
+            "buy-1", "buyer", "uusdc", 10_500_000, "uatom", 1_000_000, "0.095",
+        );
         let result = engine.process_intent(&buy, 1).unwrap();
 
         assert!(!result.fills.is_empty());
@@ -481,11 +477,27 @@ mod tests {
         let mut engine = MatchingEngine::new();
 
         // ATOM/USDC pair
-        let atom_sell = make_test_intent("atom-sell", "seller", "uatom", 1_000_000, "uusdc", 10_000_000, "10.0");
+        let atom_sell = make_test_intent(
+            "atom-sell",
+            "seller",
+            "uatom",
+            1_000_000,
+            "uusdc",
+            10_000_000,
+            "10.0",
+        );
         engine.process_intent(&atom_sell, 0).unwrap();
 
         // OSMO/USDC pair
-        let osmo_sell = make_test_intent("osmo-sell", "seller", "uosmo", 1_000_000, "uusdc", 1_000_000, "1.0");
+        let osmo_sell = make_test_intent(
+            "osmo-sell",
+            "seller",
+            "uosmo",
+            1_000_000,
+            "uusdc",
+            1_000_000,
+            "1.0",
+        );
         engine.process_intent(&osmo_sell, 1).unwrap();
 
         // Should have two separate books
@@ -507,16 +519,22 @@ mod tests {
 
         // Buy intent (spending USDC for ATOM)
         // limit_price 0.1 ATOM/USDC means max price 1/0.1 = 10.0 USDC/ATOM
-        let buy = make_test_intent("buy-1", "buyer", "uusdc", 10_000_000, "uatom", 1_000_000, "0.1");
+        let buy = make_test_intent(
+            "buy-1", "buyer", "uusdc", 10_000_000, "uatom", 1_000_000, "0.1",
+        );
 
         // Sell intent (spending ATOM for USDC)
         // limit_price 10.0 USDC/ATOM means min price 10.0 USDC/ATOM
-        let sell = make_test_intent("sell-1", "seller", "uatom", 1_000_000, "uusdc", 10_000_000, "10.0");
+        let sell = make_test_intent(
+            "sell-1", "seller", "uatom", 1_000_000, "uusdc", 10_000_000, "10.0",
+        );
 
         let intents = vec![buy, sell];
         let oracle_price = Decimal::from_str("10.0").unwrap();
 
-        let result = engine.run_batch_auction(pair, intents, vec![], oracle_price).unwrap();
+        let result = engine
+            .run_batch_auction(pair, intents, vec![], oracle_price)
+            .unwrap();
 
         // Should have internal fills (both buy and sell get fills)
         assert!(!result.internal_fills.is_empty());
@@ -529,7 +547,9 @@ mod tests {
         let pair = TradingPair::new("uatom", "uusdc");
 
         // Only a buy (net demand)
-        let buy = make_test_intent("buy-1", "buyer", "uusdc", 10_000_000, "uatom", 1_000_000, "10.0");
+        let buy = make_test_intent(
+            "buy-1", "buyer", "uusdc", 10_000_000, "uatom", 1_000_000, "10.0",
+        );
 
         let intents = vec![buy];
         let oracle_price = Decimal::from_str("10.0").unwrap();
@@ -543,7 +563,9 @@ mod tests {
             valid_for_ms: 5000,
         };
 
-        let result = engine.run_batch_auction(pair, intents, vec![solver_quote], oracle_price).unwrap();
+        let result = engine
+            .run_batch_auction(pair, intents, vec![solver_quote], oracle_price)
+            .unwrap();
 
         // Should have solver fills
         assert!(!result.solver_fills.is_empty());
@@ -556,15 +578,21 @@ mod tests {
         let oracle_price = Decimal::from_str("10.0").unwrap();
 
         // Run first auction
-        let result1 = engine.run_batch_auction(pair.clone(), vec![], vec![], oracle_price).unwrap();
+        let result1 = engine
+            .run_batch_auction(pair.clone(), vec![], vec![], oracle_price)
+            .unwrap();
         assert_eq!(result1.epoch_id, 1);
 
         // Run second auction
-        let result2 = engine.run_batch_auction(pair.clone(), vec![], vec![], oracle_price).unwrap();
+        let result2 = engine
+            .run_batch_auction(pair.clone(), vec![], vec![], oracle_price)
+            .unwrap();
         assert_eq!(result2.epoch_id, 2);
 
         // Run third auction
-        let result3 = engine.run_batch_auction(pair, vec![], vec![], oracle_price).unwrap();
+        let result3 = engine
+            .run_batch_auction(pair, vec![], vec![], oracle_price)
+            .unwrap();
         assert_eq!(result3.epoch_id, 3);
     }
 
@@ -574,7 +602,9 @@ mod tests {
         let pair = TradingPair::new("uatom", "uusdc");
         let oracle_price = Decimal::from_str("10.45").unwrap();
 
-        let result = engine.run_batch_auction(pair, vec![], vec![], oracle_price).unwrap();
+        let result = engine
+            .run_batch_auction(pair, vec![], vec![], oracle_price)
+            .unwrap();
 
         // With no fills, clearing price should be oracle price
         assert_eq!(result.clearing_price, "10.45");
@@ -589,7 +619,9 @@ mod tests {
         let oracle_price = Decimal::from_str("10.0").unwrap();
 
         // Only sell (net supply)
-        let sell = make_test_intent("sell-1", "seller", "uatom", 2_000_000, "uusdc", 18_000_000, "9.0");
+        let sell = make_test_intent(
+            "sell-1", "seller", "uatom", 2_000_000, "uusdc", 18_000_000, "9.0",
+        );
 
         let intents = vec![sell];
 
@@ -609,12 +641,9 @@ mod tests {
             valid_for_ms: 5000,
         };
 
-        let result = engine.run_batch_auction(
-            pair,
-            intents,
-            vec![quote_low, quote_high],
-            oracle_price,
-        ).unwrap();
+        let result = engine
+            .run_batch_auction(pair, intents, vec![quote_low, quote_high], oracle_price)
+            .unwrap();
 
         // Best bid (9.5) should be filled first
         assert!(!result.solver_fills.is_empty());
@@ -629,11 +658,15 @@ mod tests {
         let pair = TradingPair::new("uatom", "uusdc");
 
         // Intent selling USDC for ATOM = buy (buying base asset)
-        let buy_intent = make_test_intent("buy", "buyer", "uusdc", 10_000_000, "uatom", 1_000_000, "10.0");
+        let buy_intent = make_test_intent(
+            "buy", "buyer", "uusdc", 10_000_000, "uatom", 1_000_000, "10.0",
+        );
         assert!(engine.is_buy(&buy_intent, &pair));
 
         // Intent selling ATOM for USDC = sell (selling base asset)
-        let sell_intent = make_test_intent("sell", "seller", "uatom", 1_000_000, "uusdc", 10_000_000, "10.0");
+        let sell_intent = make_test_intent(
+            "sell", "seller", "uatom", 1_000_000, "uusdc", 10_000_000, "10.0",
+        );
         assert!(!engine.is_buy(&sell_intent, &pair));
     }
 
@@ -672,8 +705,12 @@ mod tests {
         let mut engine = MatchingEngine::new();
 
         // Step 1: Add some sell orders via process_intent
-        let sell1 = make_test_intent("sell-1", "s1", "uatom", 5_000_000, "uusdc", 50_000_000, "10.0");
-        let sell2 = make_test_intent("sell-2", "s2", "uatom", 5_000_000, "uusdc", 52_500_000, "10.5");
+        let sell1 = make_test_intent(
+            "sell-1", "s1", "uatom", 5_000_000, "uusdc", 50_000_000, "10.0",
+        );
+        let sell2 = make_test_intent(
+            "sell-2", "s2", "uatom", 5_000_000, "uusdc", 52_500_000, "10.5",
+        );
 
         engine.process_intent(&sell1, 0).unwrap();
         engine.process_intent(&sell2, 1).unwrap();
@@ -688,7 +725,9 @@ mod tests {
         // At 10.0: 5M ATOM costs 50M USDC
         // At 10.5: remaining 25M USDC buys ~2.38M ATOM
         // Total bought: ~7.38M ATOM, remaining sell2: ~2.62M ATOM
-        let buy = make_test_intent("buy-1", "buyer", "uusdc", 75_000_000, "uatom", 7_000_000, "0.095");
+        let buy = make_test_intent(
+            "buy-1", "buyer", "uusdc", 75_000_000, "uatom", 7_000_000, "0.095",
+        );
         let result = engine.process_intent(&buy, 2).unwrap();
 
         // Should match both sells (full fill of sell1, partial of sell2)
@@ -708,13 +747,19 @@ mod tests {
 
         // Equal buy and sell
         // Buy with 0.1 ATOM/USDC = 10 USDC/ATOM
-        let buy = make_test_intent("buy-1", "buyer", "uusdc", 10_000_000, "uatom", 1_000_000, "0.1");
-        let sell = make_test_intent("sell-1", "seller", "uatom", 1_000_000, "uusdc", 10_000_000, "10.0");
+        let buy = make_test_intent(
+            "buy-1", "buyer", "uusdc", 10_000_000, "uatom", 1_000_000, "0.1",
+        );
+        let sell = make_test_intent(
+            "sell-1", "seller", "uatom", 1_000_000, "uusdc", 10_000_000, "10.0",
+        );
 
         let intents = vec![buy, sell];
         let oracle_price = Decimal::from_str("10.0").unwrap();
 
-        let result = engine.run_batch_auction(pair, intents, vec![], oracle_price).unwrap();
+        let result = engine
+            .run_batch_auction(pair, intents, vec![], oracle_price)
+            .unwrap();
 
         // Should fully cross internally
         assert!(!result.internal_fills.is_empty());
@@ -731,8 +776,12 @@ mod tests {
 
         // Buy order with limit price of 0.08 ATOM/USDC (willing to pay max 1/0.08 = 12.5 USDC/ATOM)
         // Oracle price is 13.0 USDC/ATOM, which exceeds the max acceptable price
-        let buy = make_test_intent("buy-1", "buyer", "uusdc", 10_000_000, "uatom", 1_000_000, "0.08");
-        let sell = make_test_intent("sell-1", "seller", "uatom", 1_000_000, "uusdc", 10_000_000, "10.0");
+        let buy = make_test_intent(
+            "buy-1", "buyer", "uusdc", 10_000_000, "uatom", 1_000_000, "0.08",
+        );
+        let sell = make_test_intent(
+            "sell-1", "seller", "uatom", 1_000_000, "uusdc", 10_000_000, "10.0",
+        );
 
         let intents = vec![buy, sell];
         let oracle_price = Decimal::from_str("13.0").unwrap(); // Too high for buyer
@@ -742,7 +791,10 @@ mod tests {
         // Should fail with PriceExceedsLimit error
         assert!(result.is_err());
         match result.unwrap_err() {
-            MatchingError::PriceExceedsLimit { oracle_price, limit_price } => {
+            MatchingError::PriceExceedsLimit {
+                oracle_price,
+                limit_price,
+            } => {
                 assert_eq!(oracle_price, Decimal::from_str("13.0").unwrap());
                 assert_eq!(limit_price, Decimal::from_str("0.08").unwrap());
             }
@@ -757,8 +809,12 @@ mod tests {
 
         // Sell order with limit price of 11.0 USDC/ATOM (wants at least 11.0)
         // But oracle price is 10.0 USDC/ATOM, which is below the limit
-        let buy = make_test_intent("buy-1", "buyer", "uusdc", 10_000_000, "uatom", 1_000_000, "0.1");
-        let sell = make_test_intent("sell-1", "seller", "uatom", 1_000_000, "uusdc", 11_000_000, "11.0");
+        let buy = make_test_intent(
+            "buy-1", "buyer", "uusdc", 10_000_000, "uatom", 1_000_000, "0.1",
+        );
+        let sell = make_test_intent(
+            "sell-1", "seller", "uatom", 1_000_000, "uusdc", 11_000_000, "11.0",
+        );
 
         let intents = vec![buy, sell];
         let oracle_price = Decimal::from_str("10.0").unwrap(); // Too low for seller
@@ -768,7 +824,10 @@ mod tests {
         // Should fail with PriceBelowLimit error
         assert!(result.is_err());
         match result.unwrap_err() {
-            MatchingError::PriceBelowLimit { oracle_price, limit_price } => {
+            MatchingError::PriceBelowLimit {
+                oracle_price,
+                limit_price,
+            } => {
                 assert_eq!(oracle_price, Decimal::from_str("10.0").unwrap());
                 assert_eq!(limit_price, Decimal::from_str("11.0").unwrap());
             }
@@ -784,13 +843,19 @@ mod tests {
         // Buy with limit 0.1 ATOM/USDC (willing to pay up to 10.0 USDC/ATOM)
         // Sell with limit 10.0 USDC/ATOM (wants at least 10.0)
         // Oracle price is 10.0 USDC/ATOM - should match
-        let buy = make_test_intent("buy-1", "buyer", "uusdc", 10_000_000, "uatom", 1_000_000, "0.1");
-        let sell = make_test_intent("sell-1", "seller", "uatom", 1_000_000, "uusdc", 10_000_000, "10.0");
+        let buy = make_test_intent(
+            "buy-1", "buyer", "uusdc", 10_000_000, "uatom", 1_000_000, "0.1",
+        );
+        let sell = make_test_intent(
+            "sell-1", "seller", "uatom", 1_000_000, "uusdc", 10_000_000, "10.0",
+        );
 
         let intents = vec![buy, sell];
         let oracle_price = Decimal::from_str("10.0").unwrap();
 
-        let result = engine.run_batch_auction(pair, intents, vec![], oracle_price).unwrap();
+        let result = engine
+            .run_batch_auction(pair, intents, vec![], oracle_price)
+            .unwrap();
 
         // Should successfully match
         assert!(!result.internal_fills.is_empty());
@@ -803,13 +868,19 @@ mod tests {
         let pair = TradingPair::new("uatom", "uusdc");
 
         // Edge case: oracle_price == limit_price should be accepted
-        let buy = make_test_intent("buy-1", "buyer", "uusdc", 10_000_000, "uatom", 1_000_000, "0.1");
-        let sell = make_test_intent("sell-1", "seller", "uatom", 1_000_000, "uusdc", 10_000_000, "10.0");
+        let buy = make_test_intent(
+            "buy-1", "buyer", "uusdc", 10_000_000, "uatom", 1_000_000, "0.1",
+        );
+        let sell = make_test_intent(
+            "sell-1", "seller", "uatom", 1_000_000, "uusdc", 10_000_000, "10.0",
+        );
 
         let intents = vec![buy, sell];
         let oracle_price = Decimal::from_str("10.0").unwrap();
 
-        let result = engine.run_batch_auction(pair, intents, vec![], oracle_price).unwrap();
+        let result = engine
+            .run_batch_auction(pair, intents, vec![], oracle_price)
+            .unwrap();
 
         // Should successfully match
         assert!(!result.internal_fills.is_empty());
@@ -822,13 +893,19 @@ mod tests {
 
         // Buy with limit 0.11 ATOM/USDC (willing to pay up to 1/0.11 = ~9.09 USDC/ATOM)
         // Oracle price is 9.0 USDC/ATOM - below max acceptable, should accept
-        let buy = make_test_intent("buy-1", "buyer", "uusdc", 9_000_000, "uatom", 1_000_000, "0.11");
-        let sell = make_test_intent("sell-1", "seller", "uatom", 1_000_000, "uusdc", 9_000_000, "9.0");
+        let buy = make_test_intent(
+            "buy-1", "buyer", "uusdc", 9_000_000, "uatom", 1_000_000, "0.11",
+        );
+        let sell = make_test_intent(
+            "sell-1", "seller", "uatom", 1_000_000, "uusdc", 9_000_000, "9.0",
+        );
 
         let intents = vec![buy, sell];
         let oracle_price = Decimal::from_str("9.0").unwrap();
 
-        let result = engine.run_batch_auction(pair, intents, vec![], oracle_price).unwrap();
+        let result = engine
+            .run_batch_auction(pair, intents, vec![], oracle_price)
+            .unwrap();
 
         // Should successfully match
         assert!(!result.internal_fills.is_empty());
@@ -841,13 +918,19 @@ mod tests {
 
         // Sell with limit 9.0 USDC/ATOM (wants at least 9.0)
         // Oracle price is 10.0 USDC/ATOM - better than limit, should accept
-        let buy = make_test_intent("buy-1", "buyer", "uusdc", 10_000_000, "uatom", 1_000_000, "0.1");
-        let sell = make_test_intent("sell-1", "seller", "uatom", 1_000_000, "uusdc", 9_000_000, "9.0");
+        let buy = make_test_intent(
+            "buy-1", "buyer", "uusdc", 10_000_000, "uatom", 1_000_000, "0.1",
+        );
+        let sell = make_test_intent(
+            "sell-1", "seller", "uatom", 1_000_000, "uusdc", 9_000_000, "9.0",
+        );
 
         let intents = vec![buy, sell];
         let oracle_price = Decimal::from_str("10.0").unwrap();
 
-        let result = engine.run_batch_auction(pair, intents, vec![], oracle_price).unwrap();
+        let result = engine
+            .run_batch_auction(pair, intents, vec![], oracle_price)
+            .unwrap();
 
         // Should successfully match
         assert!(!result.internal_fills.is_empty());
@@ -862,10 +945,16 @@ mod tests {
         // limit 0.09 ATOM/USDC means max price is 1/0.09 = 11.11 USDC/ATOM, but oracle is 10.0, so it passes
         // Let's use 0.08 which gives max price 1/0.08 = 12.5, still passes at 10.0
         // Use 0.09 with oracle 12.0 instead
-        let buy1 = make_test_intent("buy-1", "buyer1", "uusdc", 10_000_000, "uatom", 1_000_000, "0.08");
+        let buy1 = make_test_intent(
+            "buy-1", "buyer1", "uusdc", 10_000_000, "uatom", 1_000_000, "0.08",
+        );
         // Second buy has acceptable limit
-        let buy2 = make_test_intent("buy-2", "buyer2", "uusdc", 10_000_000, "uatom", 1_000_000, "0.1");
-        let sell = make_test_intent("sell-1", "seller", "uatom", 2_000_000, "uusdc", 20_000_000, "10.0");
+        let buy2 = make_test_intent(
+            "buy-2", "buyer2", "uusdc", 10_000_000, "uatom", 1_000_000, "0.1",
+        );
+        let sell = make_test_intent(
+            "sell-1", "seller", "uatom", 2_000_000, "uusdc", 20_000_000, "10.0",
+        );
 
         let intents = vec![buy1, buy2, sell];
         let oracle_price = Decimal::from_str("13.0").unwrap(); // Exceeds buy1's max price of 12.5

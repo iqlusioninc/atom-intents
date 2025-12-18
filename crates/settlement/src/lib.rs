@@ -16,16 +16,13 @@ pub use two_phase::*;
 
 // IBC module exports
 pub use ibc::{
-    IbcFlowType, PfmHop, IbcTransferBuilder,
-    determine_flow, determine_flow_with_routing,
-    calculate_timeout, build_wasm_memo,
+    build_wasm_memo, calculate_timeout, determine_flow, determine_flow_with_routing, IbcFlowType,
+    IbcTransferBuilder, PfmHop,
 };
 
 // Routing module exports (including its own build_pfm_memo)
 pub use routing::{
-    RouteRegistry, Route, RouteHop,
-    build_pfm_memo as build_route_pfm_memo,
-    route_hops_to_pfm_hops,
+    build_pfm_memo as build_route_pfm_memo, route_hops_to_pfm_hops, Route, RouteHop, RouteRegistry,
 };
 
 // Re-export ibc::build_pfm_memo as the default for backwards compatibility

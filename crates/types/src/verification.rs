@@ -1,6 +1,6 @@
 use cosmwasm_std::Binary;
 use k256::ecdsa::{signature::Verifier, Signature, VerifyingKey};
-use sha2::{Sha256, Digest};
+use sha2::{Digest, Sha256};
 use thiserror::Error;
 
 use crate::Intent;
@@ -73,10 +73,7 @@ pub fn verify_intent_signature(intent: &Intent) -> Result<bool, VerificationErro
 ///
 /// Amino encoding is used in legacy Cosmos SDK transactions.
 /// The message is prefixed with length information before signing.
-pub fn verify_amino_signature(
-    intent: &Intent,
-    sign_doc: &[u8],
-) -> Result<bool, VerificationError> {
+pub fn verify_amino_signature(intent: &Intent, sign_doc: &[u8]) -> Result<bool, VerificationError> {
     if intent.signature.is_empty() {
         return Err(VerificationError::MissingSignature);
     }
@@ -116,12 +113,13 @@ pub fn verify_amino_signature(
 /// # Returns
 /// * Signature as Binary (64 bytes)
 pub fn sign_message(message: &[u8], private_key_bytes: &[u8]) -> Result<Binary, VerificationError> {
-    use k256::ecdsa::{SigningKey, signature::Signer};
+    use k256::ecdsa::{signature::Signer, SigningKey};
 
     if private_key_bytes.len() != 32 {
-        return Err(VerificationError::EncodingError(
-            format!("private key must be 32 bytes, got {}", private_key_bytes.len()),
-        ));
+        return Err(VerificationError::EncodingError(format!(
+            "private key must be 32 bytes, got {}",
+            private_key_bytes.len()
+        )));
     }
 
     let signing_key = SigningKey::from_bytes(private_key_bytes.into())
@@ -143,9 +141,10 @@ pub fn derive_public_key(private_key_bytes: &[u8]) -> Result<Binary, Verificatio
     use k256::ecdsa::SigningKey;
 
     if private_key_bytes.len() != 32 {
-        return Err(VerificationError::EncodingError(
-            format!("private key must be 32 bytes, got {}", private_key_bytes.len()),
-        ));
+        return Err(VerificationError::EncodingError(format!(
+            "private key must be 32 bytes, got {}",
+            private_key_bytes.len()
+        )));
     }
 
     let signing_key = SigningKey::from_bytes(private_key_bytes.into())
@@ -160,8 +159,8 @@ pub fn derive_public_key(private_key_bytes: &[u8]) -> Result<Binary, Verificatio
 #[cfg(test)]
 mod tests {
     use super::*;
-    use cosmwasm_std::Uint128;
     use crate::{Asset, ExecutionConstraints, FillConfig, OutputSpec};
+    use cosmwasm_std::Uint128;
 
     fn create_test_intent() -> Intent {
         let intent = Intent::builder()
@@ -194,10 +193,9 @@ mod tests {
 
         // Generate a test private key (32 bytes)
         let private_key = [
-            0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08,
-            0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e, 0x0f, 0x10,
-            0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17, 0x18,
-            0x19, 0x1a, 0x1b, 0x1c, 0x1d, 0x1e, 0x1f, 0x20,
+            0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e,
+            0x0f, 0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17, 0x18, 0x19, 0x1a, 0x1b, 0x1c,
+            0x1d, 0x1e, 0x1f, 0x20,
         ];
 
         // Derive public key
@@ -243,7 +241,10 @@ mod tests {
 
         let result = verify_intent_signature(&intent);
         assert!(result.is_err());
-        assert!(matches!(result.unwrap_err(), VerificationError::InvalidSignature(_)));
+        assert!(matches!(
+            result.unwrap_err(),
+            VerificationError::InvalidSignature(_)
+        ));
     }
 
     #[test]
@@ -299,7 +300,10 @@ mod tests {
 
         let result = verify_intent_signature(&intent);
         assert!(result.is_err());
-        assert!(matches!(result.unwrap_err(), VerificationError::InvalidPublicKey(_)));
+        assert!(matches!(
+            result.unwrap_err(),
+            VerificationError::InvalidPublicKey(_)
+        ));
     }
 
     #[test]
@@ -307,7 +311,10 @@ mod tests {
         let invalid_private_key = vec![0x01, 0x02]; // Too short
         let result = derive_public_key(&invalid_private_key);
         assert!(result.is_err());
-        assert!(matches!(result.unwrap_err(), VerificationError::EncodingError(_)));
+        assert!(matches!(
+            result.unwrap_err(),
+            VerificationError::EncodingError(_)
+        ));
     }
 
     #[test]
@@ -316,6 +323,9 @@ mod tests {
         let invalid_private_key = vec![0x01, 0x02]; // Too short
         let result = sign_message(message, &invalid_private_key);
         assert!(result.is_err());
-        assert!(matches!(result.unwrap_err(), VerificationError::EncodingError(_)));
+        assert!(matches!(
+            result.unwrap_err(),
+            VerificationError::EncodingError(_)
+        ));
     }
 }

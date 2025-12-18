@@ -1,5 +1,5 @@
-use std::collections::HashMap;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 
 /// IBC Channel Registry - maps (source_chain, dest_chain) to channel info
 #[derive(Clone, Debug)]
@@ -276,11 +276,7 @@ impl ChannelRegistry {
     }
 
     /// Get channel info for a source->dest chain pair
-    pub fn get_channel(
-        &self,
-        source_chain: &str,
-        dest_chain: &str,
-    ) -> Option<&ChannelInfo> {
+    pub fn get_channel(&self, source_chain: &str, dest_chain: &str) -> Option<&ChannelInfo> {
         let key = (source_chain.to_string(), dest_chain.to_string());
         self.channels.get(&key)
     }
@@ -291,11 +287,9 @@ impl ChannelRegistry {
         source_chain: &str,
         dest_chain: &str,
     ) -> Result<&ChannelInfo, crate::ChannelError> {
-        self.get_channel(source_chain, dest_chain)
-            .ok_or_else(|| crate::ChannelError::ChannelNotFound(
-                source_chain.to_string(),
-                dest_chain.to_string(),
-            ))
+        self.get_channel(source_chain, dest_chain).ok_or_else(|| {
+            crate::ChannelError::ChannelNotFound(source_chain.to_string(), dest_chain.to_string())
+        })
     }
 
     /// Get the reverse channel (dest->source)

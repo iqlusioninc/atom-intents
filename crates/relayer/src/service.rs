@@ -42,7 +42,10 @@ pub struct SolverRelayer {
 }
 
 impl SolverRelayer {
-    pub fn new(config: RelayerConfig, chain_clients: HashMap<String, Arc<dyn ChainClient>>) -> Self {
+    pub fn new(
+        config: RelayerConfig,
+        chain_clients: HashMap<String, Arc<dyn ChainClient>>,
+    ) -> Self {
         Self {
             config,
             priority_queue: Arc::new(RwLock::new(PriorityQueue::new())),
@@ -266,7 +269,7 @@ pub enum RelayerError {
 fn current_timestamp() -> u64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
-        .unwrap()
+        .expect("System time is before UNIX epoch - clock error")
         .as_secs()
 }
 
@@ -528,7 +531,8 @@ mod tests {
         let mut packet = relayer.priority_queue.write().await.pop().unwrap();
         assert!(relayer.relay_packet(&packet).await.is_err());
         packet.retry_info.attempts += 1;
-        packet.retry_info.next_retry_at = Instant::now() + calculate_backoff(packet.retry_info.attempts);
+        packet.retry_info.next_retry_at =
+            Instant::now() + calculate_backoff(packet.retry_info.attempts);
         relayer.priority_queue.write().await.push(packet);
 
         // Should still have the packet
@@ -538,7 +542,8 @@ mod tests {
         let mut packet = relayer.priority_queue.write().await.pop().unwrap();
         assert!(relayer.relay_packet(&packet).await.is_err());
         packet.retry_info.attempts += 1;
-        packet.retry_info.next_retry_at = Instant::now() + calculate_backoff(packet.retry_info.attempts);
+        packet.retry_info.next_retry_at =
+            Instant::now() + calculate_backoff(packet.retry_info.attempts);
         relayer.priority_queue.write().await.push(packet);
 
         // Third attempt - should succeed

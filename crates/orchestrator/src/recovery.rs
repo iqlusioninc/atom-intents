@@ -1,9 +1,10 @@
-use async_trait::async_trait;
 use atom_intents_settlement::{EscrowContract, EscrowLock, SolverVaultContract, VaultLock};
 use cosmwasm_std::Uint128;
-use std::sync::Arc;
 use thiserror::Error;
 use tracing::{error, info, warn};
+
+#[cfg(test)]
+use async_trait::async_trait;
 
 /// Recovery actions for failed settlements
 #[derive(Debug, Clone)]
@@ -219,11 +220,12 @@ where
             RecoveryAction::RetryWithDifferentSolver => {
                 // Unlock solver funds and refund user for retry
                 if let Some(ref solver_lock) = settlement.solver_lock {
-                    (&self.solver_vault).unlock(solver_lock).await.map_err(|e| {
-                        RecoveryError::UnlockFailed {
+                    (&self.solver_vault)
+                        .unlock(solver_lock)
+                        .await
+                        .map_err(|e| RecoveryError::UnlockFailed {
                             reason: e.to_string(),
-                        }
-                    })?;
+                        })?;
                 }
                 self.refund_user(settlement).await?;
 
@@ -245,7 +247,10 @@ where
                     reason,
                 })
             }
-            RecoveryAction::PartialSettlement { delivered, refunded } => {
+            RecoveryAction::PartialSettlement {
+                delivered,
+                refunded,
+            } => {
                 // Partial delivery - refund the undelivered portion
                 self.refund_user(settlement).await?;
                 Ok(RecoveryResult::PartialRecovery {
@@ -278,12 +283,11 @@ where
                 "Refunding user"
             );
 
-            (&self.user_escrow)
-                .refund(user_lock)
-                .await
-                .map_err(|e| RecoveryError::RefundFailed {
+            (&self.user_escrow).refund(user_lock).await.map_err(|e| {
+                RecoveryError::RefundFailed {
                     reason: e.to_string(),
-                })?;
+                }
+            })?;
 
             Ok(())
         } else {
@@ -319,11 +323,12 @@ where
             // In a real implementation, this would slash the bond rather than just unlock
             // For now, we'll just unlock to return funds
             // TODO: Implement actual slashing mechanism
-            (&self.solver_vault).unlock(solver_lock).await.map_err(|e| {
-                RecoveryError::SlashFailed {
+            (&self.solver_vault)
+                .unlock(solver_lock)
+                .await
+                .map_err(|e| RecoveryError::SlashFailed {
                     reason: e.to_string(),
-                }
-            })?;
+                })?;
         }
 
         Ok(())
@@ -454,7 +459,11 @@ mod tests {
             unimplemented!()
         }
 
-        async fn release_to(&self, _lock: &EscrowLock, _recipient: &str) -> Result<(), SettlementError> {
+        async fn release_to(
+            &self,
+            _lock: &EscrowLock,
+            _recipient: &str,
+        ) -> Result<(), SettlementError> {
             unimplemented!()
         }
 
@@ -540,7 +549,9 @@ mod tests {
         let settlement = make_test_settlement(SettlementPhase::BothFundsLocked, 2000);
         let current_time = 2500; // After timeout
 
-        let actions = manager.check_stuck_settlements(&[settlement], current_time).await;
+        let actions = manager
+            .check_stuck_settlements(&[settlement], current_time)
+            .await;
 
         assert_eq!(actions.len(), 1);
         assert_eq!(actions[0].0, "settlement-1");
@@ -555,7 +566,9 @@ mod tests {
         let settlement = make_test_settlement(SettlementPhase::BothFundsLocked, 2000);
         let current_time = 1500; // Before timeout
 
-        let actions = manager.check_stuck_settlements(&[settlement], current_time).await;
+        let actions = manager
+            .check_stuck_settlements(&[settlement], current_time)
+            .await;
 
         assert_eq!(actions.len(), 0);
     }
@@ -591,9 +604,12 @@ mod tests {
         let vault = MockVault::new();
         let manager = RecoveryManager::new(escrow, vault, 600);
 
-        let settlement = make_test_settlement(SettlementPhase::Failed {
-            reason: "test".to_string(),
-        }, 2000);
+        let settlement = make_test_settlement(
+            SettlementPhase::Failed {
+                reason: "test".to_string(),
+            },
+            2000,
+        );
 
         let result = manager.refund_user(&settlement).await;
         assert!(result.is_ok());
@@ -631,9 +647,12 @@ mod tests {
 
         let settlements = vec![
             make_test_settlement(SettlementPhase::Completed, 2000),
-            make_test_settlement(SettlementPhase::Failed {
-                reason: "test".to_string(),
-            }, 2000),
+            make_test_settlement(
+                SettlementPhase::Failed {
+                    reason: "test".to_string(),
+                },
+                2000,
+            ),
             make_test_settlement(SettlementPhase::TimedOut, 2000),
             make_test_settlement(SettlementPhase::TransferInProgress, 2000),
         ];

@@ -59,9 +59,14 @@ impl TokenBucket {
             .is_ok()
         {
             // Successfully updated timestamp, now add tokens
-            self.tokens.fetch_update(Ordering::SeqCst, Ordering::Relaxed, |current| {
-                Some(std::cmp::min(current.saturating_add(tokens_to_add), self.capacity))
-            }).ok();
+            self.tokens
+                .fetch_update(Ordering::SeqCst, Ordering::Relaxed, |current| {
+                    Some(std::cmp::min(
+                        current.saturating_add(tokens_to_add),
+                        self.capacity,
+                    ))
+                })
+                .ok();
         }
     }
 
@@ -183,8 +188,7 @@ mod tests {
 
     #[test]
     fn test_rate_limiter_with_limit() {
-        let limiter = RateLimiter::new()
-            .with_limit("test", 10);
+        let limiter = RateLimiter::new().with_limit("test", 10);
 
         // Should allow requests up to capacity
         for _ in 0..100 {
@@ -223,8 +227,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_rate_limiter_async_acquire() {
-        let limiter = RateLimiter::new()
-            .with_limit("async_test", 10);
+        let limiter = RateLimiter::new().with_limit("async_test", 10);
 
         // Should succeed when tokens available
         assert!(limiter.acquire("async_test").await.is_ok());
@@ -240,8 +243,7 @@ mod tests {
 
     #[test]
     fn test_rate_limiter_remaining() {
-        let limiter = RateLimiter::new()
-            .with_limit("test", 10);
+        let limiter = RateLimiter::new().with_limit("test", 10);
 
         assert_eq!(limiter.remaining("test"), 100); // 10 req/s * 10s burst
 
