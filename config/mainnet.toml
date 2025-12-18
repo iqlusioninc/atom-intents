@@ -1,0 +1,117 @@
+# ATOM Intent-Based Liquidity System - Mainnet Configuration
+
+[network]
+environment = "mainnet"
+log_level = "info"
+metrics_enabled = true
+metrics_port = 9090
+
+# Cosmos Hub mainnet
+[chains.cosmoshub]
+chain_id = "cosmoshub-4"
+rpc_url = "https://rpc.cosmos.network"
+grpc_url = "https://grpc.cosmos.network"
+gas_price = "0.025uatom"
+fee_denom = "uatom"
+address_prefix = "cosmos"
+gas_adjustment = 1.3
+timeout_ms = 30000
+max_retries = 3
+
+# Osmosis mainnet
+[chains.osmosis]
+chain_id = "osmosis-1"
+rpc_url = "https://rpc.osmosis.zone"
+grpc_url = "https://grpc.osmosis.zone"
+gas_price = "0.025uosmo"
+fee_denom = "uosmo"
+address_prefix = "osmo"
+gas_adjustment = 1.3
+timeout_ms = 30000
+max_retries = 3
+
+# Stride mainnet
+[chains.stride]
+chain_id = "stride-1"
+rpc_url = "https://rpc.stride.zone"
+grpc_url = "https://grpc.stride.zone"
+gas_price = "0.025ustrd"
+fee_denom = "ustrd"
+address_prefix = "stride"
+gas_adjustment = 1.3
+timeout_ms = 30000
+max_retries = 3
+
+# Neutron mainnet
+[chains.neutron]
+chain_id = "neutron-1"
+rpc_url = "https://rpc.neutron.org"
+grpc_url = "https://grpc.neutron.org"
+gas_price = "0.025untrn"
+fee_denom = "untrn"
+address_prefix = "neutron"
+gas_adjustment = 1.3
+timeout_ms = 30000
+max_retries = 3
+
+[solvers]
+enabled_solvers = ["skip", "timewave", "duality"]
+min_profit_bps = 10  # 0.1%
+max_slippage_bps = 50  # 0.5%
+quote_timeout_ms = 5000
+max_concurrent_solvers = 10
+
+[solvers.solver_endpoints]
+skip = "https://api.skip.money"
+timewave = "https://api.timewave.computer"
+duality = "https://api.duality.xyz"
+
+[settlement]
+contract_address = "cosmos1settlecontract..."  # TODO: Replace with actual mainnet contract
+timeout_secs = 300  # 5 minutes
+max_batch_size = 100
+min_confirmations = 2
+parallel_enabled = true
+
+[oracle]
+provider = "slinky"
+endpoint = "https://oracle.cosmos.network"
+update_interval_secs = 60  # 1 minute
+staleness_threshold_secs = 300  # 5 minutes
+fallback_endpoints = [
+    "https://oracle-backup.cosmos.network",
+]
+
+[relayer]
+packet_timeout_secs = 600  # 10 minutes
+auto_relay_enabled = true
+relay_interval_ms = 1000
+
+# IBC channel from Cosmos Hub to Osmosis
+[relayer.channels.cosmoshub_osmosis]
+source_chain = "cosmoshub"
+destination_chain = "osmosis"
+channel_id = "channel-141"
+port_id = "transfer"
+connection_id = "connection-257"
+
+# IBC channel from Cosmos Hub to Stride
+[relayer.channels.cosmoshub_stride]
+source_chain = "cosmoshub"
+destination_chain = "stride"
+channel_id = "channel-391"
+port_id = "transfer"
+connection_id = "connection-635"
+
+# IBC channel from Cosmos Hub to Neutron
+[relayer.channels.cosmoshub_neutron]
+source_chain = "cosmoshub"
+destination_chain = "neutron"
+channel_id = "channel-569"
+port_id = "transfer"
+connection_id = "connection-809"
+
+[fees]
+protocol_fee_bps = 5  # 0.05%
+solver_fee_bps = 10  # 0.1%
+fee_recipient = "cosmos1feerecipient..."  # TODO: Replace with actual mainnet fee recipient

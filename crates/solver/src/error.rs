@@ -32,3 +32,15 @@ pub enum SolveError {
     #[error("internal error: {0}")]
     Internal(String),
 }
+
+#[derive(Debug, Error)]
+pub enum ReputationError {
+    #[error("network error: {0}")]
+    Network(String),
+
+    #[error("query failed: {0}")]
+    QueryFailed(String),
+
+    #[error("parse error: {0}")]
+    ParseError(String),
+}

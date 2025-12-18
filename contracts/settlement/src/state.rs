@@ -52,7 +52,29 @@ pub enum SettlementStatus {
     Slashed { amount: Uint128 },
 }
 
+#[cw_serde]
+pub struct SolverReputation {
+    pub solver_id: String,
+    pub total_settlements: u64,
+    pub successful_settlements: u64,
+    pub failed_settlements: u64,
+    pub total_volume: Uint128,
+    pub average_settlement_time: u64, // seconds
+    pub slashing_events: u64,
+    pub reputation_score: u64, // 0-10000 (basis points)
+    pub last_updated: u64,
+}
+
+#[cw_serde]
+pub enum FeeTier {
+    Premium,  // 9000-10000 score - lowest fees
+    Standard, // 7000-8999 score
+    Basic,    // 5000-6999 score
+    New,      // 0-4999 score - highest fees (new/low rep solvers)
+}
+
 pub const CONFIG: Item<Config> = Item::new("config");
 pub const SOLVERS: Map<&str, RegisteredSolver> = Map::new("solvers");
 pub const SETTLEMENTS: Map<&str, Settlement> = Map::new("settlements");
 pub const INTENT_SETTLEMENTS: Map<&str, String> = Map::new("intent_settlements");
+pub const REPUTATIONS: Map<&str, SolverReputation> = Map::new("reputations");

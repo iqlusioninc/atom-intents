@@ -1,0 +1,106 @@
+# ATOM Intent-Based Liquidity System - Testnet Configuration
+
+[network]
+environment = "testnet"
+log_level = "debug"
+metrics_enabled = true
+metrics_port = 9090
+
+# Cosmos Hub testnet (Theta)
+[chains.cosmoshub]
+chain_id = "theta-testnet-001"
+rpc_url = "https://rpc.sentry-01.theta-testnet.polypore.xyz"
+grpc_url = "https://grpc.sentry-01.theta-testnet.polypore.xyz"
+gas_price = "0.025uatom"
+fee_denom = "uatom"
+address_prefix = "cosmos"
+gas_adjustment = 1.5
+timeout_ms = 30000
+max_retries = 3
+
+# Osmosis testnet
+[chains.osmosis]
+chain_id = "osmo-test-5"
+rpc_url = "https://rpc.testnet.osmosis.zone"
+grpc_url = "https://grpc.testnet.osmosis.zone"
+gas_price = "0.025uosmo"
+fee_denom = "uosmo"
+address_prefix = "osmo"
+gas_adjustment = 1.5
+timeout_ms = 30000
+max_retries = 3
+
+# Stride testnet
+[chains.stride]
+chain_id = "stride-testnet-1"
+rpc_url = "https://rpc.testnet.stride.zone"
+grpc_url = "https://grpc.testnet.stride.zone"
+gas_price = "0.025ustrd"
+fee_denom = "ustrd"
+address_prefix = "stride"
+gas_adjustment = 1.5
+timeout_ms = 30000
+max_retries = 3
+
+# Neutron testnet
+[chains.neutron]
+chain_id = "pion-1"
+rpc_url = "https://rpc-palvus.pion-1.ntrn.tech"
+grpc_url = "https://grpc-palvus.pion-1.ntrn.tech"
+gas_price = "0.025untrn"
+fee_denom = "untrn"
+address_prefix = "neutron"
+gas_adjustment = 1.5
+timeout_ms = 30000
+max_retries = 3
+
+[solvers]
+enabled_solvers = ["skip", "timewave"]
+min_profit_bps = 5  # 0.05% - lower threshold for testing
+max_slippage_bps = 100  # 1% - higher tolerance for testing
+quote_timeout_ms = 10000  # Longer timeout for testnet
+max_concurrent_solvers = 5
+
+[solvers.solver_endpoints]
+skip = "https://api.skip.money/testnet"
+timewave = "https://api.timewave.computer/testnet"
+
+[settlement]
+contract_address = "cosmos1settletestcontract..."  # TODO: Replace with actual testnet contract
+timeout_secs = 600  # 10 minutes - longer for testnet
+max_batch_size = 50
+min_confirmations = 1  # Less strict for testnet
+parallel_enabled = true
+
+[oracle]
+provider = "slinky"
+endpoint = "https://oracle.testnet.cosmos.network"
+update_interval_secs = 30  # More frequent updates for testing
+staleness_threshold_secs = 180  # 3 minutes
+fallback_endpoints = []
+
+[relayer]
+packet_timeout_secs = 600  # 10 minutes
+auto_relay_enabled = true
+relay_interval_ms = 2000  # Slower relay for testnet
+
+# IBC channel from Cosmos Hub testnet to Osmosis testnet
+[relayer.channels.cosmoshub_osmosis]
+source_chain = "cosmoshub"
+destination_chain = "osmosis"
+channel_id = "channel-123"  # TODO: Replace with actual testnet channel
+port_id = "transfer"
+connection_id = "connection-456"  # TODO: Replace with actual testnet connection
+
+# IBC channel from Cosmos Hub testnet to Stride testnet
+[relayer.channels.cosmoshub_stride]
+source_chain = "cosmoshub"
+destination_chain = "stride"
+channel_id = "channel-124"  # TODO: Replace with actual testnet channel
+port_id = "transfer"
+connection_id = "connection-457"  # TODO: Replace with actual testnet connection
+
+[fees]
+protocol_fee_bps = 10  # 0.1% - higher for testing
+solver_fee_bps = 20  # 0.2% - higher for testing
+fee_recipient = "cosmos1testfeerecipient..."  # TODO: Replace with actual testnet fee recipient

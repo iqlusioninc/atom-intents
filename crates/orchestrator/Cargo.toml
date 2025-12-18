@@ -1,0 +1,38 @@
+[package]
+name = "atom-intents-orchestrator"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[dependencies]
+# Workspace crates
+atom-intents-types = { workspace = true }
+atom-intents-matching-engine = { workspace = true }
+atom-intents-settlement = { workspace = true }
+atom-intents-solver = { workspace = true }
+atom-intents-relayer = { workspace = true }
+
+# Core
+async-trait = { workspace = true }
+tokio = { workspace = true }
+futures = { workspace = true }
+thiserror = { workspace = true }
+anyhow = { workspace = true }
+
+# Cosmos/CosmWasm
+cosmwasm-std = { workspace = true }
+
+# Numeric
+rust_decimal = { workspace = true }
+
+# Logging
+tracing = { workspace = true }
+
+# Serialization
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true }

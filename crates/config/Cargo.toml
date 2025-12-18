@@ -1,0 +1,30 @@
+[package]
+name = "atom-intents-config"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[dependencies]
+# Core
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+anyhow = { workspace = true }
+
+# Config loading
+config = "0.14"
+toml = "0.8"
+serde_yaml = "0.9"
+
+# Hot-reload support
+notify = "6.1"
+tokio = { workspace = true }
+
+# Utilities
+tracing = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true }
+tempfile = "3.8"

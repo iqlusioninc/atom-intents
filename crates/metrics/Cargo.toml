@@ -1,0 +1,36 @@
+[package]
+name = "atom-intents-metrics"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[dependencies]
+# Metrics and monitoring
+prometheus = "0.13"
+lazy_static = "1.4"
+
+# Async and HTTP
+tokio = { workspace = true }
+axum = "0.7"
+tower = "0.4"
+
+# Tracing and logging
+tracing = { workspace = true }
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+uuid = { version = "1.0", features = ["v4"] }
+
+# Serialization
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+# Error handling
+thiserror = { workspace = true }
+anyhow = { workspace = true }
+
+# Internal dependencies
+atom-intents-types = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true }

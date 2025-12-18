@@ -31,7 +31,10 @@ pub enum ExecuteMsg {
     },
 
     /// Mark user funds as locked (called by escrow)
-    MarkUserLocked { settlement_id: String, escrow_id: String },
+    MarkUserLocked {
+        settlement_id: String,
+        escrow_id: String,
+    },
 
     /// Mark solver funds as locked
     MarkSolverLocked { settlement_id: String },
@@ -43,10 +46,16 @@ pub enum ExecuteMsg {
     MarkCompleted { settlement_id: String },
 
     /// Mark settlement as failed
-    MarkFailed { settlement_id: String, reason: String },
+    MarkFailed {
+        settlement_id: String,
+        reason: String,
+    },
 
     /// Slash solver for failed settlement
-    SlashSolver { solver_id: String, settlement_id: String },
+    SlashSolver {
+        solver_id: String,
+        settlement_id: String,
+    },
 
     /// Update config (admin only)
     UpdateConfig {
@@ -55,6 +64,27 @@ pub enum ExecuteMsg {
         min_solver_bond: Option<Uint128>,
         base_slash_bps: Option<u64>,
     },
+
+    /// Execute settlement via IBC transfer
+    ExecuteSettlement {
+        settlement_id: String,
+        ibc_channel: String,
+    },
+
+    /// Handle IBC timeout - refund user and potentially slash solver
+    HandleTimeout { settlement_id: String },
+
+    /// Handle IBC acknowledgement
+    HandleIbcAck {
+        settlement_id: String,
+        success: bool,
+    },
+
+    /// Update reputation for a solver
+    UpdateReputation { solver_id: String },
+
+    /// Decay reputation scores (called periodically)
+    DecayReputation {},
 }
 
 #[cw_serde]
@@ -84,6 +114,15 @@ pub enum QueryMsg {
         start_after: Option<String>,
         limit: Option<u32>,
     },
+
+    #[returns(SolverReputationResponse)]
+    SolverReputation { solver_id: String },
+
+    #[returns(TopSolversResponse)]
+    TopSolvers { limit: u32 },
+
+    #[returns(SolversByReputationResponse)]
+    SolversByReputation { min_score: u64, limit: u32 },
 }
 
 #[cw_serde]
@@ -128,4 +167,28 @@ pub struct SettlementResponse {
 #[cw_serde]
 pub struct SettlementsResponse {
     pub settlements: Vec<SettlementResponse>,
+}
+
+#[cw_serde]
+pub struct SolverReputationResponse {
+    pub solver_id: String,
+    pub total_settlements: u64,
+    pub successful_settlements: u64,
+    pub failed_settlements: u64,
+    pub total_volume: Uint128,
+    pub average_settlement_time: u64,
+    pub slashing_events: u64,
+    pub reputation_score: u64,
+    pub fee_tier: String,
+    pub last_updated: u64,
+}
+
+#[cw_serde]
+pub struct TopSolversResponse {
+    pub solvers: Vec<SolverReputationResponse>,
+}
+
+#[cw_serde]
+pub struct SolversByReputationResponse {
+    pub solvers: Vec<SolverReputationResponse>,
 }

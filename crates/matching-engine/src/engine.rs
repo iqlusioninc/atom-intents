@@ -1,9 +1,10 @@
 use atom_intents_types::{
-    AuctionFill, AuctionResult, Intent, MatchResult, SolverQuote, TradingPair,
+    AuctionFill, AuctionResult, Intent, MatchResult, Side, SolverQuote, TradingPair,
 };
 use cosmwasm_std::Uint128;
 use rust_decimal::Decimal;
 use std::collections::HashMap;
+use std::str::FromStr;
 
 use crate::{MatchingError, OrderBook};
 
@@ -93,6 +94,57 @@ impl MatchingEngine {
         intent.input.denom == pair.quote
     }
 
+    /// Validate that the oracle price respects the user's limit price
+    ///
+    /// Note: limit_price is always "output per unit input"
+    /// - For buy orders (spending USDC for ATOM): limit_price is ATOM/USDC, oracle_price is USDC/ATOM
+    /// - For sell orders (spending ATOM for USDC): limit_price is USDC/ATOM, oracle_price is USDC/ATOM
+    ///
+    /// For buy orders: we need to invert oracle_price to compare with limit_price
+    /// For sell orders: oracle_price must be >= limit_price (user wants at least limit)
+    fn validate_limit_price(
+        intent: &Intent,
+        oracle_price: Decimal,
+        side: Side,
+    ) -> Result<(), MatchingError> {
+        let limit_price = intent
+            .output
+            .limit_price_decimal()
+            .map_err(|e| MatchingError::InvalidPrice(format!("Failed to parse limit price: {}", e)))?;
+
+        match side {
+            Side::Buy => {
+                // Buy order: spending quote for base
+                // limit_price is base/quote (e.g., ATOM/USDC)
+                // oracle_price is quote/base (e.g., USDC/ATOM)
+                // Invert oracle_price to compare: (1/oracle_price) >= limit_price
+                // Equivalent to: oracle_price <= (1/limit_price)
+                if limit_price.is_zero() {
+                    return Err(MatchingError::InvalidPrice("Limit price cannot be zero".to_string()));
+                }
+                let max_acceptable_oracle_price = Decimal::ONE / limit_price;
+                if oracle_price > max_acceptable_oracle_price {
+                    return Err(MatchingError::PriceExceedsLimit {
+                        oracle_price,
+                        limit_price,
+                    });
+                }
+            }
+            Side::Sell => {
+                // Sell order: spending base for quote
+                // limit_price is quote/base (e.g., USDC/ATOM) - same units as oracle_price
+                // oracle_price must be >= limit_price (user wants at least limit)
+                if oracle_price < limit_price {
+                    return Err(MatchingError::PriceBelowLimit {
+                        oracle_price,
+                        limit_price,
+                    });
+                }
+            }
+        }
+        Ok(())
+    }
+
     fn cross_internal(
         &self,
         buys: &[&Intent],
@@ -122,6 +174,10 @@ impl MatchingEngine {
                 sell_idx += 1;
                 continue;
             }
+
+            // Validate limit prices before matching
+            Self::validate_limit_price(buy, oracle_price, Side::Buy)?;
+            Self::validate_limit_price(sell, oracle_price, Side::Sell)?;
 
             // Convert to common units using oracle price
             let buy_in_base = self.quote_to_base(buy_amount, oracle_price);
@@ -174,9 +230,9 @@ impl MatchingEngine {
         // Sort by price (best ask first - lowest price)
         let mut sorted_quotes: Vec<_> = quotes.iter().collect();
         sorted_quotes.sort_by(|a, b| {
-            let price_a: f64 = a.price.parse().unwrap_or(f64::MAX);
-            let price_b: f64 = b.price.parse().unwrap_or(f64::MAX);
-            price_a.partial_cmp(&price_b).unwrap_or(std::cmp::Ordering::Equal)
+            let price_a = Decimal::from_str(&a.price).unwrap_or(Decimal::MAX);
+            let price_b = Decimal::from_str(&b.price).unwrap_or(Decimal::MAX);
+            price_a.cmp(&price_b)
         });
 
         for quote in sorted_quotes {
@@ -185,8 +241,10 @@ impl MatchingEngine {
             }
 
             let fill_amount = std::cmp::min(remaining, quote.input_amount);
-            let price: f64 = quote.price.parse().unwrap_or(0.0);
-            let output = Uint128::new((fill_amount.u128() as f64 * price) as u128);
+            let price = Decimal::from_str(&quote.price).unwrap_or(Decimal::ZERO);
+            let fill_amount_dec = Decimal::from(fill_amount.u128());
+            let output_dec = fill_amount_dec * price;
+            let output = Uint128::new(output_dec.trunc().to_string().parse::<u128>().unwrap_or(0));
 
             fills.push(AuctionFill {
                 intent_id: "batch".to_string(),
@@ -212,9 +270,9 @@ impl MatchingEngine {
         // Sort by price (best bid first - highest price)
         let mut sorted_quotes: Vec<_> = quotes.iter().collect();
         sorted_quotes.sort_by(|a, b| {
-            let price_a: f64 = a.price.parse().unwrap_or(0.0);
-            let price_b: f64 = b.price.parse().unwrap_or(0.0);
-            price_b.partial_cmp(&price_a).unwrap_or(std::cmp::Ordering::Equal)
+            let price_a = Decimal::from_str(&a.price).unwrap_or(Decimal::ZERO);
+            let price_b = Decimal::from_str(&b.price).unwrap_or(Decimal::ZERO);
+            price_b.cmp(&price_a)
         });
 
         for quote in sorted_quotes {
@@ -223,8 +281,10 @@ impl MatchingEngine {
             }
 
             let fill_amount = std::cmp::min(remaining, quote.input_amount);
-            let price: f64 = quote.price.parse().unwrap_or(0.0);
-            let output = Uint128::new((fill_amount.u128() as f64 * price) as u128);
+            let price = Decimal::from_str(&quote.price).unwrap_or(Decimal::ZERO);
+            let fill_amount_dec = Decimal::from(fill_amount.u128());
+            let output_dec = fill_amount_dec * price;
+            let output = Uint128::new(output_dec.trunc().to_string().parse::<u128>().unwrap_or(0));
 
             fills.push(AuctionFill {
                 intent_id: "batch".to_string(),
@@ -446,9 +506,11 @@ mod tests {
         let pair = TradingPair::new("uatom", "uusdc");
 
         // Buy intent (spending USDC for ATOM)
-        let buy = make_test_intent("buy-1", "buyer", "uusdc", 10_000_000, "uatom", 1_000_000, "10.0");
+        // limit_price 0.1 ATOM/USDC means max price 1/0.1 = 10.0 USDC/ATOM
+        let buy = make_test_intent("buy-1", "buyer", "uusdc", 10_000_000, "uatom", 1_000_000, "0.1");
 
         // Sell intent (spending ATOM for USDC)
+        // limit_price 10.0 USDC/ATOM means min price 10.0 USDC/ATOM
         let sell = make_test_intent("sell-1", "seller", "uatom", 1_000_000, "uusdc", 10_000_000, "10.0");
 
         let intents = vec![buy, sell];
@@ -658,5 +720,165 @@ mod tests {
         assert!(!result.internal_fills.is_empty());
         // No leftover for solvers
         assert!(result.solver_fills.is_empty());
+    }
+
+    // ==================== Limit Price Validation Tests ====================
+
+    #[test]
+    fn test_buy_order_rejected_when_oracle_price_exceeds_limit() {
+        let mut engine = MatchingEngine::new();
+        let pair = TradingPair::new("uatom", "uusdc");
+
+        // Buy order with limit price of 0.08 ATOM/USDC (willing to pay max 1/0.08 = 12.5 USDC/ATOM)
+        // Oracle price is 13.0 USDC/ATOM, which exceeds the max acceptable price
+        let buy = make_test_intent("buy-1", "buyer", "uusdc", 10_000_000, "uatom", 1_000_000, "0.08");
+        let sell = make_test_intent("sell-1", "seller", "uatom", 1_000_000, "uusdc", 10_000_000, "10.0");
+
+        let intents = vec![buy, sell];
+        let oracle_price = Decimal::from_str("13.0").unwrap(); // Too high for buyer
+
+        let result = engine.run_batch_auction(pair, intents, vec![], oracle_price);
+
+        // Should fail with PriceExceedsLimit error
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            MatchingError::PriceExceedsLimit { oracle_price, limit_price } => {
+                assert_eq!(oracle_price, Decimal::from_str("13.0").unwrap());
+                assert_eq!(limit_price, Decimal::from_str("0.08").unwrap());
+            }
+            e => panic!("Expected PriceExceedsLimit error, got: {:?}", e),
+        }
+    }
+
+    #[test]
+    fn test_sell_order_rejected_when_oracle_price_below_limit() {
+        let mut engine = MatchingEngine::new();
+        let pair = TradingPair::new("uatom", "uusdc");
+
+        // Sell order with limit price of 11.0 USDC/ATOM (wants at least 11.0)
+        // But oracle price is 10.0 USDC/ATOM, which is below the limit
+        let buy = make_test_intent("buy-1", "buyer", "uusdc", 10_000_000, "uatom", 1_000_000, "0.1");
+        let sell = make_test_intent("sell-1", "seller", "uatom", 1_000_000, "uusdc", 11_000_000, "11.0");
+
+        let intents = vec![buy, sell];
+        let oracle_price = Decimal::from_str("10.0").unwrap(); // Too low for seller
+
+        let result = engine.run_batch_auction(pair, intents, vec![], oracle_price);
+
+        // Should fail with PriceBelowLimit error
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            MatchingError::PriceBelowLimit { oracle_price, limit_price } => {
+                assert_eq!(oracle_price, Decimal::from_str("10.0").unwrap());
+                assert_eq!(limit_price, Decimal::from_str("11.0").unwrap());
+            }
+            e => panic!("Expected PriceBelowLimit error, got: {:?}", e),
+        }
+    }
+
+    #[test]
+    fn test_orders_matched_when_prices_within_limits() {
+        let mut engine = MatchingEngine::new();
+        let pair = TradingPair::new("uatom", "uusdc");
+
+        // Buy with limit 0.1 ATOM/USDC (willing to pay up to 10.0 USDC/ATOM)
+        // Sell with limit 10.0 USDC/ATOM (wants at least 10.0)
+        // Oracle price is 10.0 USDC/ATOM - should match
+        let buy = make_test_intent("buy-1", "buyer", "uusdc", 10_000_000, "uatom", 1_000_000, "0.1");
+        let sell = make_test_intent("sell-1", "seller", "uatom", 1_000_000, "uusdc", 10_000_000, "10.0");
+
+        let intents = vec![buy, sell];
+        let oracle_price = Decimal::from_str("10.0").unwrap();
+
+        let result = engine.run_batch_auction(pair, intents, vec![], oracle_price).unwrap();
+
+        // Should successfully match
+        assert!(!result.internal_fills.is_empty());
+        assert_eq!(result.internal_fills.len(), 2); // One fill for each side
+    }
+
+    #[test]
+    fn test_oracle_price_equals_limit_price_accepted() {
+        let mut engine = MatchingEngine::new();
+        let pair = TradingPair::new("uatom", "uusdc");
+
+        // Edge case: oracle_price == limit_price should be accepted
+        let buy = make_test_intent("buy-1", "buyer", "uusdc", 10_000_000, "uatom", 1_000_000, "0.1");
+        let sell = make_test_intent("sell-1", "seller", "uatom", 1_000_000, "uusdc", 10_000_000, "10.0");
+
+        let intents = vec![buy, sell];
+        let oracle_price = Decimal::from_str("10.0").unwrap();
+
+        let result = engine.run_batch_auction(pair, intents, vec![], oracle_price).unwrap();
+
+        // Should successfully match
+        assert!(!result.internal_fills.is_empty());
+    }
+
+    #[test]
+    fn test_buy_order_accepted_when_oracle_price_below_limit() {
+        let mut engine = MatchingEngine::new();
+        let pair = TradingPair::new("uatom", "uusdc");
+
+        // Buy with limit 0.11 ATOM/USDC (willing to pay up to 1/0.11 = ~9.09 USDC/ATOM)
+        // Oracle price is 9.0 USDC/ATOM - below max acceptable, should accept
+        let buy = make_test_intent("buy-1", "buyer", "uusdc", 9_000_000, "uatom", 1_000_000, "0.11");
+        let sell = make_test_intent("sell-1", "seller", "uatom", 1_000_000, "uusdc", 9_000_000, "9.0");
+
+        let intents = vec![buy, sell];
+        let oracle_price = Decimal::from_str("9.0").unwrap();
+
+        let result = engine.run_batch_auction(pair, intents, vec![], oracle_price).unwrap();
+
+        // Should successfully match
+        assert!(!result.internal_fills.is_empty());
+    }
+
+    #[test]
+    fn test_sell_order_accepted_when_oracle_price_above_limit() {
+        let mut engine = MatchingEngine::new();
+        let pair = TradingPair::new("uatom", "uusdc");
+
+        // Sell with limit 9.0 USDC/ATOM (wants at least 9.0)
+        // Oracle price is 10.0 USDC/ATOM - better than limit, should accept
+        let buy = make_test_intent("buy-1", "buyer", "uusdc", 10_000_000, "uatom", 1_000_000, "0.1");
+        let sell = make_test_intent("sell-1", "seller", "uatom", 1_000_000, "uusdc", 9_000_000, "9.0");
+
+        let intents = vec![buy, sell];
+        let oracle_price = Decimal::from_str("10.0").unwrap();
+
+        let result = engine.run_batch_auction(pair, intents, vec![], oracle_price).unwrap();
+
+        // Should successfully match
+        assert!(!result.internal_fills.is_empty());
+    }
+
+    #[test]
+    fn test_multiple_orders_first_fails_limit_check() {
+        let mut engine = MatchingEngine::new();
+        let pair = TradingPair::new("uatom", "uusdc");
+
+        // First buy has tight limit that will fail at oracle price 10.0
+        // limit 0.09 ATOM/USDC means max price is 1/0.09 = 11.11 USDC/ATOM, but oracle is 10.0, so it passes
+        // Let's use 0.08 which gives max price 1/0.08 = 12.5, still passes at 10.0
+        // Use 0.09 with oracle 12.0 instead
+        let buy1 = make_test_intent("buy-1", "buyer1", "uusdc", 10_000_000, "uatom", 1_000_000, "0.08");
+        // Second buy has acceptable limit
+        let buy2 = make_test_intent("buy-2", "buyer2", "uusdc", 10_000_000, "uatom", 1_000_000, "0.1");
+        let sell = make_test_intent("sell-1", "seller", "uatom", 2_000_000, "uusdc", 20_000_000, "10.0");
+
+        let intents = vec![buy1, buy2, sell];
+        let oracle_price = Decimal::from_str("13.0").unwrap(); // Exceeds buy1's max price of 12.5
+
+        let result = engine.run_batch_auction(pair, intents, vec![], oracle_price);
+
+        // Should fail on the first buy order that violates limit
+        assert!(result.is_err());
+        match result.unwrap_err() {
+            MatchingError::PriceExceedsLimit { .. } => {
+                // Expected
+            }
+            e => panic!("Expected PriceExceedsLimit error, got: {:?}", e),
+        }
     }
 }

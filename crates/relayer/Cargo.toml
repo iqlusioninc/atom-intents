@@ -9,6 +9,7 @@ description = "Solver-integrated relayer for ATOM Intent-Based Liquidity System"
 
 [dependencies]
 atom-intents-types = { workspace = true }
+atom-intents-ratelimit = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
@@ -18,3 +19,18 @@ tokio = { workspace = true }
 futures = { workspace = true }
 tracing = { workspace = true }
 cosmwasm-std = { workspace = true }
+
+# Tendermint/Cosmos SDK
+tendermint-rpc = { version = "0.39", features = ["http-client"] }
+tendermint = "0.39"
+tendermint-proto = "0.39"
+hex = "0.4"
+
+# Optional gRPC support
+tonic = { version = "0.12", optional = true }
+prost = { version = "0.13", optional = true }
+prost-types = { version = "0.13", optional = true }
+
+[features]
+default = []
+grpc = ["tonic", "prost", "prost-types"]

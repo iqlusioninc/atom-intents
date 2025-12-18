@@ -1,9 +1,14 @@
 use async_trait::async_trait;
+use atom_intents_ratelimit::ExponentialBackoff;
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 use tokio::sync::RwLock;
 
-use crate::{PrioritizedPacket, PriorityLevel, PriorityQueue};
+use crate::{PrioritizedPacket, PriorityLevel, PriorityQueue, RetryInfo};
+
+/// Maximum retry attempts before dropping a packet
+const MAX_RETRIES: u32 = 10;
 
 /// Configuration for the solver relayer
 #[derive(Clone, Debug)]
@@ -61,6 +66,7 @@ impl SolverRelayer {
             solver_exposure,
             timeout_timestamp: packet.timeout_timestamp,
             added_at: current_timestamp(),
+            retry_info: RetryInfo::default(),
         };
 
         self.priority_queue.write().await.push(prioritized);
@@ -81,6 +87,7 @@ impl SolverRelayer {
             solver_exposure: 0,
             timeout_timestamp: packet.timeout_timestamp,
             added_at: current_timestamp(),
+            retry_info: RetryInfo::default(),
         };
 
         self.priority_queue.write().await.push(prioritized);
@@ -98,7 +105,22 @@ impl SolverRelayer {
     pub async fn run(&self) -> Result<(), RelayerError> {
         loop {
             // Process highest priority packet
-            if let Some(packet) = self.priority_queue.write().await.pop() {
+            if let Some(mut packet) = self.priority_queue.write().await.pop() {
+                // Skip packet if backoff period hasn't elapsed
+                if packet.retry_info.next_retry_at > Instant::now() {
+                    // Re-queue and skip for now
+                    self.priority_queue.write().await.push(packet);
+
+                    // Refresh priorities periodically
+                    self.priority_queue.write().await.refresh_priorities();
+
+                    tokio::time::sleep(tokio::time::Duration::from_millis(
+                        self.config.poll_interval_ms,
+                    ))
+                    .await;
+                    continue;
+                }
+
                 match self.relay_packet(&packet).await {
                     Ok(_) => {
                         tracing::info!(
@@ -107,11 +129,32 @@ impl SolverRelayer {
                         );
                     }
                     Err(e) => {
-                        tracing::error!(
+                        packet.retry_info.attempts += 1;
+                        packet.retry_info.last_attempt = Instant::now();
+
+                        if packet.retry_info.attempts >= MAX_RETRIES {
+                            tracing::error!(
+                                packet_id = %packet.packet_id,
+                                attempts = packet.retry_info.attempts,
+                                error = %e,
+                                "Packet exceeded max retries, dropping"
+                            );
+                            // Don't re-queue, packet is dropped
+                            continue;
+                        }
+
+                        // Calculate exponential backoff
+                        let backoff = calculate_backoff(packet.retry_info.attempts);
+                        packet.retry_info.next_retry_at = Instant::now() + backoff;
+
+                        tracing::warn!(
                             packet_id = %packet.packet_id,
+                            attempts = packet.retry_info.attempts,
+                            backoff_ms = backoff.as_millis(),
                             error = %e,
-                            "Failed to relay packet, re-queuing"
+                            "Failed to relay packet, re-queuing with backoff"
                         );
+
                         // Re-queue for retry
                         self.priority_queue.write().await.push(packet);
                     }
@@ -227,8 +270,25 @@ fn current_timestamp() -> u64 {
         .as_secs()
 }
 
+/// Calculate exponential backoff duration based on attempt number
+/// - First retry: 1 second
+/// - Second retry: 2 seconds
+/// - Third retry: 4 seconds
+/// - Max: 60 seconds
+fn calculate_backoff(attempt: u32) -> Duration {
+    let mut backoff = ExponentialBackoff::new(Duration::from_secs(1), Duration::from_secs(60));
+
+    // Advance backoff to the current attempt
+    for _ in 0..attempt {
+        backoff.next_delay();
+    }
+
+    backoff.next_delay()
+}
+
 /// Mock chain client for testing
 pub struct MockChainClient {
+    #[allow(dead_code)]
     chain_id: String,
     connected: Arc<RwLock<bool>>,
 }
@@ -254,8 +314,8 @@ impl ChainClient for MockChainClient {
 
     async fn get_packet_commitment_proof(
         &self,
-        channel: &str,
-        sequence: u64,
+        _channel: &str,
+        _sequence: u64,
     ) -> Result<PacketProof, RelayerError> {
         Ok(PacketProof {
             proof: vec![0u8; 32],
@@ -265,10 +325,255 @@ impl ChainClient for MockChainClient {
 
     async fn submit_recv_packet(
         &self,
-        channel: &str,
-        sequence: u64,
+        _channel: &str,
+        _sequence: u64,
         _proof: PacketProof,
     ) -> Result<(), RelayerError> {
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::atomic::{AtomicU32, Ordering};
+
+    /// Mock chain client that can be configured to fail
+    pub struct FailingChainClient {
+        connected: Arc<RwLock<bool>>,
+        fail_count: Arc<AtomicU32>,
+        total_failures: u32,
+    }
+
+    impl FailingChainClient {
+        pub fn new(_chain_id: impl Into<String>, fail_count: u32) -> Self {
+            Self {
+                connected: Arc::new(RwLock::new(true)),
+                fail_count: Arc::new(AtomicU32::new(0)),
+                total_failures: fail_count,
+            }
+        }
+    }
+
+    #[async_trait]
+    impl ChainClient for FailingChainClient {
+        async fn is_connected(&self) -> bool {
+            *self.connected.read().await
+        }
+
+        async fn get_packet_commitment_proof(
+            &self,
+            _channel: &str,
+            _sequence: u64,
+        ) -> Result<PacketProof, RelayerError> {
+            let current = self.fail_count.fetch_add(1, Ordering::SeqCst);
+            if current < self.total_failures {
+                Err(RelayerError::ProofQueryFailed("Simulated failure".into()))
+            } else {
+                Ok(PacketProof {
+                    proof: vec![0u8; 32],
+                    proof_height: 1000,
+                })
+            }
+        }
+
+        async fn submit_recv_packet(
+            &self,
+            _channel: &str,
+            _sequence: u64,
+            _proof: PacketProof,
+        ) -> Result<(), RelayerError> {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn test_calculate_backoff_progression() {
+        // First retry: 1 second
+        let backoff1 = calculate_backoff(0);
+        assert_eq!(backoff1, Duration::from_secs(1));
+
+        // Second retry: 2 seconds
+        let backoff2 = calculate_backoff(1);
+        assert_eq!(backoff2, Duration::from_secs(2));
+
+        // Third retry: 4 seconds
+        let backoff3 = calculate_backoff(2);
+        assert_eq!(backoff3, Duration::from_secs(4));
+
+        // Fourth retry: 8 seconds
+        let backoff4 = calculate_backoff(3);
+        assert_eq!(backoff4, Duration::from_secs(8));
+    }
+
+    #[test]
+    fn test_calculate_backoff_max_cap() {
+        // Should cap at 60 seconds
+        let backoff = calculate_backoff(10);
+        assert_eq!(backoff, Duration::from_secs(60));
+
+        let backoff = calculate_backoff(20);
+        assert_eq!(backoff, Duration::from_secs(60));
+    }
+
+    #[tokio::test]
+    async fn test_packet_dropped_after_max_retries() {
+        let config = RelayerConfig {
+            solver_id: "solver-1".to_string(),
+            chains: vec![
+                ChainConfig {
+                    chain_id: "hub".to_string(),
+                    rpc_endpoint: "http://localhost:26657".to_string(),
+                    grpc_endpoint: "http://localhost:9090".to_string(),
+                },
+                ChainConfig {
+                    chain_id: "noble".to_string(),
+                    rpc_endpoint: "http://localhost:26657".to_string(),
+                    grpc_endpoint: "http://localhost:9090".to_string(),
+                },
+            ],
+            poll_interval_ms: 10,
+            batch_size: 10,
+        };
+
+        let mut chain_clients: HashMap<String, Arc<dyn ChainClient>> = HashMap::new();
+        // This will always fail
+        chain_clients.insert(
+            "hub".to_string(),
+            Arc::new(FailingChainClient::new("hub", 100)),
+        );
+        chain_clients.insert("noble".to_string(), Arc::new(MockChainClient::new("noble")));
+
+        let relayer = SolverRelayer::new(config, chain_clients);
+
+        // Add a packet
+        relayer
+            .add_own_packet(
+                PacketDetails {
+                    source_chain: "hub".to_string(),
+                    dest_chain: "noble".to_string(),
+                    channel: "channel-0".to_string(),
+                    sequence: 1,
+                    timeout_timestamp: current_timestamp() + 1000,
+                },
+                1_000_000,
+            )
+            .await;
+
+        // Manually retry until max retries
+        for _ in 0..MAX_RETRIES {
+            let mut packet = relayer.priority_queue.write().await.pop().unwrap();
+            assert!(relayer.relay_packet(&packet).await.is_err());
+            packet.retry_info.attempts += 1;
+
+            if packet.retry_info.attempts < MAX_RETRIES {
+                // Use minimal backoff for testing
+                packet.retry_info.next_retry_at = Instant::now();
+                relayer.priority_queue.write().await.push(packet);
+            }
+            // Don't re-queue if max retries reached
+        }
+
+        // Packet should have been dropped
+        assert_eq!(relayer.pending_count().await, 0);
+    }
+
+    #[tokio::test]
+    async fn test_retry_with_backoff() {
+        let config = RelayerConfig {
+            solver_id: "solver-1".to_string(),
+            chains: vec![
+                ChainConfig {
+                    chain_id: "hub".to_string(),
+                    rpc_endpoint: "http://localhost:26657".to_string(),
+                    grpc_endpoint: "http://localhost:9090".to_string(),
+                },
+                ChainConfig {
+                    chain_id: "noble".to_string(),
+                    rpc_endpoint: "http://localhost:26657".to_string(),
+                    grpc_endpoint: "http://localhost:9090".to_string(),
+                },
+            ],
+            poll_interval_ms: 10,
+            batch_size: 10,
+        };
+
+        let mut chain_clients: HashMap<String, Arc<dyn ChainClient>> = HashMap::new();
+        // Fail 2 times then succeed
+        chain_clients.insert(
+            "hub".to_string(),
+            Arc::new(FailingChainClient::new("hub", 2)),
+        );
+        chain_clients.insert("noble".to_string(), Arc::new(MockChainClient::new("noble")));
+
+        let relayer = SolverRelayer::new(config, chain_clients);
+
+        // Add a packet
+        relayer
+            .add_own_packet(
+                PacketDetails {
+                    source_chain: "hub".to_string(),
+                    dest_chain: "noble".to_string(),
+                    channel: "channel-0".to_string(),
+                    sequence: 1,
+                    timeout_timestamp: current_timestamp() + 1000,
+                },
+                1_000_000,
+            )
+            .await;
+
+        assert_eq!(relayer.pending_count().await, 1);
+
+        // First attempt - should fail
+        let mut packet = relayer.priority_queue.write().await.pop().unwrap();
+        assert!(relayer.relay_packet(&packet).await.is_err());
+        packet.retry_info.attempts += 1;
+        packet.retry_info.next_retry_at = Instant::now() + calculate_backoff(packet.retry_info.attempts);
+        relayer.priority_queue.write().await.push(packet);
+
+        // Should still have the packet
+        assert_eq!(relayer.pending_count().await, 1);
+
+        // Second attempt - should fail
+        let mut packet = relayer.priority_queue.write().await.pop().unwrap();
+        assert!(relayer.relay_packet(&packet).await.is_err());
+        packet.retry_info.attempts += 1;
+        packet.retry_info.next_retry_at = Instant::now() + calculate_backoff(packet.retry_info.attempts);
+        relayer.priority_queue.write().await.push(packet);
+
+        // Third attempt - should succeed
+        let packet = relayer.priority_queue.write().await.pop().unwrap();
+        assert!(relayer.relay_packet(&packet).await.is_ok());
+
+        // Packet should be removed from queue
+        assert_eq!(relayer.pending_count().await, 0);
+    }
+
+    #[tokio::test]
+    async fn test_backoff_prevents_immediate_retry() {
+        let mut packet = PrioritizedPacket {
+            packet_id: "test-packet".to_string(),
+            source_chain: "hub".to_string(),
+            dest_chain: "noble".to_string(),
+            channel: "channel-0".to_string(),
+            sequence: 1,
+            priority_level: PriorityLevel::Own,
+            solver_exposure: 1_000_000,
+            timeout_timestamp: current_timestamp() + 1000,
+            added_at: current_timestamp(),
+            retry_info: RetryInfo::default(),
+        };
+
+        // Simulate a failure and set backoff
+        packet.retry_info.attempts = 1;
+        let backoff = calculate_backoff(packet.retry_info.attempts);
+        packet.retry_info.next_retry_at = Instant::now() + backoff;
+
+        // Packet should not be ready for retry immediately
+        assert!(packet.retry_info.next_retry_at > Instant::now());
+
+        // After waiting for backoff, packet should be ready
+        tokio::time::sleep(backoff).await;
+        assert!(packet.retry_info.next_retry_at <= Instant::now());
     }
 }

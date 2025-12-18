@@ -2,7 +2,7 @@ use async_trait::async_trait;
 use atom_intents_types::{Intent, IbcTransferInfo, Settlement, SettlementStatus, Solution};
 use cosmwasm_std::Uint128;
 
-use crate::{IbcFlowType, IbcTransferBuilder, SettlementError};
+use crate::{IbcTransferBuilder, SettlementError};
 
 /// Two-phase commit settlement to prevent solver losses
 pub struct TwoPhaseSettlement<E, V, R>

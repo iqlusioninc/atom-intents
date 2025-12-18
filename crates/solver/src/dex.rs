@@ -18,6 +18,7 @@ pub struct DexRoutingSolver {
     capabilities: SolverCapabilities,
     dex_clients: Vec<Arc<dyn DexClient>>,
     surplus_capture_rate: Decimal, // e.g., 0.10 for 10%
+    fee_estimator: crate::FeeEstimator,
 }
 
 impl DexRoutingSolver {
@@ -38,7 +39,24 @@ impl DexRoutingSolver {
             },
             dex_clients,
             surplus_capture_rate: Decimal::from_str("0.10").unwrap(),
+            fee_estimator: crate::FeeEstimator::new(),
         }
+    }
+
+    /// Enrich a quote with fee estimation
+    fn enrich_quote_with_fees(&self, mut quote: DexQuote) -> DexQuote {
+        // Try to estimate fees based on route
+        if let Some(first_step) = quote.route.first() {
+            let num_hops = quote.route.len() as u32;
+            if let Ok(fee_estimate) = self.fee_estimator.estimate_swap_fee(
+                &first_step.chain_id,
+                num_hops,
+                crate::FeePriority::Medium,
+            ) {
+                quote.estimated_fee = Some(fee_estimate);
+            }
+        }
+        quote
     }
 
     async fn query_all_dexes(
@@ -55,7 +73,11 @@ impl DexRoutingSolver {
 
         let results = futures::future::join_all(futures).await;
 
-        results.into_iter().filter_map(|r| r.ok()).collect()
+        results
+            .into_iter()
+            .filter_map(|r| r.ok())
+            .map(|quote| self.enrich_quote_with_fees(quote))
+            .collect()
     }
 
     fn calculate_bond(&self, fill_amount: Uint128) -> Uint128 {
@@ -113,12 +135,16 @@ impl Solver for DexRoutingSolver {
             .ok_or(SolveError::NoViableRoute)?;
 
         // Calculate fee (10% of surplus over user's limit price)
-        let user_min_output = ctx.remaining.u128() as f64 * limit_price.to_string().parse::<f64>().unwrap_or(0.0);
-        let surplus = (best.output_amount as f64 - user_min_output).max(0.0);
-        let solver_fee = (surplus * self.surplus_capture_rate.to_string().parse::<f64>().unwrap_or(0.1)) as u128;
+        let remaining_dec = Decimal::from(ctx.remaining.u128());
+        let user_min_output_dec = remaining_dec * limit_price;
+        let output_amount_dec = Decimal::from(best.output_amount);
+        let surplus_dec = (output_amount_dec - user_min_output_dec).max(Decimal::ZERO);
+        let solver_fee_dec = surplus_dec * self.surplus_capture_rate;
+        let solver_fee = solver_fee_dec.trunc().to_string().parse::<u128>().unwrap_or(0);
 
         let output_to_user = best.output_amount.saturating_sub(solver_fee);
-        let effective_price = output_to_user as f64 / ctx.remaining.u128() as f64;
+        let output_to_user_dec = Decimal::from(output_to_user);
+        let effective_price = output_to_user_dec / remaining_dec;
 
         let current_time = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -166,7 +192,7 @@ impl Solver for DexRoutingSolver {
 pub struct MockDexClient {
     venue: String,
     liquidity: u128,
-    fee_rate: f64,
+    fee_rate: Decimal,
 }
 
 impl MockDexClient {
@@ -174,7 +200,7 @@ impl MockDexClient {
         Self {
             venue: venue.into(),
             liquidity,
-            fee_rate,
+            fee_rate: Decimal::from_f64_retain(fee_rate).unwrap_or(Decimal::ZERO),
         }
     }
 }
@@ -192,14 +218,20 @@ impl DexClient for MockDexClient {
         }
 
         // Simple constant product AMM simulation
-        let output = (amount as f64 * (1.0 - self.fee_rate) * 10.5) as u128; // Mock price ~10.5
-        let price_impact = amount as f64 / self.liquidity as f64;
+        let amount_dec = Decimal::from(amount);
+        let liquidity_dec = Decimal::from(self.liquidity);
+        let price = Decimal::from_str("10.5").unwrap(); // Mock price ~10.5
+        let one = Decimal::ONE;
+        let output_dec = amount_dec * (one - self.fee_rate) * price;
+        let output = output_dec.trunc().to_string().parse::<u128>().unwrap_or(0);
+        let price_impact_dec = amount_dec / liquidity_dec;
+        let price_impact = price_impact_dec.to_string();
 
         Ok(DexQuote {
             venue: self.venue.clone(),
             input_amount: amount,
             output_amount: output,
-            price_impact: format!("{:.4}", price_impact),
+            price_impact,
             route: vec![DexSwapStep {
                 venue: self.venue.clone(),
                 pool_id: "pool-1".to_string(),
@@ -207,6 +239,7 @@ impl DexClient for MockDexClient {
                 output_denom: output_denom.to_string(),
                 chain_id: "osmosis-1".to_string(),
             }],
+            estimated_fee: None,
         })
     }
 
@@ -217,7 +250,7 @@ impl DexClient for MockDexClient {
             token_b: "uusdc".to_string(),
             liquidity_a: self.liquidity,
             liquidity_b: self.liquidity * 10,
-            fee_rate: format!("{:.4}", self.fee_rate),
+            fee_rate: self.fee_rate.to_string(),
         }])
     }
 }

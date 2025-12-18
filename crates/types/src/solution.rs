@@ -102,7 +102,7 @@ pub struct OptimalFillPlan {
 }
 
 impl OptimalFillPlan {
-    pub fn fully_matched(intent_id: &str, amount: Uint128) -> Self {
+    pub fn fully_matched(_intent_id: &str, amount: Uint128) -> Self {
         Self {
             selected: vec![],
             total_input: amount,

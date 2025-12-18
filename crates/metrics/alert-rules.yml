@@ -1,0 +1,261 @@
+groups:
+  - name: atom_intents_alerts
+    interval: 30s
+    rules:
+      # ═══════════════════════════════════════════════════════════════════════════
+      # INTENT ALERTS
+      # ═══════════════════════════════════════════════════════════════════════════
+
+      - alert: HighIntentFailureRate
+        expr: |
+          rate(atom_intents_failed_total[5m])
+          /
+          rate(atom_intents_received_total[5m]) > 0.1
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High intent failure rate detected"
+          description: "Intent failure rate is {{ $value | humanizePercentage }} over the last 5 minutes"
+
+      - alert: CriticalIntentFailureRate
+        expr: |
+          rate(atom_intents_failed_total[5m])
+          /
+          rate(atom_intents_received_total[5m]) > 0.25
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Critical intent failure rate detected"
+          description: "Intent failure rate is {{ $value | humanizePercentage }} over the last 5 minutes"
+
+      - alert: IntentBacklog
+        expr: atom_intents_active > 1000
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Large number of active intents"
+          description: "There are {{ $value }} active intents in the system"
+
+      # ═══════════════════════════════════════════════════════════════════════════
+      # SETTLEMENT ALERTS
+      # ═══════════════════════════════════════════════════════════════════════════
+
+      - alert: HighSettlementFailureRate
+        expr: |
+          rate(atom_settlements_failed_total[5m])
+          /
+          (rate(atom_settlements_completed_total[5m]) + rate(atom_settlements_failed_total[5m])) > 0.05
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High settlement failure rate detected"
+          description: "Settlement failure rate is {{ $value | humanizePercentage }} over the last 5 minutes"
+
+      - alert: CriticalSettlementFailureRate
+        expr: |
+          rate(atom_settlements_failed_total[5m])
+          /
+          (rate(atom_settlements_completed_total[5m]) + rate(atom_settlements_failed_total[5m])) > 0.15
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Critical settlement failure rate detected"
+          description: "Settlement failure rate is {{ $value | humanizePercentage }} over the last 5 minutes"
+
+      - alert: SlowSettlements
+        expr: |
+          histogram_quantile(0.95, rate(atom_settlement_duration_ms_bucket[5m])) > 60000
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Settlements taking longer than expected"
+          description: "95th percentile settlement duration is {{ $value | humanizeDuration }}"
+
+      - alert: SettlementBacklog
+        expr: atom_settlements_active > 100
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Large number of active settlements"
+          description: "There are {{ $value }} active settlements in the system"
+
+      # ═══════════════════════════════════════════════════════════════════════════
+      # SOLVER ALERTS
+      # ═══════════════════════════════════════════════════════════════════════════
+
+      - alert: LowSolverCount
+        expr: atom_solvers_active < 3
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Low number of active solvers"
+          description: "Only {{ $value }} solver(s) are currently active"
+
+      - alert: NoActiveSolvers
+        expr: atom_solvers_active == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "No active solvers available"
+          description: "The system has no active solvers"
+
+      - alert: SlowSolverQuotes
+        expr: |
+          histogram_quantile(0.95, rate(atom_solver_quote_latency_ms_bucket[5m])) > 1000
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Solver quotes are slower than expected"
+          description: "95th percentile solver quote latency is {{ $value }}ms"
+
+      - alert: HighSolverQuoteFailureRate
+        expr: |
+          sum(rate(atom_solver_quote_failures_total[5m]))
+          /
+          rate(atom_solver_quotes_requested_total[5m]) > 0.2
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High solver quote failure rate"
+          description: "Solver quote failure rate is {{ $value | humanizePercentage }}"
+
+      # ═══════════════════════════════════════════════════════════════════════════
+      # IBC ALERTS
+      # ═══════════════════════════════════════════════════════════════════════════
+
+      - alert: HighIbcTimeoutRate
+        expr: |
+          rate(atom_ibc_timeouts_total[5m])
+          /
+          rate(atom_ibc_packets_sent_total[5m]) > 0.05
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High IBC timeout rate detected"
+          description: "IBC timeout rate is {{ $value | humanizePercentage }}"
+
+      - alert: CriticalIbcTimeoutRate
+        expr: |
+          rate(atom_ibc_timeouts_total[5m])
+          /
+          rate(atom_ibc_packets_sent_total[5m]) > 0.15
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Critical IBC timeout rate detected"
+          description: "IBC timeout rate is {{ $value | humanizePercentage }}"
+
+      - alert: SlowIbcTransfers
+        expr: |
+          histogram_quantile(0.95, rate(atom_ibc_transfer_latency_ms_bucket[5m])) > 120000
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "IBC transfers slower than expected"
+          description: "95th percentile IBC transfer latency is {{ $value | humanizeDuration }}"
+
+      - alert: IbcErrors
+        expr: rate(atom_ibc_errors_total[5m]) > 0.1
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "IBC errors detected"
+          description: "IBC errors occurring at {{ $value }} errors/sec"
+
+      # ═══════════════════════════════════════════════════════════════════════════
+      # ORACLE ALERTS
+      # ═══════════════════════════════════════════════════════════════════════════
+
+      - alert: HighOracleFailureRate
+        expr: |
+          rate(atom_oracle_failures_total[5m])
+          /
+          rate(atom_oracle_queries_total[5m]) > 0.1
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High oracle failure rate detected"
+          description: "Oracle failure rate is {{ $value | humanizePercentage }}"
+
+      - alert: CriticalOracleFailureRate
+        expr: |
+          rate(atom_oracle_failures_total[5m])
+          /
+          rate(atom_oracle_queries_total[5m]) > 0.25
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Critical oracle failure rate detected"
+          description: "Oracle failure rate is {{ $value | humanizePercentage }}"
+
+      - alert: SlowOracleQueries
+        expr: |
+          histogram_quantile(0.95, rate(atom_oracle_latency_ms_bucket[5m])) > 2000
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Oracle queries slower than expected"
+          description: "95th percentile oracle query latency is {{ $value }}ms"
+
+      - alert: StaleOracleData
+        expr: |
+          histogram_quantile(0.95, rate(atom_oracle_staleness_secs_bucket[5m])) > 300
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Oracle data is stale"
+          description: "95th percentile oracle data staleness is {{ $value }}s"
+
+      # ═══════════════════════════════════════════════════════════════════════════
+      # MATCHING ENGINE ALERTS
+      # ═══════════════════════════════════════════════════════════════════════════
+
+      - alert: LowMatchingSuccessRate
+        expr: |
+          rate(atom_matching_success_total[5m])
+          /
+          rate(atom_matching_attempts_total[5m]) < 0.5
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Low matching success rate"
+          description: "Matching success rate is {{ $value | humanizePercentage }}"
+
+      - alert: SlowMatching
+        expr: |
+          histogram_quantile(0.95, rate(atom_matching_latency_ms_bucket[5m])) > 500
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Matching engine slower than expected"
+          description: "95th percentile matching latency is {{ $value }}ms"
+
+      - alert: LargeMatchingQueue
+        expr: atom_matching_queue_size > 500
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Large matching queue detected"
+          description: "Matching queue size is {{ $value }}"

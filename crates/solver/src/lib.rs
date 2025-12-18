@@ -1,9 +1,25 @@
 pub mod aggregator;
+pub mod astroport;
+pub mod cex;
+pub mod denom;
 pub mod dex;
 pub mod error;
+pub mod fees;
+pub mod oracle;
+pub mod osmosis;
+pub mod reputation;
+pub mod skipgo;
 pub mod traits;
 
 pub use aggregator::*;
+pub use astroport::*;
+pub use cex::*;
+pub use denom::*;
 pub use dex::*;
 pub use error::*;
+pub use fees::*;
+pub use oracle::*;
+pub use osmosis::*;
+pub use reputation::*;
+pub use skipgo::*;
 pub use traits::*;

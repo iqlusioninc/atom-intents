@@ -25,4 +25,19 @@ pub enum SettlementError {
 
     #[error("timeout configuration error: {0}")]
     TimeoutError(String),
+
+    #[error("channel error: {0}")]
+    ChannelError(#[from] ChannelError),
+}
+
+#[derive(Debug, Error)]
+pub enum ChannelError {
+    #[error("channel not found for route {0} -> {1}")]
+    ChannelNotFound(String, String),
+
+    #[error("invalid channel: {0}")]
+    InvalidChannel(String),
+
+    #[error("channel is closed")]
+    ChannelClosed,
 }

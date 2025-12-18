@@ -1,5 +1,6 @@
 use std::cmp::Ordering;
 use std::collections::BinaryHeap;
+use std::time::Instant;
 
 /// Priority level for packets
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -10,6 +11,24 @@ pub enum PriorityLevel {
     Paid = 2,
     /// Altruistic relay
     Altruistic = 1,
+}
+
+/// Retry tracking information for a packet
+#[derive(Clone, Debug)]
+pub struct RetryInfo {
+    pub attempts: u32,
+    pub last_attempt: Instant,
+    pub next_retry_at: Instant,
+}
+
+impl Default for RetryInfo {
+    fn default() -> Self {
+        Self {
+            attempts: 0,
+            last_attempt: Instant::now(),
+            next_retry_at: Instant::now(),
+        }
+    }
 }
 
 /// A packet pending relay with priority
@@ -24,6 +43,7 @@ pub struct PrioritizedPacket {
     pub solver_exposure: u128,
     pub timeout_timestamp: u64,
     pub added_at: u64,
+    pub retry_info: RetryInfo,
 }
 
 impl PrioritizedPacket {
@@ -164,6 +184,7 @@ mod tests {
             solver_exposure: 100_000_000,
             timeout_timestamp: 2000,
             added_at: 1000,
+            retry_info: RetryInfo::default(),
         });
 
         // Add paid packet
@@ -177,6 +198,7 @@ mod tests {
             solver_exposure: 0,
             timeout_timestamp: 2000,
             added_at: 1000,
+            retry_info: RetryInfo::default(),
         });
 
         // Own should come first

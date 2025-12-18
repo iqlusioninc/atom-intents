@@ -115,6 +115,7 @@ pub struct DexQuote {
     pub output_amount: u128,
     pub price_impact: String,
     pub route: Vec<atom_intents_types::DexSwapStep>,
+    pub estimated_fee: Option<crate::FeeEstimate>,
 }
 
 #[derive(Clone, Debug)]

@@ -18,3 +18,5 @@ tokio = { workspace = true }
 tracing = { workspace = true }
 cosmwasm-std = { workspace = true }
 rust_decimal = { workspace = true }
+sqlx = { version = "0.7", features = ["runtime-tokio", "sqlite"] }
+chrono = "0.4"

@@ -1,0 +1,73 @@
+# ATOM Intent-Based Liquidity System - Local Development Configuration
+
+[network]
+environment = "local"
+log_level = "trace"
+metrics_enabled = true
+metrics_port = 9090
+
+# Local Cosmos Hub instance
+[chains.cosmoshub]
+chain_id = "cosmoshub-local"
+rpc_url = "http://localhost:26657"
+grpc_url = "http://localhost:9090"
+gas_price = "0.025uatom"
+fee_denom = "uatom"
+address_prefix = "cosmos"
+gas_adjustment = 1.3
+timeout_ms = 10000
+max_retries = 1
+
+# Local Osmosis instance
+[chains.osmosis]
+chain_id = "osmosis-local"
+rpc_url = "http://localhost:26658"
+grpc_url = "http://localhost:9091"
+gas_price = "0.025uosmo"
+fee_denom = "uosmo"
+address_prefix = "osmo"
+gas_adjustment = 1.3
+timeout_ms = 10000
+max_retries = 1
+
+[solvers]
+enabled_solvers = ["local-solver"]
+min_profit_bps = 1  # 0.01% - very low for local testing
+max_slippage_bps = 500  # 5% - high tolerance for local testing
+quote_timeout_ms = 30000  # Long timeout for debugging
+max_concurrent_solvers = 1
+
+[solvers.solver_endpoints]
+local-solver = "http://localhost:8080"
+
+[settlement]
+contract_address = "cosmos14hj2tavq8fpesdwxxcu44rty3hh90vhujrvcmstl4zr3txmfvw9s4hmalr"
+timeout_secs = 3600  # 1 hour - very long for debugging
+max_batch_size = 10
+min_confirmations = 1
+parallel_enabled = false  # Disable parallel for easier debugging
+
+[oracle]
+provider = "mock"
+endpoint = "http://localhost:8081"
+update_interval_secs = 10  # Frequent updates for testing
+staleness_threshold_secs = 60
+fallback_endpoints = []
+
+[relayer]
+packet_timeout_secs = 300  # 5 minutes
+auto_relay_enabled = true
+relay_interval_ms = 500  # Fast relay for local testing
+
+# Local IBC channel
+[relayer.channels.cosmoshub_osmosis]
+source_chain = "cosmoshub"
+destination_chain = "osmosis"
+channel_id = "channel-0"
+port_id = "transfer"
+connection_id = "connection-0"
+
+[fees]
+protocol_fee_bps = 0  # No fees for local testing
+solver_fee_bps = 0  # No fees for local testing
+fee_recipient = "cosmos1localfeerecipient000000000000000000000000"
