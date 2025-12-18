@@ -3,15 +3,26 @@ use atom_intents_types::{
 };
 use cosmwasm_std::Uint128;
 use rust_decimal::Decimal;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::str::FromStr;
 
-use crate::{MatchingError, OrderBook, MAX_ORACLE_DEVIATION, MAX_SAFE_AMOUNT};
+use crate::{
+    MatchingError, OrderBook, MAX_ORACLE_CONFIDENCE, MAX_ORACLE_DEVIATION, MAX_QUOTES_PER_AUCTION,
+    MAX_SAFE_AMOUNT,
+};
+
+/// SECURITY FIX (1.4): Nonce registry for replay protection
+///
+/// Tracks used nonces per user to prevent replay attacks.
+/// Maps user address -> set of used nonces.
+type NonceRegistry = HashMap<String, HashSet<u64>>;
 
 /// Matching engine managing multiple order books
 pub struct MatchingEngine {
     books: HashMap<TradingPair, OrderBook>,
     current_epoch: u64,
+    /// SECURITY FIX (1.4): Track used nonces per user
+    used_nonces: NonceRegistry,
 }
 
 impl MatchingEngine {
@@ -19,6 +30,7 @@ impl MatchingEngine {
         Self {
             books: HashMap::new(),
             current_epoch: 0,
+            used_nonces: HashMap::new(),
         }
     }
 
@@ -33,6 +45,31 @@ impl MatchingEngine {
             });
         }
         Ok(())
+    }
+
+    /// SECURITY FIX (1.4): Check if a nonce has been used for a user
+    fn is_nonce_used(&self, user: &str, nonce: u64) -> bool {
+        self.used_nonces
+            .get(user)
+            .map(|nonces| nonces.contains(&nonce))
+            .unwrap_or(false)
+    }
+
+    /// SECURITY FIX (1.4): Mark a nonce as used for a user
+    fn mark_nonce_used(&mut self, user: &str, nonce: u64) {
+        self.used_nonces
+            .entry(user.to_string())
+            .or_default()
+            .insert(nonce);
+    }
+
+    /// SECURITY FIX (1.4): Clear old nonces for a user (for memory management)
+    /// In production, this would be called with nonces older than some threshold
+    #[allow(dead_code)]
+    pub fn clear_old_nonces(&mut self, user: &str, max_nonce: u64) {
+        if let Some(nonces) = self.used_nonces.get_mut(user) {
+            nonces.retain(|&n| n > max_nonce);
+        }
     }
 
     /// Get or create order book for a pair
@@ -59,6 +96,12 @@ impl MatchingEngine {
     }
 
     /// Run a batch auction for multiple intents
+    ///
+    /// # Arguments
+    /// * `pair` - The trading pair
+    /// * `intents` - List of intents to match
+    /// * `solver_quotes` - Solver quotes for the auction
+    /// * `oracle_price` - Oracle price for sanity checking
     pub fn run_batch_auction(
         &mut self,
         pair: TradingPair,
@@ -66,10 +109,85 @@ impl MatchingEngine {
         solver_quotes: Vec<SolverQuote>,
         oracle_price: Decimal,
     ) -> Result<AuctionResult, MatchingError> {
+        // Use current system time for expiration checks
+        let current_time = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+        self.run_batch_auction_with_confidence(
+            pair,
+            intents,
+            solver_quotes,
+            oracle_price,
+            None,
+            current_time,
+        )
+    }
+
+    /// SECURITY FIX (1.1, 1.4, 1.5, 1.6): Run batch auction with full validation
+    ///
+    /// Security checks performed:
+    /// - 1.1: Oracle confidence validation (reject if uncertainty > 5%)
+    /// - 1.4: Nonce replay protection (reject duplicate nonces)
+    /// - 1.5: Expiration enforcement (reject expired intents)
+    /// - 1.6: Quote array bounds (reject if > MAX_QUOTES_PER_AUCTION)
+    pub fn run_batch_auction_with_confidence(
+        &mut self,
+        pair: TradingPair,
+        intents: Vec<Intent>,
+        solver_quotes: Vec<SolverQuote>,
+        oracle_price: Decimal,
+        oracle_confidence: Option<Decimal>,
+        current_time: u64,
+    ) -> Result<AuctionResult, MatchingError> {
+        // SECURITY FIX (1.1): Validate oracle confidence if provided
+        let max_confidence =
+            Decimal::from_str(MAX_ORACLE_CONFIDENCE).expect("MAX_ORACLE_CONFIDENCE is valid");
+        if let Some(confidence) = oracle_confidence {
+            if confidence > max_confidence {
+                return Err(MatchingError::OraclePriceUncertain {
+                    confidence,
+                    max_confidence,
+                });
+            }
+        }
+
+        // SECURITY FIX (1.6): Validate solver quote array bounds
+        if solver_quotes.len() > MAX_QUOTES_PER_AUCTION {
+            return Err(MatchingError::TooManyQuotes {
+                count: solver_quotes.len(),
+                max: MAX_QUOTES_PER_AUCTION,
+            });
+        }
+
+        // SECURITY FIX (1.5): Filter out expired intents
+        let valid_intents: Vec<Intent> = intents
+            .into_iter()
+            .filter(|intent| intent.expires_at > current_time)
+            .collect();
+
+        // SECURITY FIX (1.4): Check for nonce replay attacks
+        for intent in &valid_intents {
+            if self.is_nonce_used(&intent.user, intent.nonce) {
+                return Err(MatchingError::NonceAlreadyUsed {
+                    user: intent.user.clone(),
+                    nonce: intent.nonce,
+                });
+            }
+        }
+
+        // SECURITY FIX (1.4): Record nonces after validation (before processing)
+        // We record them now so that if processing fails, the nonces are still marked used
+        // This prevents timing attacks where an attacker could resubmit after failure
+        for intent in &valid_intents {
+            self.mark_nonce_used(&intent.user, intent.nonce);
+        }
+
         self.current_epoch += 1;
 
-        // Separate by side
-        let (buys, sells): (Vec<_>, Vec<_>) = intents.iter().partition(|i| self.is_buy(i, &pair));
+        // Separate by side (using valid_intents after expiration filtering)
+        let (buys, sells): (Vec<_>, Vec<_>) =
+            valid_intents.iter().partition(|i| self.is_buy(i, &pair));
 
         // Cross internal orders first (no solver needed)
         let (internal_fills, remaining_buy, remaining_sell) =

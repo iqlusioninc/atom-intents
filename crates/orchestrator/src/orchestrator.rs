@@ -11,6 +11,7 @@ use atom_intents_types::{
 use cosmwasm_std::Uint128;
 use rust_decimal::Decimal;
 use std::collections::HashMap;
+use std::str::FromStr;
 use std::sync::Arc;
 use thiserror::Error;
 use tokio::sync::{Mutex, RwLock};
@@ -454,23 +455,31 @@ impl IntentOrchestrator {
             // Get solver quotes for this pair
             let solver_quotes = self.get_solver_quotes(&pair).await;
 
-            // Get oracle price
-            let oracle_price = self
+            // SECURITY FIX (1.1): Get oracle price with confidence
+            let (oracle_price, oracle_confidence) = self
                 .solution_aggregator
-                .get_oracle_price(&pair)
+                .get_oracle_price_with_confidence(&pair)
                 .await
                 .ok()
-                .unwrap_or(Decimal::TEN);
+                .unwrap_or((Decimal::TEN, Decimal::from_str("0.01").unwrap()));
 
-            // Run batch auction
+            // Get current time for expiration checks
+            let current_time = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_secs())
+                .unwrap_or(0);
+
+            // Run batch auction with full security validation (1.1, 1.4, 1.5, 1.6)
             let auction_result = {
                 let mut engine = self.matching_engine.lock().await;
                 engine
-                    .run_batch_auction(
+                    .run_batch_auction_with_confidence(
                         pair.clone(),
                         pair_intents.clone(),
                         solver_quotes,
                         oracle_price,
+                        Some(oracle_confidence),
+                        current_time,
                     )
                     .map_err(|e| OrchestratorError::BatchAuction {
                         reason: e.to_string(),

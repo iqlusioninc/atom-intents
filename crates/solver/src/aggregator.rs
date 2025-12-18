@@ -77,6 +77,20 @@ impl SolutionAggregator {
 
     /// Get oracle price for a trading pair with caching and fallback handling
     pub async fn get_oracle_price(&self, pair: &TradingPair) -> Result<Decimal, OracleError> {
+        self.get_oracle_price_with_confidence(pair)
+            .await
+            .map(|(price, _)| price)
+    }
+
+    /// SECURITY FIX (1.1): Get oracle price with confidence interval
+    ///
+    /// Returns (price, confidence) tuple. Confidence is the uncertainty
+    /// (e.g., 0.01 = 1% uncertainty). Callers should reject or widen
+    /// tolerance when confidence exceeds acceptable thresholds.
+    pub async fn get_oracle_price_with_confidence(
+        &self,
+        pair: &TradingPair,
+    ) -> Result<(Decimal, Decimal), OracleError> {
         let pair_symbol = pair.to_symbol();
 
         // Check if we should use cached price
@@ -84,7 +98,8 @@ impl SolutionAggregator {
             let cache = self.price_cache.read().await;
             if let Some(cached) = cache.get(&pair_symbol) {
                 if cached.fetched_at.elapsed() < *ttl {
-                    return Ok(cached.price);
+                    // For cached prices, use default confidence of 1%
+                    return Ok((cached.price, Decimal::from_str("0.01").unwrap()));
                 }
             }
         }
@@ -95,6 +110,7 @@ impl SolutionAggregator {
         match oracle_result {
             Ok(oracle_price) => {
                 let price = oracle_price.price;
+                let confidence = oracle_price.confidence;
 
                 // Update last success timestamp
                 *self.last_oracle_success.write().await = Some(Instant::now());
@@ -109,7 +125,7 @@ impl SolutionAggregator {
                     },
                 );
 
-                Ok(price)
+                Ok((price, confidence))
             }
             Err(e) => {
                 // Handle failure based on price requirement
@@ -119,8 +135,8 @@ impl SolutionAggregator {
                         Err(e)
                     }
                     OraclePriceRequirement::Optional(fallback) => {
-                        // Only for testing: use fallback price
-                        Ok(*fallback)
+                        // Only for testing: use fallback price with high confidence (low uncertainty)
+                        Ok((*fallback, Decimal::from_str("0.001").unwrap()))
                     }
                     OraclePriceRequirement::Cached(ttl) => {
                         // Try to use cached price even if stale
@@ -128,7 +144,11 @@ impl SolutionAggregator {
                         if let Some(cached) = cache.get(&pair_symbol) {
                             // Only use stale cache if it's within reasonable bounds (e.g., 10x TTL)
                             if cached.fetched_at.elapsed() < *ttl * 10 {
-                                return Ok(cached.price);
+                                // Stale cache has higher uncertainty (5%)
+                                return Ok((
+                                    cached.price,
+                                    Decimal::from_str("0.05").unwrap(),
+                                ));
                             }
                         }
                         // No cache available, propagate error

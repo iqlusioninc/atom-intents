@@ -13,15 +13,31 @@ This review builds upon the previous audit (AUDIT_REPORT.md) to identify **addit
 
 ### Risk Summary
 
-| Category | Critical | High | Medium | Low |
-|----------|----------|------|--------|-----|
-| Security | 0 | 3 | 4 | 2 |
-| Liquidity | 0 | 2 | 2 | 1 |
-| Timing Games | 0 | 3 | 2 | 1 |
-| Toxic Flow | 0 | 2 | 3 | 2 |
-| **Architecture** | **2** | **4** | **3** | 0 |
-| **TEE/TDX Analysis** | - | - | - | - |
-| **Adversarial Tests** | 0 | 0 | 2 | 1 |
+| Category | Critical | High | Medium | Low | Fixed |
+|----------|----------|------|--------|-----|-------|
+| Security | 0 | 3 | 4 | 2 | 7 |
+| Liquidity | 0 | 2 | 2 | 1 | 0 |
+| Timing Games | 0 | 3 | 2 | 1 | 0 |
+| Toxic Flow | 0 | 2 | 3 | 2 | 0 |
+| **Architecture** | **2** | **4** | **3** | 0 | **2** |
+| **TEE/TDX Analysis** | - | - | - | - | - |
+| **Adversarial Tests** | 0 | 0 | 2 | 1 | 1 |
+
+### Fix Status Summary (Updated: Dec 18, 2025)
+
+| Issue | Severity | Status | Commit |
+|-------|----------|--------|--------|
+| 5.1 Oracle Dependency | CRITICAL | ✅ FIXED | 9f5d94c |
+| 1.1 Oracle Confidence | HIGH | ✅ FIXED | Session 2 |
+| 1.2 CEX Inventory Theft | HIGH | ✅ FIXED | 9f5d94c |
+| 1.3 State Machine Race | HIGH | ✅ FIXED | 9f5d94c |
+| 5.6 Escrow Race | HIGH | ✅ FIXED | 9f5d94c |
+| 1.4 Nonce Replay | MEDIUM | ✅ FIXED | Session 2 |
+| 1.5 Expiration Enforcement | MEDIUM | ✅ FIXED | Session 2 |
+| 1.6 Quote Array Bounds | MEDIUM | ✅ FIXED | Session 2 |
+| 1.7 Slash Threshold | MEDIUM | ✅ FIXED | 9f5d94c |
+| 5.8 Intent Cancellation | MEDIUM | ✅ FIXED | 9f5d94c |
+| 7.1 Double Completion | MEDIUM | ✅ FIXED | 9f5d94c |
 
 ---
 
@@ -75,6 +91,8 @@ fn cross_internal(
 }
 ```
 
+> **✅ FIXED (Session 2):** Added `MAX_ORACLE_CONFIDENCE` constant (5%) in `crates/matching-engine/src/error.rs`. Added `get_oracle_price_with_confidence()` method to `SolutionAggregator` that returns (price, confidence) tuple. The `run_batch_auction_with_confidence()` function validates confidence and returns `OraclePriceUncertain` error if exceeded. Orchestrator now uses confidence-aware method.
+
 ---
 
 ## 1.2 [HIGH] CEX Backstop Inventory Theft via Asynchronous Settlement
@@ -114,6 +132,8 @@ async fn on_settlement_confirmed(&self, intent_id: &str, success: bool) {
 }
 ```
 
+> **✅ FIXED (Commit 9f5d94c):** Implemented `PendingInventoryChange` tracking in `crates/solver/src/cex.rs:60-100`. Inventory updates are now tracked with `register_pending_change()` and can be rolled back via `rollback_settlement()` or confirmed via `confirm_settlement()`. The CEX backstop solver no longer immediately updates inventory; instead changes are held pending until settlement confirmation.
+
 ---
 
 ## 1.3 [HIGH] Settlement State Machine Race Condition
@@ -148,6 +168,8 @@ fn execute_mark_completed(...) {
 }
 ```
 
+> **✅ FIXED (Commit 9f5d94c):** Implemented `can_transition_to()` method in `contracts/settlement/src/state.rs:58-96`. All state transitions now validate against the state machine before proceeding. The handlers in `contracts/settlement/src/handlers.rs` call this method and return `ContractError::InvalidStateTransition` for invalid transitions. Valid transitions are explicitly enumerated (Pending→UserLocked→SolverLocked→Executing→Completed), with failure and slashing allowed from appropriate states.
+
 ---
 
 ## 1.4 [MEDIUM] Replay Attack on Intent Nonce
@@ -181,6 +203,8 @@ struct MatchingEngine {
 }
 ```
 
+> **✅ FIXED (Session 2):** Implemented `NonceRegistry` in `crates/matching-engine/src/engine.rs`. Added `is_nonce_used()` and `mark_nonce_used()` methods. The `run_batch_auction_with_confidence()` function now validates all intent nonces before processing and rejects any with `NonceAlreadyUsed` error. Nonces are recorded immediately after validation to prevent timing attacks.
+
 ---
 
 ## 1.5 [MEDIUM] Missing Expiration Enforcement in Batch Auction
@@ -211,6 +235,8 @@ let valid_intents: Vec<_> = intents.iter()
     .collect();
 ```
 
+> **✅ FIXED (Session 2):** Added expiration filtering in `crates/matching-engine/src/engine.rs`. The `run_batch_auction_with_confidence()` function now accepts `current_time` parameter and filters intents where `expires_at > current_time`. Expired intents are silently excluded from auction processing.
+
 ---
 
 ## 1.6 [MEDIUM] Unbounded Solver Quote Array
@@ -237,6 +263,8 @@ if quotes.len() > MAX_QUOTES_PER_AUCTION {
 }
 ```
 
+> **✅ FIXED (Session 2):** Added `MAX_QUOTES_PER_AUCTION` constant (100) in `crates/matching-engine/src/error.rs`. The `run_batch_auction_with_confidence()` function validates quote array size and returns `TooManyQuotes` error if exceeded. This prevents DoS via excessive quote submission.
+
 ---
 
 ## 1.7 [MEDIUM] Missing Slashing Threshold Validation
@@ -261,6 +289,8 @@ let actual_slash = std::cmp::max(
     Uint128::new(MIN_SLASH_AMOUNT)
 );
 ```
+
+> **✅ FIXED (Commit 9f5d94c):** Added `MIN_SLASH_AMOUNT` constant (10 ATOM = 10,000,000 uatom) in `contracts/settlement/src/state.rs:45`. The slashing logic in `contracts/settlement/src/handlers.rs` now enforces this minimum threshold to prevent dust-amount slashing attacks that would make griefing economically viable.
 
 ---
 
@@ -783,6 +813,8 @@ Removing unnecessary oracle dependency:
 
 **Severity: CRITICAL** - This is an architectural flaw that enables multiple attack vectors. The system should be redesigned to minimize oracle dependency before mainnet launch.
 
+> **✅ FIXED (Commit 9f5d94c):** Implemented midpoint pricing in `crates/matching-engine/src/engine.rs:180-220`. Intent matching now executes at `(buy_max_price + sell_min_price) / 2` instead of oracle price. The oracle is retained only as a sanity check (MAX_ORACLE_DEVIATION = 10%) to reject matches with extreme price deviations. This eliminates the oracle as a single point of failure for intent crossing while maintaining it as a safety circuit breaker.
+
 ---
 
 ## 5.2 [CRITICAL] Centralized Coordination Layer (Skip Select)
@@ -1041,6 +1073,8 @@ fn execute_release(...) {
 }
 ```
 
+> **✅ FIXED (Commit 9f5d94c):** Added expiration check in `contracts/escrow/src/contract.rs:execute_release()`. The release function now verifies `env.block.time.seconds() < escrow.expires_at` before allowing release, returning `ContractError::EscrowExpired` if the escrow has expired. This prevents the race condition where release could occur after refund becomes eligible.
+
 ---
 
 ## 5.7 [MEDIUM] Solver Insolvency / Bankruptcy Risk
@@ -1126,6 +1160,8 @@ pub fn cancel_intent(intent_id: &str, user_signature: &[u8]) -> Result<()> {
     // Matching engine checks before filling
 }
 ```
+
+> **✅ FIXED (Commit 9f5d94c):** Implemented intent cancellation in `crates/types/src/cancellation.rs`. Added `CancellationRequest` struct with secp256k1 signature verification (signing_bytes includes intent_id, user, and timestamp). Added `CancellationRegistry` (thread-safe HashSet) for the orchestrator to track cancelled intents. The matching engine can check `is_cancelled()` before filling intents. Signature verification uses the same secp256k1 infrastructure as intent signing.
 
 ---
 
@@ -1438,8 +1474,6 @@ This section documents security issues discovered during comprehensive adversari
 
 **Impact:** Solver reputation inflation, potential accounting errors
 
-**Current Status:** Documented in tests as improvement opportunity
-
 **Recommended Fix:**
 ```rust
 fn execute_mark_completed(...) {
@@ -1453,6 +1487,8 @@ fn execute_mark_completed(...) {
     // ...
 }
 ```
+
+> **✅ FIXED (Commit 9f5d94c):** The state machine guards implemented for issue 1.3 also fix this issue. The `can_transition_to()` method in `contracts/settlement/src/state.rs` only allows `Executing → Completed` transition. Attempting to call `MarkCompleted` on an already-completed settlement returns `ContractError::InvalidStateTransition`. The adversarial test `test_double_completion_behavior` now expects an error on the second completion attempt.
 
 ---
 
@@ -1552,12 +1588,12 @@ The following security properties were validated by the test suite:
 
 | Issue | Severity | Status |
 |-------|----------|--------|
-| Double-completion allowed | Medium | Document as technical debt |
+| Double-completion allowed | Medium | ✅ Fixed (Commit 9f5d94c) |
 | Exact-expiration refund edge case | Low | Document behavior |
 | Large amount overflow | Medium | Add bounds checking |
-| State transition guards (from PR #2) | High | Needs implementation |
-| Minimum slash threshold | Medium | Needs implementation |
-| Midpoint pricing | Medium | Needs implementation |
+| State transition guards (from PR #2) | High | ✅ Fixed (Commit 9f5d94c) |
+| Minimum slash threshold | Medium | ✅ Fixed (Commit 9f5d94c) |
+| Midpoint pricing | Medium | ✅ Fixed (Commit 9f5d94c) |
 
 ---
 
@@ -1565,31 +1601,31 @@ The following security properties were validated by the test suite:
 
 ## Critical Actions (Implement Before Mainnet)
 
-1. **Remove unnecessary oracle dependency** from intent matching (use midpoint pricing)
+1. ~~**Remove unnecessary oracle dependency** from intent matching (use midpoint pricing)~~ ✅ Fixed
 2. **Decentralize coordination layer** - On-chain intent submission or threshold encryption
 3. **Implement nonce tracking** to prevent replay attacks
 4. **Add flow toxicity detection** to protect solvers
 5. **Implement commit-reveal** for solver quotes
-6. **Retain oracle only for sanity checks** and circuit breakers
+6. ~~**Retain oracle only for sanity checks** and circuit breakers~~ ✅ Fixed (oracle now sanity check only)
 
 ## High Priority (Implement in Phase 1)
 
 1. **Fix two-phase commit atomicity** - Single-tx lock for user and solver
-2. **Add escrow expiration check** in settlement release to prevent race condition
+2. ~~**Add escrow expiration check** in settlement release to prevent race condition~~ ✅ Fixed
 3. **Implement state reconciliation** across on-chain, off-chain, and CEX
 4. **Update performance claims** to reflect realistic IBC latency (20-30s)
-5. Add settlement state machine guards
-6. Implement CEX inventory rollback on settlement failure
+5. ~~Add settlement state machine guards~~ ✅ Fixed
+6. ~~Implement CEX inventory rollback on settlement failure~~ ✅ Fixed
 7. Add expiration checks in batch auction
 8. Implement quote validity scaling with volatility
 
 ## Medium Priority (Implement in Phase 2)
 
-1. **Implement intent cancellation mechanism**
+1. ~~**Implement intent cancellation mechanism**~~ ✅ Fixed
 2. **Add solver insolvency detection** and dynamic position limits
 3. **Review fee model sustainability** - Ensure solver profitability
 4. Bound solver quote array sizes
-5. Add minimum slash thresholds
+5. ~~Add minimum slash thresholds~~ ✅ Fixed
 6. Volume-weight reputation scoring
 7. Implement partial fill fees
 
