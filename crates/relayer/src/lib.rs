@@ -7,7 +7,7 @@ pub mod service;
 // Re-export key types from chain module
 pub use chain::{
     ChainClient as ChainClientTrait, ChainClientPool, ChainError, ClientState, Coin,
-    CosmosChainClient, CosmosMsg, ConsensusState, Height, MerkleProof, TxBuilder, TxResponse,
+    ConsensusState, CosmosChainClient, CosmosMsg, Height, MerkleProof, TxBuilder, TxResponse,
 };
 
 // Re-export from priority module

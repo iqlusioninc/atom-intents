@@ -6,9 +6,7 @@
 /// 3. Build PFM memos for multi-hop transfers
 /// 4. Use routing with IBC flow determination
 use atom_intents_settlement::{
-    RouteRegistry, Route, RouteHop,
-    determine_flow_with_routing, IbcFlowType,
-    build_route_pfm_memo,
+    build_route_pfm_memo, determine_flow_with_routing, IbcFlowType, Route, RouteHop, RouteRegistry,
 };
 
 fn main() {
@@ -59,7 +57,10 @@ fn demonstrate_direct_route(registry: &RouteRegistry) {
             println!("  Route from cosmoshub-4 to osmosis-1:");
             println!("    - Hops: {}", route.hops.len());
             println!("    - Estimated time: {}s", route.estimated_time_seconds);
-            println!("    - Estimated cost: {} gas units", route.estimated_cost_units);
+            println!(
+                "    - Estimated cost: {} gas units",
+                route.estimated_cost_units
+            );
 
             if route.hops.len() == 1 {
                 println!("    - Channel: {}", route.hops[0].channel_id);
@@ -80,13 +81,21 @@ fn demonstrate_multi_hop_route(registry: &RouteRegistry) {
             println!("  Route from neutron-1 to stride-1:");
             println!("    - Hops: {}", route.hops.len());
             println!("    - Estimated time: {}s", route.estimated_time_seconds);
-            println!("    - Estimated cost: {} gas units", route.estimated_cost_units);
+            println!(
+                "    - Estimated cost: {} gas units",
+                route.estimated_cost_units
+            );
 
             if route.hops.len() > 1 {
                 println!("    - Type: Multi-hop PFM transfer");
                 println!("    - Path:");
                 for (i, hop) in route.hops.iter().enumerate() {
-                    println!("      {}. {} (channel: {})", i + 1, hop.chain_id, hop.channel_id);
+                    println!(
+                        "      {}. {} (channel: {})",
+                        i + 1,
+                        hop.chain_id,
+                        hop.channel_id
+                    );
                 }
             } else {
                 println!("    - Type: Direct IBC transfer");
@@ -121,7 +130,10 @@ fn demonstrate_pfm_memo_generation() {
 
     // Pretty print the JSON
     if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&memo) {
-        println!("{}", serde_json::to_string_pretty(&parsed).unwrap_or(memo.clone()));
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&parsed).unwrap_or(memo.clone())
+        );
     } else {
         println!("{}", memo);
     }
@@ -132,7 +144,12 @@ fn demonstrate_flow_determination(registry: &RouteRegistry) {
     let test_cases = vec![
         ("cosmoshub-4", "cosmoshub-4", false, "Same chain transfer"),
         ("cosmoshub-4", "osmosis-1", false, "Direct IBC transfer"),
-        ("cosmoshub-4", "osmosis-1", true, "Direct with swap (IBC Hooks)"),
+        (
+            "cosmoshub-4",
+            "osmosis-1",
+            true,
+            "Direct with swap (IBC Hooks)",
+        ),
         ("neutron-1", "stride-1", false, "Multi-hop or direct"),
     ];
 
@@ -153,7 +170,12 @@ fn demonstrate_flow_determination(registry: &RouteRegistry) {
                 println!("    Flow: Multi-hop PFM");
                 println!("    Number of hops: {}", hops.len());
                 for (i, hop) in hops.iter().enumerate() {
-                    println!("      Hop {}: {} via channel {}", i + 1, hop.receiver, hop.channel);
+                    println!(
+                        "      Hop {}: {} via channel {}",
+                        i + 1,
+                        hop.receiver,
+                        hop.channel
+                    );
                 }
             }
             IbcFlowType::IbcHooksWasm { contract, .. } => {
@@ -200,8 +222,14 @@ fn demonstrate_route_metrics(registry: &RouteRegistry) {
             let calculated_cost = RouteRegistry::calculate_route_cost(&route);
             let calculated_time = RouteRegistry::calculate_route_time(&route);
 
-            println!("    Estimated time: {}s (calculated: {}s)", route.estimated_time_seconds, calculated_time);
-            println!("    Estimated cost: {} gas units (calculated: {})", route.estimated_cost_units, calculated_cost);
+            println!(
+                "    Estimated time: {}s (calculated: {}s)",
+                route.estimated_time_seconds, calculated_time
+            );
+            println!(
+                "    Estimated cost: {} gas units (calculated: {})",
+                route.estimated_cost_units, calculated_cost
+            );
 
             // Cost per second metric
             if route.estimated_time_seconds > 0 {
@@ -235,15 +263,23 @@ fn print_route_summary(route: &Route) {
 #[allow(dead_code)]
 fn compare_routes(route1: &Route, route2: &Route) {
     println!("Comparing routes:");
-    println!("\n  Route 1: {} -> {}", route1.source_chain, route1.dest_chain);
-    println!("    Time: {}s, Cost: {}, Hops: {}",
+    println!(
+        "\n  Route 1: {} -> {}",
+        route1.source_chain, route1.dest_chain
+    );
+    println!(
+        "    Time: {}s, Cost: {}, Hops: {}",
         route1.estimated_time_seconds,
         route1.estimated_cost_units,
         route1.hops.len()
     );
 
-    println!("\n  Route 2: {} -> {}", route2.source_chain, route2.dest_chain);
-    println!("    Time: {}s, Cost: {}, Hops: {}",
+    println!(
+        "\n  Route 2: {} -> {}",
+        route2.source_chain, route2.dest_chain
+    );
+    println!(
+        "    Time: {}s, Cost: {}, Hops: {}",
         route2.estimated_time_seconds,
         route2.estimated_cost_units,
         route2.hops.len()
@@ -251,17 +287,29 @@ fn compare_routes(route1: &Route, route2: &Route) {
 
     println!("\n  Comparison:");
     if route1.estimated_time_seconds < route2.estimated_time_seconds {
-        println!("    Route 1 is faster by {}s", route2.estimated_time_seconds - route1.estimated_time_seconds);
+        println!(
+            "    Route 1 is faster by {}s",
+            route2.estimated_time_seconds - route1.estimated_time_seconds
+        );
     } else if route2.estimated_time_seconds < route1.estimated_time_seconds {
-        println!("    Route 2 is faster by {}s", route1.estimated_time_seconds - route2.estimated_time_seconds);
+        println!(
+            "    Route 2 is faster by {}s",
+            route1.estimated_time_seconds - route2.estimated_time_seconds
+        );
     } else {
         println!("    Routes have equal time");
     }
 
     if route1.estimated_cost_units < route2.estimated_cost_units {
-        println!("    Route 1 is cheaper by {} gas units", route2.estimated_cost_units - route1.estimated_cost_units);
+        println!(
+            "    Route 1 is cheaper by {} gas units",
+            route2.estimated_cost_units - route1.estimated_cost_units
+        );
     } else if route2.estimated_cost_units < route1.estimated_cost_units {
-        println!("    Route 2 is cheaper by {} gas units", route1.estimated_cost_units - route2.estimated_cost_units);
+        println!(
+            "    Route 2 is cheaper by {} gas units",
+            route1.estimated_cost_units - route2.estimated_cost_units
+        );
     } else {
         println!("    Routes have equal cost");
     }

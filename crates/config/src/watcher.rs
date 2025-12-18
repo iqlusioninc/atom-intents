@@ -37,10 +37,7 @@ impl ConfigWatcher {
     ///
     /// This acquires a read lock on the config
     pub fn get_config(&self) -> AppConfig {
-        self.config
-            .read()
-            .expect("Config lock poisoned")
-            .clone()
+        self.config.read().expect("Config lock poisoned").clone()
     }
 
     /// Start watching the config file for changes
@@ -55,19 +52,17 @@ impl ConfigWatcher {
 
         // Set up the file watcher
         let mut watcher = RecommendedWatcher::new(
-            move |res: notify::Result<Event>| {
-                match res {
-                    Ok(event) => {
-                        if let Err(e) = tx.blocking_send(event) {
-                            error!("Failed to send file event: {}", e);
-                        }
+            move |res: notify::Result<Event>| match res {
+                Ok(event) => {
+                    if let Err(e) = tx.blocking_send(event) {
+                        error!("Failed to send file event: {}", e);
                     }
-                    Err(e) => error!("File watch error: {}", e),
                 }
+                Err(e) => error!("File watch error: {}", e),
             },
-            notify::Config::default()
-                .with_poll_interval(Duration::from_secs(2))
-        ).map_err(|e| ConfigError::WatchError(e.to_string()))?;
+            notify::Config::default().with_poll_interval(Duration::from_secs(2)),
+        )
+        .map_err(|e| ConfigError::WatchError(e.to_string()))?;
 
         // Watch the config file
         watcher
@@ -87,17 +82,15 @@ impl ConfigWatcher {
                     debug!("Config file modified, reloading...");
 
                     match ConfigLoader::from_file(&path) {
-                        Ok(new_config) => {
-                            match config.write() {
-                                Ok(mut guard) => {
-                                    *guard = new_config;
-                                    info!("Config reloaded successfully");
-                                }
-                                Err(e) => {
-                                    error!("Failed to acquire write lock for config reload: {}", e);
-                                }
+                        Ok(new_config) => match config.write() {
+                            Ok(mut guard) => {
+                                *guard = new_config;
+                                info!("Config reloaded successfully");
                             }
-                        }
+                            Err(e) => {
+                                error!("Failed to acquire write lock for config reload: {}", e);
+                            }
+                        },
                         Err(e) => {
                             warn!("Failed to reload config: {}. Keeping old config.", e);
                         }
@@ -154,10 +147,7 @@ fee_recipient = "cosmos1fee"
 [chains]
         "#;
 
-        let mut file = tempfile::Builder::new()
-            .suffix(".toml")
-            .tempfile()
-            .unwrap();
+        let mut file = tempfile::Builder::new().suffix(".toml").tempfile().unwrap();
         file.write_all(toml.as_bytes()).unwrap();
         file.flush().unwrap();
 
@@ -195,10 +185,7 @@ fee_recipient = "cosmos1fee"
         "#;
 
         // Create a persistent temp file
-        let mut file = tempfile::Builder::new()
-            .suffix(".toml")
-            .tempfile()
-            .unwrap();
+        let mut file = tempfile::Builder::new().suffix(".toml").tempfile().unwrap();
         file.write_all(initial_toml.as_bytes()).unwrap();
         file.flush().unwrap();
 
@@ -275,10 +262,7 @@ fee_recipient = "cosmos1fee"
 [chains]
         "#;
 
-        let mut file = tempfile::Builder::new()
-            .suffix(".toml")
-            .tempfile()
-            .unwrap();
+        let mut file = tempfile::Builder::new().suffix(".toml").tempfile().unwrap();
         file.write_all(initial_toml.as_bytes()).unwrap();
         file.flush().unwrap();
 

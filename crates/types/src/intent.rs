@@ -1,8 +1,10 @@
 use cosmwasm_schema::cw_serde;
 use cosmwasm_std::Binary;
-use sha2::{Sha256, Digest};
+use sha2::{Digest, Sha256};
 
-use crate::{Asset, ExecutionConstraints, FillConfig, OutputSpec, Side, TradingPair, PROTOCOL_VERSION};
+use crate::{
+    Asset, ExecutionConstraints, FillConfig, OutputSpec, Side, TradingPair, PROTOCOL_VERSION,
+};
 
 /// A user's expression of desired trade outcome
 #[cw_serde]
@@ -10,7 +12,6 @@ pub struct Intent {
     // ═══════════════════════════════════════════════════════════════════════════
     // IDENTIFICATION
     // ═══════════════════════════════════════════════════════════════════════════
-
     /// Unique identifier (hash of contents + nonce)
     pub id: String,
 
@@ -23,14 +24,12 @@ pub struct Intent {
     // ═══════════════════════════════════════════════════════════════════════════
     // USER IDENTITY
     // ═══════════════════════════════════════════════════════════════════════════
-
     /// User's address on source chain
     pub user: String,
 
     // ═══════════════════════════════════════════════════════════════════════════
     // TRADE SPECIFICATION
     // ═══════════════════════════════════════════════════════════════════════════
-
     /// What the user is offering
     pub input: Asset,
 
@@ -40,7 +39,6 @@ pub struct Intent {
     // ═══════════════════════════════════════════════════════════════════════════
     // EXECUTION CONFIGURATION
     // ═══════════════════════════════════════════════════════════════════════════
-
     /// Partial fill settings
     pub fill_config: FillConfig,
 
@@ -50,7 +48,6 @@ pub struct Intent {
     // ═══════════════════════════════════════════════════════════════════════════
     // AUTHENTICATION
     // ═══════════════════════════════════════════════════════════════════════════
-
     /// Signature over canonical intent hash
     pub signature: Binary,
 
@@ -60,7 +57,6 @@ pub struct Intent {
     // ═══════════════════════════════════════════════════════════════════════════
     // METADATA
     // ═══════════════════════════════════════════════════════════════════════════
-
     pub created_at: u64,
     pub expires_at: u64,
 }
@@ -246,11 +242,17 @@ impl IntentBuilder {
     }
 
     /// Build the intent (unsigned)
-    pub fn build(self, created_at: u64, expires_at: u64) -> Result<UnsignedIntent, IntentBuildError> {
+    pub fn build(
+        self,
+        created_at: u64,
+        expires_at: u64,
+    ) -> Result<UnsignedIntent, IntentBuildError> {
         let user = self.user.ok_or(IntentBuildError::MissingUser)?;
         let input = self.input.ok_or(IntentBuildError::MissingInput)?;
         let output = self.output.ok_or(IntentBuildError::MissingOutput)?;
-        let constraints = self.constraints.ok_or(IntentBuildError::MissingConstraints)?;
+        let constraints = self
+            .constraints
+            .ok_or(IntentBuildError::MissingConstraints)?;
 
         Ok(UnsignedIntent {
             version: PROTOCOL_VERSION.to_string(),
@@ -267,6 +269,7 @@ impl IntentBuilder {
 }
 
 /// An intent without signature (ready to sign)
+#[derive(Clone)]
 pub struct UnsignedIntent {
     pub version: String,
     pub nonce: u64,
@@ -383,8 +386,11 @@ impl UnsignedIntent {
     /// let private_key = [0x42; 32];
     /// let signed = unsigned.sign_with_key(&private_key)?;
     /// ```
-    pub fn sign_with_key(self, private_key: &[u8]) -> Result<Intent, crate::verification::VerificationError> {
-        use crate::verification::{sign_message, derive_public_key};
+    pub fn sign_with_key(
+        self,
+        private_key: &[u8],
+    ) -> Result<Intent, crate::verification::VerificationError> {
+        use crate::verification::{derive_public_key, sign_message};
 
         // Get the message to sign
         let message = self.signing_bytes();

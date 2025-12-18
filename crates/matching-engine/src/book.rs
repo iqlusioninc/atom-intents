@@ -1,4 +1,4 @@
-use atom_intents_types::{FillConfig, FillSource, Fill, Intent, MatchResult, Side, TradingPair};
+use atom_intents_types::{Fill, FillConfig, FillSource, Intent, MatchResult, Side, TradingPair};
 use cosmwasm_std::Uint128;
 use rust_decimal::Decimal;
 use std::collections::{BTreeMap, VecDeque};
@@ -70,7 +70,11 @@ impl OrderBook {
     }
 
     /// Process an incoming intent
-    pub fn process_intent(&mut self, intent: &Intent, current_time: u64) -> Result<MatchResult, MatchingError> {
+    pub fn process_intent(
+        &mut self,
+        intent: &Intent,
+        current_time: u64,
+    ) -> Result<MatchResult, MatchingError> {
         let side = self.determine_side(intent);
         let raw_price = Decimal::from_str(&intent.output.limit_price)
             .map_err(|e| MatchingError::InvalidPrice(e.to_string()))?;
@@ -141,14 +145,16 @@ impl OrderBook {
                     let (taker_consumed, maker_consumed, fill_input, fill_output) = match side {
                         Side::Buy => {
                             // Taker gives USDC, gets ATOM
-                            let taker_usdc = Self::base_to_quote(match_amount_base, price_level.price);
+                            let taker_usdc =
+                                Self::base_to_quote(match_amount_base, price_level.price);
                             let maker_atom = match_amount_base;
                             (taker_usdc, maker_atom, taker_usdc, match_amount_base)
                         }
                         Side::Sell => {
                             // Taker gives ATOM, gets USDC
                             let taker_atom = match_amount_base;
-                            let maker_usdc = Self::base_to_quote(match_amount_base, price_level.price);
+                            let maker_usdc =
+                                Self::base_to_quote(match_amount_base, price_level.price);
                             (taker_atom, maker_usdc, match_amount_base, maker_usdc)
                         }
                     };
@@ -360,7 +366,16 @@ mod tests {
         min_output: u128,
         limit_price: &str,
     ) -> Intent {
-        make_test_intent_with_partial(id, user, input_denom, input_amount, output_denom, min_output, limit_price, true)
+        make_test_intent_with_partial(
+            id,
+            user,
+            input_denom,
+            input_amount,
+            output_denom,
+            min_output,
+            limit_price,
+            true,
+        )
     }
 
     fn make_test_intent_with_partial(
@@ -424,13 +439,7 @@ mod tests {
 
         // Sell 1000 ATOM at price 10.0 (expect 10000 USDC)
         let sell_intent = make_test_intent(
-            "sell-1",
-            "seller",
-            "uatom",
-            1_000_000,
-            "uusdc",
-            10_000_000,
-            "10.0",
+            "sell-1", "seller", "uatom", 1_000_000, "uusdc", 10_000_000, "10.0",
         );
         let result = book.process_intent(&sell_intent, 0).unwrap();
 
@@ -452,12 +461,7 @@ mod tests {
         // Buy ATOM with 10000 USDC, willing to pay up to 10 USDC/ATOM
         // limit_price "0.1" ATOM/USDC inverts to 10.0 USDC/ATOM
         let buy_intent = make_test_intent(
-            "buy-1",
-            "buyer",
-            "uusdc",
-            10_000_000,
-            "uatom",
-            1_000_000,
+            "buy-1", "buyer", "uusdc", 10_000_000, "uatom", 1_000_000,
             "0.1", // 0.1 ATOM/USDC = willing to pay 10 USDC/ATOM
         );
         let result = book.process_intent(&buy_intent, 0).unwrap();
@@ -480,12 +484,7 @@ mod tests {
 
         // Add a sell order at 10.0 USDC/ATOM
         let sell_intent = make_test_intent(
-            "sell-1",
-            "seller",
-            "uatom",
-            1_000_000,
-            "uusdc",
-            10_000_000,
+            "sell-1", "seller", "uatom", 1_000_000, "uusdc", 10_000_000,
             "10.0", // Want at least 10.0 USDC per ATOM
         );
         book.process_intent(&sell_intent, 0).unwrap();
@@ -493,12 +492,7 @@ mod tests {
         // Add a buy order willing to pay up to ~10.5 USDC/ATOM
         // limit_price for buy is ATOM/USDC, so 1/10.5 ≈ 0.095
         let buy_intent = make_test_intent(
-            "buy-1",
-            "buyer",
-            "uusdc",
-            10_500_000,
-            "uatom",
-            1_000_000,
+            "buy-1", "buyer", "uusdc", 10_500_000, "uatom", 1_000_000,
             "0.095", // Expect at least 0.095 ATOM per USDC = willing to pay ~10.5 USDC/ATOM
         );
         let result = book.process_intent(&buy_intent, 1).unwrap();
@@ -509,7 +503,7 @@ mod tests {
         // Buyer spent 10M USDC to get 1M ATOM at price 10.0
         assert_eq!(fill.input_amount, Uint128::new(10_000_000)); // USDC spent
         assert_eq!(fill.output_amount, Uint128::new(1_000_000)); // ATOM received
-        // Executed at maker's price (10.0)
+                                                                 // Executed at maker's price (10.0)
         assert_eq!(fill.price, "10.0");
 
         // Verify counterparty
@@ -530,24 +524,13 @@ mod tests {
 
         // Add a sell at 11.0 USDC/ATOM
         let sell_intent = make_test_intent(
-            "sell-1",
-            "seller",
-            "uatom",
-            1_000_000,
-            "uusdc",
-            11_000_000,
-            "11.0",
+            "sell-1", "seller", "uatom", 1_000_000, "uusdc", 11_000_000, "11.0",
         );
         book.process_intent(&sell_intent, 0).unwrap();
 
         // Add a buy willing to pay only 10.0 USDC/ATOM (1/10.0 = 0.1 ATOM/USDC)
         let buy_intent = make_test_intent(
-            "buy-1",
-            "buyer",
-            "uusdc",
-            10_000_000,
-            "uatom",
-            1_000_000,
+            "buy-1", "buyer", "uusdc", 10_000_000, "uatom", 1_000_000,
             "0.1", // 0.1 ATOM/USDC = 10 USDC/ATOM max
         );
         let result = book.process_intent(&buy_intent, 1).unwrap();
@@ -579,13 +562,8 @@ mod tests {
 
         // Add a smaller buy order at 10.0 USDC/ATOM (0.1 ATOM/USDC)
         let buy_intent = make_test_intent(
-            "buy-1",
-            "buyer",
-            "uusdc",
-            30_000_000, // 30 USDC = 3 ATOM worth at 10.0
-            "uatom",
-            3_000_000,
-            "0.1", // 0.1 ATOM/USDC = 10 USDC/ATOM
+            "buy-1", "buyer", "uusdc", 30_000_000, // 30 USDC = 3 ATOM worth at 10.0
+            "uatom", 3_000_000, "0.1", // 0.1 ATOM/USDC = 10 USDC/ATOM
         );
         let result = book.process_intent(&buy_intent, 1).unwrap();
 
@@ -606,9 +584,21 @@ mod tests {
         let mut book = OrderBook::new(pair);
 
         // Add sells at different prices (worst to best)
-        let sell_high = make_test_intent("sell-high", "seller1", "uatom", 1_000_000, "uusdc", 11_000_000, "11.0");
-        let sell_low = make_test_intent("sell-low", "seller2", "uatom", 1_000_000, "uusdc", 9_000_000, "9.0");
-        let sell_mid = make_test_intent("sell-mid", "seller3", "uatom", 1_000_000, "uusdc", 10_000_000, "10.0");
+        let sell_high = make_test_intent(
+            "sell-high",
+            "seller1",
+            "uatom",
+            1_000_000,
+            "uusdc",
+            11_000_000,
+            "11.0",
+        );
+        let sell_low = make_test_intent(
+            "sell-low", "seller2", "uatom", 1_000_000, "uusdc", 9_000_000, "9.0",
+        );
+        let sell_mid = make_test_intent(
+            "sell-mid", "seller3", "uatom", 1_000_000, "uusdc", 10_000_000, "10.0",
+        );
 
         book.process_intent(&sell_high, 0).unwrap();
         book.process_intent(&sell_low, 1).unwrap();
@@ -619,13 +609,8 @@ mod tests {
 
         // Buy order that can fill 2 orders, willing to pay up to 10.5 (0.095 ATOM/USDC)
         let buy_intent = make_test_intent(
-            "buy-1",
-            "buyer",
-            "uusdc",
-            20_000_000, // Enough for 2 ATOM at ~10.0
-            "uatom",
-            2_000_000,
-            "0.095", // ~10.5 USDC/ATOM max
+            "buy-1", "buyer", "uusdc", 20_000_000, // Enough for 2 ATOM at ~10.0
+            "uatom", 2_000_000, "0.095", // ~10.5 USDC/ATOM max
         );
         let result = book.process_intent(&buy_intent, 3).unwrap();
 
@@ -646,9 +631,33 @@ mod tests {
         let mut book = OrderBook::new(pair);
 
         // Add multiple sells at the same price
-        let sell1 = make_test_intent("sell-first", "seller1", "uatom", 1_000_000, "uusdc", 10_000_000, "10.0");
-        let sell2 = make_test_intent("sell-second", "seller2", "uatom", 1_000_000, "uusdc", 10_000_000, "10.0");
-        let sell3 = make_test_intent("sell-third", "seller3", "uatom", 1_000_000, "uusdc", 10_000_000, "10.0");
+        let sell1 = make_test_intent(
+            "sell-first",
+            "seller1",
+            "uatom",
+            1_000_000,
+            "uusdc",
+            10_000_000,
+            "10.0",
+        );
+        let sell2 = make_test_intent(
+            "sell-second",
+            "seller2",
+            "uatom",
+            1_000_000,
+            "uusdc",
+            10_000_000,
+            "10.0",
+        );
+        let sell3 = make_test_intent(
+            "sell-third",
+            "seller3",
+            "uatom",
+            1_000_000,
+            "uusdc",
+            10_000_000,
+            "10.0",
+        );
 
         book.process_intent(&sell1, 0).unwrap();
         book.process_intent(&sell2, 1).unwrap();
@@ -656,13 +665,7 @@ mod tests {
 
         // Buy enough for 2 orders at 10 USDC/ATOM (0.1 ATOM/USDC)
         let buy_intent = make_test_intent(
-            "buy-1",
-            "buyer",
-            "uusdc",
-            20_000_000,
-            "uatom",
-            2_000_000,
-            "0.1", // 10 USDC/ATOM
+            "buy-1", "buyer", "uusdc", 20_000_000, "uatom", 2_000_000, "0.1", // 10 USDC/ATOM
         );
         let result = book.process_intent(&buy_intent, 3).unwrap();
 
@@ -727,14 +730,8 @@ mod tests {
 
         // Add an all-or-nothing sell order
         let sell_aon = make_test_intent_with_partial(
-            "sell-aon",
-            "seller",
-            "uatom",
-            5_000_000, // 5 ATOM
-            "uusdc",
-            50_000_000,
-            "10.0",
-            false, // all-or-nothing
+            "sell-aon", "seller", "uatom", 5_000_000, // 5 ATOM
+            "uusdc", 50_000_000, "10.0", false, // all-or-nothing
         );
         book.process_intent(&sell_aon, 0).unwrap();
 
@@ -767,9 +764,13 @@ mod tests {
         let mut book = OrderBook::new(pair);
 
         // Sell at 10.5 USDC/ATOM
-        let sell = make_test_intent("sell-1", "seller", "uatom", 1_000_000, "uusdc", 10_500_000, "10.5");
+        let sell = make_test_intent(
+            "sell-1", "seller", "uatom", 1_000_000, "uusdc", 10_500_000, "10.5",
+        );
         // Buy at 10.0 USDC/ATOM (0.1 ATOM/USDC)
-        let buy = make_test_intent("buy-1", "buyer", "uusdc", 10_000_000, "uatom", 1_000_000, "0.1");
+        let buy = make_test_intent(
+            "buy-1", "buyer", "uusdc", 10_000_000, "uatom", 1_000_000, "0.1",
+        );
 
         book.process_intent(&sell, 0).unwrap();
         book.process_intent(&buy, 1).unwrap();
@@ -786,8 +787,12 @@ mod tests {
         let mut book = OrderBook::new(pair);
 
         // Add multiple sells at different prices
-        let sell1 = make_test_intent("sell-1", "seller1", "uatom", 1_000_000, "uusdc", 10_000_000, "10.0");
-        let sell2 = make_test_intent("sell-2", "seller2", "uatom", 2_000_000, "uusdc", 22_000_000, "11.0");
+        let sell1 = make_test_intent(
+            "sell-1", "seller1", "uatom", 1_000_000, "uusdc", 10_000_000, "10.0",
+        );
+        let sell2 = make_test_intent(
+            "sell-2", "seller2", "uatom", 2_000_000, "uusdc", 22_000_000, "11.0",
+        );
 
         book.process_intent(&sell1, 0).unwrap();
         book.process_intent(&sell2, 1).unwrap();
@@ -796,9 +801,13 @@ mod tests {
 
         // Add buys at prices below sells (so no match)
         // Buy at 9 USDC/ATOM (1/9 ≈ 0.111 ATOM/USDC)
-        let buy1 = make_test_intent("buy-1", "buyer1", "uusdc", 9_000_000, "uatom", 1_000_000, "0.111");
+        let buy1 = make_test_intent(
+            "buy-1", "buyer1", "uusdc", 9_000_000, "uatom", 1_000_000, "0.111",
+        );
         // Buy at 8 USDC/ATOM (0.125 ATOM/USDC)
-        let buy2 = make_test_intent("buy-2", "buyer2", "uusdc", 8_000_000, "uatom", 1_000_000, "0.125");
+        let buy2 = make_test_intent(
+            "buy-2", "buyer2", "uusdc", 8_000_000, "uatom", 1_000_000, "0.125",
+        );
 
         book.process_intent(&buy1, 2).unwrap();
         book.process_intent(&buy2, 3).unwrap();
@@ -813,7 +822,9 @@ mod tests {
         let pair = TradingPair::new("uatom", "uusdc");
         let mut book = OrderBook::new(pair);
 
-        let sell = make_test_intent("sell-1", "seller", "uatom", 1_000_000, "uusdc", 10_000_000, "10.0");
+        let sell = make_test_intent(
+            "sell-1", "seller", "uatom", 1_000_000, "uusdc", 10_000_000, "10.0",
+        );
         book.process_intent(&sell, 0).unwrap();
 
         assert_eq!(book.ask_depth(), Uint128::new(1_000_000));
@@ -845,9 +856,15 @@ mod tests {
         let mut book = OrderBook::new(pair);
 
         // Add sells at three price levels
-        let sell1 = make_test_intent("sell-1", "s1", "uatom", 1_000_000, "uusdc", 10_000_000, "10.0");
-        let sell2 = make_test_intent("sell-2", "s2", "uatom", 1_000_000, "uusdc", 10_500_000, "10.5");
-        let sell3 = make_test_intent("sell-3", "s3", "uatom", 1_000_000, "uusdc", 11_000_000, "11.0");
+        let sell1 = make_test_intent(
+            "sell-1", "s1", "uatom", 1_000_000, "uusdc", 10_000_000, "10.0",
+        );
+        let sell2 = make_test_intent(
+            "sell-2", "s2", "uatom", 1_000_000, "uusdc", 10_500_000, "10.5",
+        );
+        let sell3 = make_test_intent(
+            "sell-3", "s3", "uatom", 1_000_000, "uusdc", 11_000_000, "11.0",
+        );
 
         book.process_intent(&sell1, 0).unwrap();
         book.process_intent(&sell2, 1).unwrap();
@@ -884,11 +901,15 @@ mod tests {
         let pair = TradingPair::new("uatom", "uusdc");
         let mut book = OrderBook::new(pair);
 
-        let sell = make_test_intent("sell-1", "seller", "uatom", 1_000_000, "uusdc", 10_000_000, "10.0");
+        let sell = make_test_intent(
+            "sell-1", "seller", "uatom", 1_000_000, "uusdc", 10_000_000, "10.0",
+        );
         book.process_intent(&sell, 0).unwrap();
 
         // Buy at exactly 10.0 USDC/ATOM (0.1 ATOM/USDC)
-        let buy = make_test_intent("buy-1", "buyer", "uusdc", 10_000_000, "uatom", 1_000_000, "0.1");
+        let buy = make_test_intent(
+            "buy-1", "buyer", "uusdc", 10_000_000, "uatom", 1_000_000, "0.1",
+        );
         let result = book.process_intent(&buy, 1).unwrap();
 
         // Buyer spends 10M USDC to get 1M ATOM
@@ -917,6 +938,9 @@ mod tests {
 
         let result = book.process_intent(&invalid_intent, 0);
         assert!(result.is_err());
-        assert!(matches!(result.unwrap_err(), MatchingError::InvalidPrice(_)));
+        assert!(matches!(
+            result.unwrap_err(),
+            MatchingError::InvalidPrice(_)
+        ));
     }
 }

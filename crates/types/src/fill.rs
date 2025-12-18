@@ -26,7 +26,7 @@ impl Default for FillConfig {
             allow_partial: true,
             min_fill_amount: Uint128::zero(),
             min_fill_pct: "0.1".to_string(), // 10%
-            aggregation_window_ms: 5000,      // 5 seconds
+            aggregation_window_ms: 5000,     // 5 seconds
             strategy: FillStrategy::Eager,
         }
     }

@@ -84,9 +84,7 @@ pub enum MetricsHandlerError {
 impl IntoResponse for MetricsHandlerError {
     fn into_response(self) -> Response {
         let (status, message) = match self {
-            MetricsHandlerError::ExportError(msg) => {
-                (StatusCode::INTERNAL_SERVER_ERROR, msg)
-            }
+            MetricsHandlerError::ExportError(msg) => (StatusCode::INTERNAL_SERVER_ERROR, msg),
         };
 
         (status, message).into_response()

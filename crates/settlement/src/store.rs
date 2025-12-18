@@ -61,10 +61,13 @@ impl SettlementRecord {
 
     /// Check if settlement is stuck (past timeout and not complete)
     pub fn is_stuck(&self, current_time: u64) -> bool {
-        current_time > self.expires_at && !matches!(
-            self.status,
-            SettlementStatus::Complete | SettlementStatus::Failed { .. } | SettlementStatus::TimedOut
-        )
+        current_time > self.expires_at
+            && !matches!(
+                self.status,
+                SettlementStatus::Complete
+                    | SettlementStatus::Failed { .. }
+                    | SettlementStatus::TimedOut
+            )
     }
 }
 
@@ -79,11 +82,7 @@ pub struct StateTransition {
 }
 
 impl StateTransition {
-    pub fn new(
-        from_status: SettlementStatus,
-        to_status: SettlementStatus,
-        timestamp: u64,
-    ) -> Self {
+    pub fn new(from_status: SettlementStatus, to_status: SettlementStatus, timestamp: u64) -> Self {
         Self {
             from_status,
             to_status,
@@ -161,7 +160,8 @@ pub trait SettlementStore: Send + Sync {
     ) -> Result<Vec<SettlementRecord>, StoreError>;
 
     /// List settlements needing recovery (past timeout)
-    async fn list_stuck(&self, timeout_threshold: u64) -> Result<Vec<SettlementRecord>, StoreError>;
+    async fn list_stuck(&self, timeout_threshold: u64)
+        -> Result<Vec<SettlementRecord>, StoreError>;
 
     /// List settlements by solver
     async fn list_by_solver(
@@ -171,7 +171,11 @@ pub trait SettlementStore: Send + Sync {
     ) -> Result<Vec<SettlementRecord>, StoreError>;
 
     /// Record a state transition
-    async fn record_transition(&self, id: &str, transition: StateTransition) -> Result<(), StoreError>;
+    async fn record_transition(
+        &self,
+        id: &str,
+        transition: StateTransition,
+    ) -> Result<(), StoreError>;
 
     /// Get transition history for a settlement
     async fn get_history(&self, id: &str) -> Result<Vec<StateTransition>, StoreError>;
@@ -311,7 +315,10 @@ impl SettlementStore for InMemoryStore {
         Ok(results)
     }
 
-    async fn list_stuck(&self, timeout_threshold: u64) -> Result<Vec<SettlementRecord>, StoreError> {
+    async fn list_stuck(
+        &self,
+        timeout_threshold: u64,
+    ) -> Result<Vec<SettlementRecord>, StoreError> {
         let settlements = self.settlements.read().unwrap();
         Ok(settlements
             .values()
@@ -337,7 +344,11 @@ impl SettlementStore for InMemoryStore {
         Ok(results)
     }
 
-    async fn record_transition(&self, id: &str, transition: StateTransition) -> Result<(), StoreError> {
+    async fn record_transition(
+        &self,
+        id: &str,
+        transition: StateTransition,
+    ) -> Result<(), StoreError> {
         // Verify settlement exists
         if !self.settlements.read().unwrap().contains_key(id) {
             return Err(StoreError::NotFound(id.to_string()));
@@ -413,7 +424,11 @@ mod tests {
 
         store.create(&settlement).await.unwrap();
         store
-            .update_status("settlement-1", SettlementStatus::UserLocked, Some("Locked funds".to_string()))
+            .update_status(
+                "settlement-1",
+                SettlementStatus::UserLocked,
+                Some("Locked funds".to_string()),
+            )
             .await
             .unwrap();
 
@@ -459,10 +474,16 @@ mod tests {
         store.create(&s2).await.unwrap();
         store.create(&s3).await.unwrap();
 
-        let pending = store.list_by_status(SettlementStatus::Pending, 10).await.unwrap();
+        let pending = store
+            .list_by_status(SettlementStatus::Pending, 10)
+            .await
+            .unwrap();
         assert_eq!(pending.len(), 2);
 
-        let complete = store.list_by_status(SettlementStatus::Complete, 10).await.unwrap();
+        let complete = store
+            .list_by_status(SettlementStatus::Complete, 10)
+            .await
+            .unwrap();
         assert_eq!(complete.len(), 1);
     }
 
@@ -522,11 +543,7 @@ mod tests {
 
         store.create(&settlement).await.unwrap();
 
-        let t1 = StateTransition::new(
-            SettlementStatus::Pending,
-            SettlementStatus::UserLocked,
-            200,
-        );
+        let t1 = StateTransition::new(SettlementStatus::Pending, SettlementStatus::UserLocked, 200);
         store.record_transition("settlement-1", t1).await.unwrap();
 
         let t2 = StateTransition::new(

@@ -1,6 +1,6 @@
-use std::collections::{HashMap, HashSet, VecDeque};
-use serde::{Deserialize, Serialize};
 use crate::{ChannelRegistry, PfmHop};
+use serde::{Deserialize, Serialize};
+use std::collections::{HashMap, HashSet, VecDeque};
 
 /// Route registry for finding multi-hop paths between chains
 #[derive(Clone, Debug)]
@@ -215,7 +215,8 @@ impl RouteRegistry {
         let key = (source_chain.to_string(), dest_chain.to_string());
         if let Some(routes) = self.routes.get(&key) {
             // Return the route with lowest estimated time
-            return routes.iter()
+            return routes
+                .iter()
                 .min_by_key(|r| r.estimated_time_seconds)
                 .cloned();
         }
@@ -386,17 +387,21 @@ pub fn build_pfm_memo(hops: &[RouteHop], final_receiver: &str) -> String {
 
 /// Convert RouteHops to PfmHops for compatibility with existing code
 pub fn route_hops_to_pfm_hops(route_hops: &[RouteHop], final_receiver: &str) -> Vec<PfmHop> {
-    route_hops.iter().enumerate().map(|(i, hop)| {
-        PfmHop {
-            receiver: if i == route_hops.len() - 1 {
-                final_receiver.to_string()
-            } else {
-                // Intermediate hops use the next chain's address
-                hop.chain_id.clone()
-            },
-            channel: hop.channel_id.clone(),
-        }
-    }).collect()
+    route_hops
+        .iter()
+        .enumerate()
+        .map(|(i, hop)| {
+            PfmHop {
+                receiver: if i == route_hops.len() - 1 {
+                    final_receiver.to_string()
+                } else {
+                    // Intermediate hops use the next chain's address
+                    hop.chain_id.clone()
+                },
+                channel: hop.channel_id.clone(),
+            }
+        })
+        .collect()
 }
 
 #[cfg(test)]
@@ -524,13 +529,11 @@ mod tests {
 
     #[test]
     fn test_build_pfm_memo_single_hop() {
-        let hops = vec![
-            RouteHop {
-                chain_id: "osmosis-1".to_string(),
-                channel_id: "channel-141".to_string(),
-                port_id: "transfer".to_string(),
-            },
-        ];
+        let hops = vec![RouteHop {
+            chain_id: "osmosis-1".to_string(),
+            channel_id: "channel-141".to_string(),
+            port_id: "transfer".to_string(),
+        }];
 
         let memo = build_pfm_memo(&hops, "osmo1receiver");
         let parsed: serde_json::Value = serde_json::from_str(&memo).unwrap();
@@ -564,7 +567,10 @@ mod tests {
         assert_eq!(parsed["forward"]["port"], "transfer");
 
         // Second hop should forward to final receiver
-        assert_eq!(parsed["forward"]["next"]["forward"]["receiver"], "osmo1finalreceiver");
+        assert_eq!(
+            parsed["forward"]["next"]["forward"]["receiver"],
+            "osmo1finalreceiver"
+        );
         assert_eq!(parsed["forward"]["next"]["forward"]["channel"], "channel-5");
         assert_eq!(parsed["forward"]["next"]["forward"]["port"], "transfer");
     }
@@ -639,13 +645,11 @@ mod tests {
         let custom_route = Route {
             source_chain: "custom-chain-1".to_string(),
             dest_chain: "custom-chain-2".to_string(),
-            hops: vec![
-                RouteHop {
-                    chain_id: "custom-chain-2".to_string(),
-                    channel_id: "channel-999".to_string(),
-                    port_id: "transfer".to_string(),
-                },
-            ],
+            hops: vec![RouteHop {
+                chain_id: "custom-chain-2".to_string(),
+                channel_id: "channel-999".to_string(),
+                port_id: "transfer".to_string(),
+            }],
             estimated_time_seconds: 6,
             estimated_cost_units: 50000,
         };

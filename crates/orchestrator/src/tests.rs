@@ -4,15 +4,22 @@
 #[cfg(test)]
 mod unit_tests {
     use crate::{
-        BatchResult, ExecutionResult, ExecutionStage, IntentStatus, OrchestratorConfig,
-        ValidationError, IntentValidator,
+        BatchResult, ExecutionResult, ExecutionStage, IntentStatus, IntentValidator,
+        OrchestratorConfig, ValidationError,
     };
-    use atom_intents_types::{Asset, ExecutionConstraints, FillConfig, FillStrategy, Intent, OutputSpec, TradingPair};
+    use atom_intents_types::{
+        Asset, ExecutionConstraints, FillConfig, FillStrategy, Intent, OutputSpec, TradingPair,
+    };
     use cosmwasm_std::{Binary, Uint128};
     use rust_decimal::Decimal;
     use std::collections::HashSet;
 
-    fn make_test_intent(id: &str, input_amount: u128, min_output: u128, allow_partial: bool) -> Intent {
+    fn make_test_intent(
+        id: &str,
+        input_amount: u128,
+        min_output: u128,
+        allow_partial: bool,
+    ) -> Intent {
         Intent {
             id: id.to_string(),
             version: "1.0".to_string(),
@@ -119,7 +126,10 @@ mod unit_tests {
 
         let result = validator.validate_amounts(&intent);
         assert!(result.is_err());
-        assert!(matches!(result.unwrap_err(), ValidationError::ZeroAmount { .. }));
+        assert!(matches!(
+            result.unwrap_err(),
+            ValidationError::ZeroAmount { .. }
+        ));
     }
 
     #[test]
@@ -129,7 +139,10 @@ mod unit_tests {
 
         let result = validator.validate_amounts(&intent);
         assert!(result.is_err());
-        assert!(matches!(result.unwrap_err(), ValidationError::AmountTooSmall { .. }));
+        assert!(matches!(
+            result.unwrap_err(),
+            ValidationError::AmountTooSmall { .. }
+        ));
     }
 
     #[test]
@@ -139,7 +152,10 @@ mod unit_tests {
 
         let result = validator.validate_expiration(&intent, 99999999999);
         assert!(result.is_err());
-        assert!(matches!(result.unwrap_err(), ValidationError::Expired { .. }));
+        assert!(matches!(
+            result.unwrap_err(),
+            ValidationError::Expired { .. }
+        ));
     }
 
     #[test]
@@ -153,7 +169,10 @@ mod unit_tests {
 
         let result = validator.validate_assets(&intent);
         assert!(result.is_err());
-        assert!(matches!(result.unwrap_err(), ValidationError::SameAssetTrading { .. }));
+        assert!(matches!(
+            result.unwrap_err(),
+            ValidationError::SameAssetTrading { .. }
+        ));
     }
 
     #[test]
@@ -164,14 +183,17 @@ mod unit_tests {
 
         let result = validator.validate_constraints(&intent, 1000);
         assert!(result.is_err());
-        assert!(matches!(result.unwrap_err(), ValidationError::DeadlineInPast { .. }));
+        assert!(matches!(
+            result.unwrap_err(),
+            ValidationError::DeadlineInPast { .. }
+        ));
     }
 
     #[test]
     fn test_intent_status_pending() {
         let status = IntentStatus::Pending;
         match status {
-            IntentStatus::Pending => {},
+            IntentStatus::Pending => {}
             _ => panic!("Expected Pending status"),
         }
     }

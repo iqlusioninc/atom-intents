@@ -11,9 +11,7 @@ use tracing_subscriber::{
 use crate::collector::MetricsCollector;
 
 /// Initialize tracing with metrics integration
-pub fn init_tracing_with_metrics(
-    collector: Arc<MetricsCollector>,
-) -> Result<(), TracingError> {
+pub fn init_tracing_with_metrics(collector: Arc<MetricsCollector>) -> Result<(), TracingError> {
     let env_filter = EnvFilter::try_from_default_env()
         .unwrap_or_else(|_| EnvFilter::new("info,atom_intents=debug"));
 
@@ -93,7 +91,7 @@ impl<'a> MetricsVisitor<'a> {
 impl<'a> Visit for MetricsVisitor<'a> {
     fn record_debug(&mut self, field: &tracing::field::Field, value: &dyn std::fmt::Debug) {
         if field.name() == "error_type" {
-            self.error_type = Some(format!("{:?}", value));
+            self.error_type = Some(format!("{value:?}"));
         }
     }
 

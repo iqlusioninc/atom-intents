@@ -1,4 +1,4 @@
-use atom_intents_types::{Asset, Intent, TradingPair};
+use atom_intents_types::{Intent, TradingPair};
 use cosmwasm_std::Uint128;
 use std::collections::HashSet;
 use thiserror::Error;
@@ -34,7 +34,7 @@ impl IntentValidator {
 
         Self {
             supported_pairs,
-            max_expiration_secs: 3600, // 1 hour
+            max_expiration_secs: 3600,            // 1 hour
             min_input_amount: Uint128::new(1000), // Minimum 1000 units
         }
     }
@@ -45,7 +45,11 @@ impl IntentValidator {
     }
 
     /// Validate an intent before processing
-    pub fn validate_intent(&self, intent: &Intent, current_time: u64) -> Result<(), ValidationError> {
+    pub fn validate_intent(
+        &self,
+        intent: &Intent,
+        current_time: u64,
+    ) -> Result<(), ValidationError> {
         // 1. Check signature
         self.validate_signature(intent)?;
 
@@ -93,7 +97,11 @@ impl IntentValidator {
     }
 
     /// Validate expiration
-    pub fn validate_expiration(&self, intent: &Intent, current_time: u64) -> Result<(), ValidationError> {
+    pub fn validate_expiration(
+        &self,
+        intent: &Intent,
+        current_time: u64,
+    ) -> Result<(), ValidationError> {
         // Check if already expired
         if intent.is_expired(current_time) {
             return Err(ValidationError::Expired {
@@ -197,7 +205,11 @@ impl IntentValidator {
     }
 
     /// Validate execution constraints
-    pub fn validate_constraints(&self, intent: &Intent, current_time: u64) -> Result<(), ValidationError> {
+    pub fn validate_constraints(
+        &self,
+        intent: &Intent,
+        current_time: u64,
+    ) -> Result<(), ValidationError> {
         // Check deadline is not in the past
         if intent.constraints.deadline < current_time {
             return Err(ValidationError::DeadlineInPast {
@@ -260,10 +272,7 @@ pub enum ValidationError {
     InvalidSignature { intent_id: String },
 
     #[error("intent {intent_id}: signature verification failed: {reason}")]
-    SignatureVerificationFailed {
-        intent_id: String,
-        reason: String,
-    },
+    SignatureVerificationFailed { intent_id: String, reason: String },
 
     #[error("intent {intent_id}: expired at {expires_at}, current time {current_time}")]
     Expired {
@@ -343,7 +352,7 @@ pub enum ValidationError {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use atom_intents_types::{ExecutionConstraints, FillConfig, FillStrategy, OutputSpec};
+    use atom_intents_types::{Asset, ExecutionConstraints, FillConfig, FillStrategy, OutputSpec};
     use cosmwasm_std::Binary;
 
     fn make_test_intent(
@@ -394,7 +403,10 @@ mod tests {
 
         let result = validator.validate_amounts(&intent);
         assert!(result.is_err());
-        assert!(matches!(result.unwrap_err(), ValidationError::ZeroAmount { .. }));
+        assert!(matches!(
+            result.unwrap_err(),
+            ValidationError::ZeroAmount { .. }
+        ));
     }
 
     #[test]
@@ -404,7 +416,10 @@ mod tests {
 
         let result = validator.validate_amounts(&intent);
         assert!(result.is_err());
-        assert!(matches!(result.unwrap_err(), ValidationError::AmountTooSmall { .. }));
+        assert!(matches!(
+            result.unwrap_err(),
+            ValidationError::AmountTooSmall { .. }
+        ));
     }
 
     #[test]
@@ -414,29 +429,50 @@ mod tests {
 
         let result = validator.validate_expiration(&intent, 3000); // Current time after expiry
         assert!(result.is_err());
-        assert!(matches!(result.unwrap_err(), ValidationError::Expired { .. }));
+        assert!(matches!(
+            result.unwrap_err(),
+            ValidationError::Expired { .. }
+        ));
     }
 
     #[test]
     fn test_validate_expiration_too_far() {
         let validator = IntentValidator::default_config();
         let current_time = 1000;
-        let intent = make_test_intent("test-1", 1_000_000, 10_000_000, current_time, current_time + 7200); // 2 hours
+        let intent = make_test_intent(
+            "test-1",
+            1_000_000,
+            10_000_000,
+            current_time,
+            current_time + 7200,
+        ); // 2 hours
 
         let result = validator.validate_expiration(&intent, current_time);
         assert!(result.is_err());
-        assert!(matches!(result.unwrap_err(), ValidationError::ExpirationTooFar { .. }));
+        assert!(matches!(
+            result.unwrap_err(),
+            ValidationError::ExpirationTooFar { .. }
+        ));
     }
 
     #[test]
     fn test_validate_created_in_future() {
         let validator = IntentValidator::default_config();
         let current_time = 1000;
-        let intent = make_test_intent("test-1", 1_000_000, 10_000_000, current_time + 1000, current_time + 2000);
+        let intent = make_test_intent(
+            "test-1",
+            1_000_000,
+            10_000_000,
+            current_time + 1000,
+            current_time + 2000,
+        );
 
         let result = validator.validate_expiration(&intent, current_time);
         assert!(result.is_err());
-        assert!(matches!(result.unwrap_err(), ValidationError::CreatedInFuture { .. }));
+        assert!(matches!(
+            result.unwrap_err(),
+            ValidationError::CreatedInFuture { .. }
+        ));
     }
 
     #[test]
@@ -447,7 +483,10 @@ mod tests {
 
         let result = validator.validate_assets(&intent);
         assert!(result.is_err());
-        assert!(matches!(result.unwrap_err(), ValidationError::UnsupportedTradingPair { .. }));
+        assert!(matches!(
+            result.unwrap_err(),
+            ValidationError::UnsupportedTradingPair { .. }
+        ));
     }
 
     #[test]
@@ -462,7 +501,10 @@ mod tests {
 
         let result = validator.validate_assets(&intent);
         assert!(result.is_err());
-        assert!(matches!(result.unwrap_err(), ValidationError::SameAssetTrading { .. }));
+        assert!(matches!(
+            result.unwrap_err(),
+            ValidationError::SameAssetTrading { .. }
+        ));
     }
 
     #[test]
@@ -473,7 +515,10 @@ mod tests {
 
         let result = validator.validate_constraints(&intent, 1000);
         assert!(result.is_err());
-        assert!(matches!(result.unwrap_err(), ValidationError::DeadlineInPast { .. }));
+        assert!(matches!(
+            result.unwrap_err(),
+            ValidationError::DeadlineInPast { .. }
+        ));
     }
 
     #[test]
@@ -484,7 +529,10 @@ mod tests {
 
         let result = validator.validate_constraints(&intent, 1000);
         assert!(result.is_err());
-        assert!(matches!(result.unwrap_err(), ValidationError::DeadlineAfterExpiration { .. }));
+        assert!(matches!(
+            result.unwrap_err(),
+            ValidationError::DeadlineAfterExpiration { .. }
+        ));
     }
 
     #[test]
@@ -495,7 +543,10 @@ mod tests {
 
         let result = validator.validate_constraints(&intent, 1000);
         assert!(result.is_err());
-        assert!(matches!(result.unwrap_err(), ValidationError::InvalidFillPercentage { .. }));
+        assert!(matches!(
+            result.unwrap_err(),
+            ValidationError::InvalidFillPercentage { .. }
+        ));
     }
 
     #[test]
@@ -506,7 +557,10 @@ mod tests {
 
         let result = validator.validate_constraints(&intent, 1000);
         assert!(result.is_err());
-        assert!(matches!(result.unwrap_err(), ValidationError::MinFillExceedsInput { .. }));
+        assert!(matches!(
+            result.unwrap_err(),
+            ValidationError::MinFillExceedsInput { .. }
+        ));
     }
 
     #[test]

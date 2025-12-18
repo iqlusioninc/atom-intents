@@ -7,6 +7,7 @@ use crate::metrics::*;
 
 /// Metrics collector for the ATOM Intent-Based Liquidity System
 pub struct MetricsCollector {
+    #[allow(dead_code)] // Reserved for custom registry usage
     registry: Registry,
 }
 
@@ -59,7 +60,10 @@ impl MetricsCollector {
         }
 
         // Track matched intents
-        if matches!(status, IntentStatus::Filled | IntentStatus::PartiallyFilled { .. }) {
+        if matches!(
+            status,
+            IntentStatus::Filled | IntentStatus::PartiallyFilled { .. }
+        ) {
             INTENTS_MATCHED.inc();
         }
 
@@ -91,7 +95,9 @@ impl MetricsCollector {
             SettlementStatus::TimedOut => "timed_out",
         };
 
-        SETTLEMENT_STATUS_COUNT.with_label_values(&[status_str]).inc();
+        SETTLEMENT_STATUS_COUNT
+            .with_label_values(&[status_str])
+            .inc();
 
         // Update counters and active settlements
         match status {

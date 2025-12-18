@@ -1,18 +1,12 @@
-use async_trait::async_trait;
 use atom_intents_matching_engine::MatchingEngine;
-use atom_intents_settlement::{
-    EscrowContract, EscrowLock, IbcResult, RelayerService, SettlementError, SolverVaultContract,
-    TimeoutConfig, TwoPhaseSettlement, VaultLock,
-};
+use atom_intents_settlement::{SettlementError, TimeoutConfig};
 use atom_intents_solver::SolutionAggregator;
 use atom_intents_types::{Intent, OptimalFillPlan, Solution};
 use cosmwasm_std::Uint128;
-use rust_decimal::Decimal;
 use std::sync::Arc;
 use thiserror::Error;
 use tracing::{info, warn};
 
-use crate::recovery::{SettlementPhase, SettlementState};
 use crate::validator::{IntentValidator, ValidationError};
 
 /// Execution stage tracking
@@ -93,11 +87,7 @@ impl ExecutionCoordinator {
         };
 
         // Calculate matched amount
-        let matched_amount: Uint128 = match_result
-            .fills
-            .iter()
-            .map(|f| f.input_amount)
-            .sum();
+        let matched_amount: Uint128 = match_result.fills.iter().map(|f| f.input_amount).sum();
 
         info!(
             intent_id = %intent.id,
@@ -146,11 +136,12 @@ impl ExecutionCoordinator {
                 );
 
                 // For simplicity, use the first (best) solver solution
-                let best_solution = solver_solutions.first().ok_or_else(|| {
-                    ExecutionError::NoViableSolver {
-                        intent_id: intent.id.clone(),
-                    }
-                })?;
+                let best_solution =
+                    solver_solutions
+                        .first()
+                        .ok_or_else(|| ExecutionError::NoViableSolver {
+                            intent_id: intent.id.clone(),
+                        })?;
 
                 // 5. Initialize two-phase settlement
                 info!(intent_id = %intent.id, stage = ?ExecutionStage::InitializingSettlement, "Initializing settlement");
@@ -207,7 +198,10 @@ impl ExecutionCoordinator {
                             intent_id: intent.id.clone(),
                             stage: ExecutionStage::CompletingSettlement,
                             error: ExecutionError::Settlement {
-                                reason: format!("Unexpected status: {:?}", settlement_result.status),
+                                reason: format!(
+                                    "Unexpected status: {:?}",
+                                    settlement_result.status
+                                ),
                             },
                         })
                     }
@@ -249,24 +243,19 @@ impl ExecutionCoordinator {
             }
 
             // Check minimum fill percentage
-            let fill_pct: f64 = intent
-                .fill_config
-                .min_fill_pct
-                .parse()
-                .map_err(|_| ExecutionError::InvalidConfiguration {
+            let fill_pct: f64 = intent.fill_config.min_fill_pct.parse().map_err(|_| {
+                ExecutionError::InvalidConfiguration {
                     reason: "Invalid min_fill_pct".to_string(),
-                })?;
+                }
+            })?;
 
-            let actual_pct =
-                total_filled.u128() as f64 / intent.input.amount.u128() as f64;
+            let actual_pct = total_filled.u128() as f64 / intent.input.amount.u128() as f64;
 
             if actual_pct < fill_pct {
                 return Err(ExecutionError::InsufficientFill {
                     intent_id: intent.id.clone(),
                     filled: total_filled,
-                    minimum: Uint128::new(
-                        (intent.input.amount.u128() as f64 * fill_pct) as u128,
-                    ),
+                    minimum: Uint128::new((intent.input.amount.u128() as f64 * fill_pct) as u128),
                 });
             }
         } else {
@@ -378,9 +367,7 @@ pub enum ExecutionError {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use atom_intents_types::{
-        Asset, ExecutionConstraints, FillConfig, FillStrategy, OutputSpec,
-    };
+    use atom_intents_types::{Asset, ExecutionConstraints, FillConfig, FillStrategy, OutputSpec};
     use cosmwasm_std::Binary;
 
     fn make_test_intent(

@@ -87,7 +87,9 @@ impl SqliteStore {
             status,
             escrow_id: row.get("escrow_id"),
             solver_bond_id: row.get("solver_bond_id"),
-            ibc_packet_sequence: row.get::<Option<i64>, _>("ibc_packet_sequence").map(|v| v as u64),
+            ibc_packet_sequence: row
+                .get::<Option<i64>, _>("ibc_packet_sequence")
+                .map(|v| v as u64),
             created_at: row.get::<i64, _>("created_at") as u64,
             updated_at: row.get::<i64, _>("updated_at") as u64,
             expires_at: row.get::<i64, _>("expires_at") as u64,
@@ -295,7 +297,10 @@ impl SettlementStore for SqliteStore {
             .collect()
     }
 
-    async fn list_stuck(&self, timeout_threshold: u64) -> Result<Vec<SettlementRecord>, StoreError> {
+    async fn list_stuck(
+        &self,
+        timeout_threshold: u64,
+    ) -> Result<Vec<SettlementRecord>, StoreError> {
         let rows = sqlx::query(
             r#"
             SELECT * FROM settlements
@@ -333,7 +338,11 @@ impl SettlementStore for SqliteStore {
             .collect()
     }
 
-    async fn record_transition(&self, id: &str, transition: StateTransition) -> Result<(), StoreError> {
+    async fn record_transition(
+        &self,
+        id: &str,
+        transition: StateTransition,
+    ) -> Result<(), StoreError> {
         let from_status = settlement_status_to_string(&transition.from_status);
         let to_status = settlement_status_to_string(&transition.to_status);
 
@@ -587,15 +596,8 @@ mod tests {
 
         store.create(&settlement).await.unwrap();
 
-        let t1 = StateTransition::new(
-            SettlementStatus::Pending,
-            SettlementStatus::UserLocked,
-            200,
-        );
-        store
-            .record_transition("settlement-1", t1)
-            .await
-            .unwrap();
+        let t1 = StateTransition::new(SettlementStatus::Pending, SettlementStatus::UserLocked, 200);
+        store.record_transition("settlement-1", t1).await.unwrap();
 
         let t2 = StateTransition::new(
             SettlementStatus::UserLocked,
@@ -603,19 +605,13 @@ mod tests {
             300,
         )
         .with_details("Solver locked funds".to_string());
-        store
-            .record_transition("settlement-1", t2)
-            .await
-            .unwrap();
+        store.record_transition("settlement-1", t2).await.unwrap();
 
         let history = store.get_history("settlement-1").await.unwrap();
         assert_eq!(history.len(), 2);
         assert_eq!(history[0].timestamp, 200);
         assert_eq!(history[1].timestamp, 300);
-        assert_eq!(
-            history[1].details,
-            Some("Solver locked funds".to_string())
-        );
+        assert_eq!(history[1].details, Some("Solver locked funds".to_string()));
     }
 
     #[tokio::test]

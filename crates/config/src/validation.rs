@@ -45,7 +45,7 @@ pub fn validate_config(config: &AppConfig) -> Result<()> {
     for (chain_name, chain_config) in &config.chains {
         if let Err(e) = validate_chain_config(chain_config) {
             errors.push(ValidationError::new(
-                format!("chains.{}", chain_name),
+                format!("chains.{chain_name}"),
                 e.to_string(),
             ));
         }
@@ -72,7 +72,7 @@ pub fn validate_config(config: &AppConfig) -> Result<()> {
     for solver_id in &config.solvers.enabled_solvers {
         if !config.solvers.solver_endpoints.contains_key(solver_id) {
             errors.push(ValidationError::new(
-                format!("solvers.solver_endpoints.{}", solver_id),
+                format!("solvers.solver_endpoints.{solver_id}"),
                 "enabled solver missing endpoint configuration",
             ));
         }
@@ -143,7 +143,7 @@ pub fn validate_config(config: &AppConfig) -> Result<()> {
     for (idx, fallback) in config.oracle.fallback_endpoints.iter().enumerate() {
         if let Err(e) = validate_url(fallback) {
             errors.push(ValidationError::new(
-                format!("oracle.fallback_endpoints[{}]", idx),
+                format!("oracle.fallback_endpoints[{idx}]"),
                 e,
             ));
         }
@@ -160,14 +160,14 @@ pub fn validate_config(config: &AppConfig) -> Result<()> {
     for (channel_name, channel_config) in &config.relayer.channels {
         if channel_config.channel_id.is_empty() {
             errors.push(ValidationError::new(
-                format!("relayer.channels.{}.channel_id", channel_name),
+                format!("relayer.channels.{channel_name}.channel_id"),
                 "channel ID is required",
             ));
         }
 
         if channel_config.connection_id.is_empty() {
             errors.push(ValidationError::new(
-                format!("relayer.channels.{}.connection_id", channel_name),
+                format!("relayer.channels.{channel_name}.connection_id"),
                 "connection ID is required",
             ));
         }
@@ -175,15 +175,24 @@ pub fn validate_config(config: &AppConfig) -> Result<()> {
         // Verify referenced chains exist
         if !config.chains.contains_key(&channel_config.source_chain) {
             errors.push(ValidationError::new(
-                format!("relayer.channels.{}.source_chain", channel_name),
-                format!("chain '{}' not found in chains config", channel_config.source_chain),
+                format!("relayer.channels.{channel_name}.source_chain"),
+                format!(
+                    "chain '{}' not found in chains config",
+                    channel_config.source_chain
+                ),
             ));
         }
 
-        if !config.chains.contains_key(&channel_config.destination_chain) {
+        if !config
+            .chains
+            .contains_key(&channel_config.destination_chain)
+        {
             errors.push(ValidationError::new(
-                format!("relayer.channels.{}.destination_chain", channel_name),
-                format!("chain '{}' not found in chains config", channel_config.destination_chain),
+                format!("relayer.channels.{channel_name}.destination_chain"),
+                format!(
+                    "chain '{}' not found in chains config",
+                    channel_config.destination_chain
+                ),
             ));
         }
     }
@@ -274,7 +283,11 @@ pub fn validate_url(url: &str) -> std::result::Result<(), String> {
     }
 
     // Basic URL validation - check for scheme
-    if !url.starts_with("http://") && !url.starts_with("https://") && !url.starts_with("ws://") && !url.starts_with("wss://") {
+    if !url.starts_with("http://")
+        && !url.starts_with("https://")
+        && !url.starts_with("ws://")
+        && !url.starts_with("wss://")
+    {
         return Err("URL must start with http://, https://, ws://, or wss://".to_string());
     }
 
@@ -287,7 +300,9 @@ fn validate_log_level(level: &str) -> std::result::Result<(), ValidationError> {
         "trace" | "debug" | "info" | "warn" | "error" => Ok(()),
         _ => Err(ValidationError::new(
             "network.log_level",
-            format!("invalid log level '{}', must be one of: trace, debug, info, warn, error", level),
+            format!(
+                "invalid log level '{level}', must be one of: trace, debug, info, warn, error"
+            ),
         )),
     }
 }
@@ -300,7 +315,7 @@ pub fn validate_urls(config: &AppConfig) -> Result<()> {
     for (chain_name, chain) in &config.chains {
         if let Err(e) = validate_url(&chain.rpc_url) {
             errors.push(ValidationError::new(
-                format!("chains.{}.rpc_url", chain_name),
+                format!("chains.{chain_name}.rpc_url"),
                 e,
             ));
         }
@@ -308,7 +323,7 @@ pub fn validate_urls(config: &AppConfig) -> Result<()> {
         if let Some(grpc_url) = &chain.grpc_url {
             if let Err(e) = validate_url(grpc_url) {
                 errors.push(ValidationError::new(
-                    format!("chains.{}.grpc_url", chain_name),
+                    format!("chains.{chain_name}.grpc_url"),
                     e,
                 ));
             }
@@ -319,7 +334,7 @@ pub fn validate_urls(config: &AppConfig) -> Result<()> {
     for (solver_id, endpoint) in &config.solvers.solver_endpoints {
         if let Err(e) = validate_url(endpoint) {
             errors.push(ValidationError::new(
-                format!("solvers.solver_endpoints.{}", solver_id),
+                format!("solvers.solver_endpoints.{solver_id}"),
                 e,
             ));
         }
@@ -333,7 +348,7 @@ pub fn validate_urls(config: &AppConfig) -> Result<()> {
     for (idx, fallback) in config.oracle.fallback_endpoints.iter().enumerate() {
         if let Err(e) = validate_url(fallback) {
             errors.push(ValidationError::new(
-                format!("oracle.fallback_endpoints[{}]", idx),
+                format!("oracle.fallback_endpoints[{idx}]"),
                 e,
             ));
         }
@@ -354,23 +369,29 @@ pub fn validate_urls(config: &AppConfig) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{AppConfig, ChainConfig, Environment, NetworkConfig, SolverConfig, SettlementConfig, OracleConfig, RelayerConfig, FeeConfig};
+    use crate::{
+        AppConfig, ChainConfig, Environment, FeeConfig, NetworkConfig, OracleConfig, RelayerConfig,
+        SettlementConfig, SolverConfig,
+    };
     use std::collections::HashMap;
 
     #[test]
     fn test_validate_valid_config() {
         let mut chains = HashMap::new();
-        chains.insert("cosmoshub".to_string(), ChainConfig {
-            chain_id: "cosmoshub-4".to_string(),
-            rpc_url: "https://rpc.cosmos.network".to_string(),
-            grpc_url: Some("https://grpc.cosmos.network".to_string()),
-            gas_price: "0.025uatom".to_string(),
-            fee_denom: "uatom".to_string(),
-            address_prefix: "cosmos".to_string(),
-            gas_adjustment: 1.3,
-            timeout_ms: 30000,
-            max_retries: 3,
-        });
+        chains.insert(
+            "cosmoshub".to_string(),
+            ChainConfig {
+                chain_id: "cosmoshub-4".to_string(),
+                rpc_url: "https://rpc.cosmos.network".to_string(),
+                grpc_url: Some("https://grpc.cosmos.network".to_string()),
+                gas_price: "0.025uatom".to_string(),
+                fee_denom: "uatom".to_string(),
+                address_prefix: "cosmos".to_string(),
+                gas_adjustment: 1.3,
+                timeout_ms: 30000,
+                max_retries: 3,
+            },
+        );
 
         let mut solver_endpoints = HashMap::new();
         solver_endpoints.insert("solver1".to_string(), "http://localhost:8080".to_string());

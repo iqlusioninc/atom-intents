@@ -201,9 +201,18 @@ impl PythOracle {
 
         // Common Cosmos pairs - these are example feed IDs
         // In production, use actual Pyth feed IDs from https://pyth.network/developers/price-feed-ids
-        feed_ids.insert("ATOM/USDC".to_string(), "b00b60f88b03a6a625a8d1c048c3f66653edf217439983d037e7222c4e612819".to_string());
-        feed_ids.insert("OSMO/USDC".to_string(), "5867f5683c757393a0670ef0f701490950fe93fdb006d181c8265a831ac0c5c6".to_string());
-        feed_ids.insert("TIA/USDC".to_string(), "09f7c1d7dfbb7df2b8fe3d3d87ee94a2259d212da4f30c1f0540d066dfa44723".to_string());
+        feed_ids.insert(
+            "ATOM/USDC".to_string(),
+            "b00b60f88b03a6a625a8d1c048c3f66653edf217439983d037e7222c4e612819".to_string(),
+        );
+        feed_ids.insert(
+            "OSMO/USDC".to_string(),
+            "5867f5683c757393a0670ef0f701490950fe93fdb006d181c8265a831ac0c5c6".to_string(),
+        );
+        feed_ids.insert(
+            "TIA/USDC".to_string(),
+            "09f7c1d7dfbb7df2b8fe3d3d87ee94a2259d212da4f30c1f0540d066dfa44723".to_string(),
+        );
 
         Self {
             id: "pyth".to_string(),
@@ -264,11 +273,9 @@ impl PriceOracle for PythOracle {
             .await
             .map_err(|e| OracleError::NetworkError(e.to_string()))?;
 
-        let price_data = data
-            .first()
-            .ok_or_else(|| OracleError::NotFound {
-                pair: symbol.clone(),
-            })?;
+        let price_data = data.first().ok_or_else(|| OracleError::NotFound {
+            pair: symbol.clone(),
+        })?;
 
         // Parse price with exponent
         let price_raw = Decimal::from_str(&price_data.price.price)
@@ -333,8 +340,7 @@ impl ChainlinkOracle {
     }
 
     pub fn with_feed(mut self, pair: impl Into<String>, contract: impl Into<String>) -> Self {
-        self.contract_addresses
-            .insert(pair.into(), contract.into());
+        self.contract_addresses.insert(pair.into(), contract.into());
         self
     }
 }
@@ -358,12 +364,12 @@ struct ChainlinkRoundData {
 impl PriceOracle for ChainlinkOracle {
     async fn get_price(&self, pair: &TradingPair) -> Result<OraclePrice, OracleError> {
         let symbol = pair.to_symbol();
-        let contract = self
-            .contract_addresses
-            .get(&symbol)
-            .ok_or_else(|| OracleError::NotFound {
-                pair: symbol.clone(),
-            })?;
+        let contract =
+            self.contract_addresses
+                .get(&symbol)
+                .ok_or_else(|| OracleError::NotFound {
+                    pair: symbol.clone(),
+                })?;
 
         // Query CosmWasm contract via RPC
         let query_msg = ChainlinkQueryMsg {
@@ -644,12 +650,7 @@ impl PriceOracle for AggregatedOracle {
         let sources: Vec<String> = valid_prices.iter().map(|p| p.source.clone()).collect();
         let source = format!("aggregated[{}]", sources.join(","));
 
-        Ok(OraclePrice::new(
-            median,
-            latest_timestamp,
-            avg_conf,
-            source,
-        ))
+        Ok(OraclePrice::new(median, latest_timestamp, avg_conf, source))
     }
 
     fn id(&self) -> &str {
@@ -805,8 +806,7 @@ mod tests {
             .await
             .insert(pair.to_symbol(), stale_price);
 
-        let aggregated = AggregatedOracle::new(vec![mock as Arc<dyn PriceOracle>])
-            .with_max_age(60); // 1 minute threshold
+        let aggregated = AggregatedOracle::new(vec![mock as Arc<dyn PriceOracle>]).with_max_age(60); // 1 minute threshold
 
         // Should fail because price is stale
         let result = aggregated.get_price(&pair).await;

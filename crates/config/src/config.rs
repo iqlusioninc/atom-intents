@@ -5,6 +5,7 @@ use std::collections::HashMap;
 
 /// Main application configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Default)]
 pub struct AppConfig {
     /// Network configuration
     pub network: NetworkConfig,
@@ -308,19 +309,6 @@ fn default_oracle_provider() -> String {
     "slinky".to_string()
 }
 
-impl Default for AppConfig {
-    fn default() -> Self {
-        Self {
-            network: NetworkConfig::default(),
-            chains: HashMap::new(),
-            solvers: SolverConfig::default(),
-            settlement: SettlementConfig::default(),
-            oracle: OracleConfig::default(),
-            relayer: RelayerConfig::default(),
-            fees: FeeConfig::default(),
-        }
-    }
-}
 
 impl Default for NetworkConfig {
     fn default() -> Self {

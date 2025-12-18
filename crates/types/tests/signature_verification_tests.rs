@@ -1,11 +1,12 @@
 use atom_intents_types::{
-    Asset, ExecutionConstraints, FillConfig, Intent, OutputSpec,
-    VerificationError, derive_public_key, sign_message, verify_intent_signature,
+    derive_public_key, sign_message, verify_intent_signature, Asset, ExecutionConstraints,
+    FillConfig, Intent, OutputSpec, VerificationError,
 };
 use cosmwasm_std::Uint128;
 
 /// Create a test intent with standard test data
-fn create_test_intent_unsigned() -> Result<atom_intents_types::UnsignedIntent, atom_intents_types::IntentBuildError> {
+fn create_test_intent_unsigned(
+) -> Result<atom_intents_types::UnsignedIntent, atom_intents_types::IntentBuildError> {
     Intent::builder()
         .user("cosmos1user123")
         .input(Asset {
@@ -33,10 +34,9 @@ fn test_complete_signing_and_verification_flow() {
 
     // Use a test private key
     let private_key = [
-        0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08,
-        0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e, 0x0f, 0x10,
-        0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17, 0x18,
-        0x19, 0x1a, 0x1b, 0x1c, 0x1d, 0x1e, 0x1f, 0x20,
+        0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e, 0x0f,
+        0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17, 0x18, 0x19, 0x1a, 0x1b, 0x1c, 0x1d, 0x1e,
+        0x1f, 0x20,
     ];
 
     // Sign the intent

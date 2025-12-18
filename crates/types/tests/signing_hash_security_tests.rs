@@ -7,7 +7,6 @@
 /// CRITICAL: Each test verifies that changing a specific field CHANGES the signing hash.
 /// If any of these tests fail, it means that field is NOT protected by the signature,
 /// which is a critical security vulnerability.
-
 use atom_intents_types::{
     Asset, ExecutionConstraints, FillConfig, FillStrategy, Intent, OutputSpec,
 };
@@ -77,8 +76,7 @@ fn test_changing_allow_partial_changes_signature() {
         "SECURITY FAILURE: allow_partial not included in signing hash!"
     );
     assert_ne!(
-        signed1.signature,
-        signed2.signature,
+        signed1.signature, signed2.signature,
         "Signatures should differ when allow_partial changes"
     );
 
@@ -309,8 +307,7 @@ fn test_excluded_venues_order_is_normalized() {
         "Excluded venues should be sorted for deterministic hashing"
     );
     assert_eq!(
-        signed1.signature,
-        signed2.signature,
+        signed1.signature, signed2.signature,
         "Same excluded venues in different order should produce same signature"
     );
 }

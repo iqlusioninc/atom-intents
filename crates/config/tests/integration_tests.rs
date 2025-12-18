@@ -1,8 +1,6 @@
 //! Integration tests for the config crate
 
-use atom_intents_config::{
-    AppConfig, ChainConfig, ConfigLoader, Environment, validate_config,
-};
+use atom_intents_config::{validate_config, AppConfig, ChainConfig, ConfigLoader, Environment};
 use std::collections::HashMap;
 use std::io::Write;
 use tempfile::NamedTempFile;

@@ -48,6 +48,16 @@ impl ExecutionConstraints {
         self.excluded_venues.push(venue.into());
         self
     }
+
+    pub fn with_max_solver_fee_bps(mut self, bps: u32) -> Self {
+        self.max_solver_fee_bps = Some(bps);
+        self
+    }
+
+    pub fn with_max_bridge_time_secs(mut self, secs: u64) -> Self {
+        self.max_bridge_time_secs = Some(secs);
+        self
+    }
 }
 
 impl Default for ExecutionConstraints {

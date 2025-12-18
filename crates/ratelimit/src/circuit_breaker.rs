@@ -122,7 +122,8 @@ impl CircuitBreaker {
                 let successes = self.success_count.fetch_add(1, Ordering::SeqCst) + 1;
                 if successes >= self.config.success_threshold {
                     // Transition to closed
-                    self.state.store(CircuitState::Closed.into(), Ordering::SeqCst);
+                    self.state
+                        .store(CircuitState::Closed.into(), Ordering::SeqCst);
                     self.failure_count.store(0, Ordering::Relaxed);
                     self.success_count.store(0, Ordering::Relaxed);
                     self.half_open_attempts.store(0, Ordering::Relaxed);
@@ -152,14 +153,19 @@ impl CircuitBreaker {
                 let failures = self.failure_count.fetch_add(1, Ordering::SeqCst) + 1;
                 if failures >= self.config.failure_threshold {
                     // Transition to open
-                    self.state.store(CircuitState::Open.into(), Ordering::SeqCst);
+                    self.state
+                        .store(CircuitState::Open.into(), Ordering::SeqCst);
                     self.success_count.store(0, Ordering::Relaxed);
-                    tracing::warn!("Circuit breaker transitioned to OPEN after {} failures", failures);
+                    tracing::warn!(
+                        "Circuit breaker transitioned to OPEN after {} failures",
+                        failures
+                    );
                 }
             }
             CircuitState::HalfOpen => {
                 // Any failure in half-open goes back to open
-                self.state.store(CircuitState::Open.into(), Ordering::SeqCst);
+                self.state
+                    .store(CircuitState::Open.into(), Ordering::SeqCst);
                 self.success_count.store(0, Ordering::Relaxed);
                 self.half_open_attempts.store(0, Ordering::Relaxed);
                 tracing::warn!("Circuit breaker transitioned back to OPEN from HALF_OPEN");
@@ -175,18 +181,16 @@ impl CircuitBreaker {
         let current_state = self.state();
 
         match current_state {
-            CircuitState::Closed => {
-                match f() {
-                    Ok(result) => {
-                        self.record_success();
-                        Ok(result)
-                    }
-                    Err(e) => {
-                        self.record_failure();
-                        Err(CircuitBreakerError::Operation(e))
-                    }
+            CircuitState::Closed => match f() {
+                Ok(result) => {
+                    self.record_success();
+                    Ok(result)
                 }
-            }
+                Err(e) => {
+                    self.record_failure();
+                    Err(CircuitBreakerError::Operation(e))
+                }
+            },
             CircuitState::Open => {
                 if self.try_transition_to_half_open() {
                     // Successfully transitioned to half-open, try the operation
@@ -233,18 +237,16 @@ impl CircuitBreaker {
         let current_state = self.state();
 
         match current_state {
-            CircuitState::Closed => {
-                match f().await {
-                    Ok(result) => {
-                        self.record_success();
-                        Ok(result)
-                    }
-                    Err(e) => {
-                        self.record_failure();
-                        Err(CircuitBreakerError::Operation(e))
-                    }
+            CircuitState::Closed => match f().await {
+                Ok(result) => {
+                    self.record_success();
+                    Ok(result)
                 }
-            }
+                Err(e) => {
+                    self.record_failure();
+                    Err(CircuitBreakerError::Operation(e))
+                }
+            },
             CircuitState::Open => {
                 if self.try_transition_to_half_open() {
                     // Successfully transitioned to half-open, try the operation

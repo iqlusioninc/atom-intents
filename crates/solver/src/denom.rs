@@ -200,20 +200,13 @@ impl DenomRegistry {
 
         // Try querying each known chain for the denom trace
         for (chain_id, rpc_url) in &self.rpc_endpoints {
-            match self
-                .query_denom_trace(rpc_url, hash, chain_id)
-                .await
-            {
+            match self.query_denom_trace(rpc_url, hash, chain_id).await {
                 Ok(trace) => {
                     self.cache_trace(trace.clone());
                     return Ok(trace);
                 }
                 Err(e) => {
-                    tracing::debug!(
-                        "Failed to query denom trace from {}: {}",
-                        chain_id,
-                        e
-                    );
+                    tracing::debug!("Failed to query denom trace from {}: {}", chain_id, e);
                     continue;
                 }
             }
@@ -365,15 +358,17 @@ mod tests {
         let registry = DenomRegistry::new();
 
         // Check ATOM on Osmosis
-        let atom_trace =
-            registry.get_cached_trace("ibc/27394FB092D2ECCD56123C74F36E4C1F926001CEADA9CA97EA622B25F41E5EB2");
+        let atom_trace = registry.get_cached_trace(
+            "ibc/27394FB092D2ECCD56123C74F36E4C1F926001CEADA9CA97EA622B25F41E5EB2",
+        );
         assert!(atom_trace.is_some());
         assert_eq!(atom_trace.unwrap().base_denom, "uatom");
         assert_eq!(atom_trace.unwrap().origin_chain, "cosmoshub-4");
 
         // Check OSMO on Cosmos Hub
-        let osmo_trace =
-            registry.get_cached_trace("ibc/14F9BC3E44B8A9C1BE1FB08980FAB87034C9905EF17CF2F5008FC085218811CC");
+        let osmo_trace = registry.get_cached_trace(
+            "ibc/14F9BC3E44B8A9C1BE1FB08980FAB87034C9905EF17CF2F5008FC085218811CC",
+        );
         assert!(osmo_trace.is_some());
         assert_eq!(osmo_trace.unwrap().base_denom, "uosmo");
         assert_eq!(osmo_trace.unwrap().origin_chain, "osmosis-1");
@@ -412,7 +407,9 @@ mod tests {
 
         // Test with pre-cached ATOM on Osmosis
         let result = registry
-            .get_origin_chain("ibc/27394FB092D2ECCD56123C74F36E4C1F926001CEADA9CA97EA622B25F41E5EB2")
+            .get_origin_chain(
+                "ibc/27394FB092D2ECCD56123C74F36E4C1F926001CEADA9CA97EA622B25F41E5EB2",
+            )
             .await;
         assert!(result.is_ok());
         assert_eq!(result.unwrap(), "cosmoshub-4");

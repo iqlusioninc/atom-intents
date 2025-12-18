@@ -1,4 +1,3 @@
-use async_trait::async_trait;
 use atom_intents_matching_engine::MatchingEngine;
 use atom_intents_relayer::SolverRelayer;
 use atom_intents_settlement::{
@@ -6,7 +5,7 @@ use atom_intents_settlement::{
 };
 use atom_intents_solver::SolutionAggregator;
 use atom_intents_types::{
-    AuctionResult, Asset, ExecutionConstraints, FillConfig, Intent, OutputSpec, SolverQuote,
+    Asset, ExecutionConstraints, FillConfig, Intent, OutputSpec, SolverQuote,
     TradingPair,
 };
 use cosmwasm_std::Uint128;
@@ -18,9 +17,8 @@ use tokio::sync::{Mutex, RwLock};
 use tracing::{error, info, warn};
 
 use crate::executor::{ExecutionCoordinator, ExecutionError, ExecutionOutcome, SettlementManager};
-use crate::recovery::{RecoveryAction, RecoveryManager, RecoveryResult, SettlementState};
+use crate::recovery::{RecoveryAction, RecoveryResult, SettlementState};
 use crate::validator::IntentValidator;
-use std::str::FromStr;
 
 /// Adapter to wrap TwoPhaseSettlement as SettlementManager trait object
 struct TwoPhaseSettlementAdapter<E, V, R>
@@ -58,7 +56,9 @@ where
         solution: &atom_intents_types::Solution,
         current_time: u64,
     ) -> Result<atom_intents_types::Settlement, atom_intents_settlement::SettlementError> {
-        self.settlement.execute(intent, solution, current_time).await
+        self.settlement
+            .execute(intent, solution, current_time)
+            .await
     }
 }
 
@@ -88,11 +88,167 @@ impl OrchestratorConfig {
 impl Default for OrchestratorConfig {
     fn default() -> Self {
         Self {
-            batch_interval_ms: 5000,   // 5 seconds
+            batch_interval_ms: 5000, // 5 seconds
             max_batch_size: 100,
             settlement_timeout_threshold: 600, // 10 minutes
             auto_recovery_enabled: true,
         }
+    }
+}
+
+/// Builder error
+#[derive(Debug, Error)]
+pub enum BuilderError {
+    #[error("missing required field: {field}")]
+    MissingField { field: String },
+}
+
+/// Builder for IntentOrchestrator
+pub struct IntentOrchestratorBuilder<E, V, R>
+where
+    E: EscrowContract + 'static,
+    V: SolverVaultContract + 'static,
+    R: RelayerService + 'static,
+{
+    validator: Option<Arc<IntentValidator>>,
+    matching_engine: Option<MatchingEngine>,
+    solution_aggregator: Option<Arc<SolutionAggregator>>,
+    user_escrow: Option<E>,
+    solver_vault: Option<V>,
+    relayer: Option<Arc<SolverRelayer>>,
+    relayer_service: Option<R>,
+    config: OrchestratorConfig,
+    timeout_config: TimeoutConfig,
+}
+
+impl<E, V, R> IntentOrchestratorBuilder<E, V, R>
+where
+    E: EscrowContract + 'static,
+    V: SolverVaultContract + 'static,
+    R: RelayerService + 'static,
+{
+    /// Create a new builder with defaults
+    pub fn new() -> Self {
+        Self {
+            validator: None,
+            matching_engine: None,
+            solution_aggregator: None,
+            user_escrow: None,
+            solver_vault: None,
+            relayer: None,
+            relayer_service: None,
+            config: OrchestratorConfig::default(),
+            timeout_config: TimeoutConfig::default(),
+        }
+    }
+
+    /// Set the intent validator
+    pub fn with_validator(mut self, validator: Arc<IntentValidator>) -> Self {
+        self.validator = Some(validator);
+        self
+    }
+
+    /// Set the matching engine
+    pub fn with_matching_engine(mut self, matching_engine: MatchingEngine) -> Self {
+        self.matching_engine = Some(matching_engine);
+        self
+    }
+
+    /// Set the solution aggregator
+    pub fn with_solution_aggregator(mut self, solution_aggregator: Arc<SolutionAggregator>) -> Self {
+        self.solution_aggregator = Some(solution_aggregator);
+        self
+    }
+
+    /// Set the user escrow contract
+    pub fn with_user_escrow(mut self, user_escrow: E) -> Self {
+        self.user_escrow = Some(user_escrow);
+        self
+    }
+
+    /// Set the solver vault contract
+    pub fn with_solver_vault(mut self, solver_vault: V) -> Self {
+        self.solver_vault = Some(solver_vault);
+        self
+    }
+
+    /// Set the solver relayer
+    pub fn with_relayer(mut self, relayer: Arc<SolverRelayer>) -> Self {
+        self.relayer = Some(relayer);
+        self
+    }
+
+    /// Set the relayer service
+    pub fn with_relayer_service(mut self, relayer_service: R) -> Self {
+        self.relayer_service = Some(relayer_service);
+        self
+    }
+
+    /// Set the orchestrator configuration
+    pub fn with_config(mut self, config: OrchestratorConfig) -> Self {
+        self.config = config;
+        self
+    }
+
+    /// Set the timeout configuration
+    pub fn with_timeout_config(mut self, timeout_config: TimeoutConfig) -> Self {
+        self.timeout_config = timeout_config;
+        self
+    }
+
+    /// Build the IntentOrchestrator, validating that all required fields are set
+    pub fn build(self) -> Result<IntentOrchestrator, BuilderError> {
+        let validator = self.validator.ok_or_else(|| BuilderError::MissingField {
+            field: "validator".to_string(),
+        })?;
+
+        let matching_engine = self.matching_engine.ok_or_else(|| BuilderError::MissingField {
+            field: "matching_engine".to_string(),
+        })?;
+
+        let solution_aggregator = self.solution_aggregator.ok_or_else(|| BuilderError::MissingField {
+            field: "solution_aggregator".to_string(),
+        })?;
+
+        let user_escrow = self.user_escrow.ok_or_else(|| BuilderError::MissingField {
+            field: "user_escrow".to_string(),
+        })?;
+
+        let solver_vault = self.solver_vault.ok_or_else(|| BuilderError::MissingField {
+            field: "solver_vault".to_string(),
+        })?;
+
+        let relayer = self.relayer.ok_or_else(|| BuilderError::MissingField {
+            field: "relayer".to_string(),
+        })?;
+
+        let relayer_service = self.relayer_service.ok_or_else(|| BuilderError::MissingField {
+            field: "relayer_service".to_string(),
+        })?;
+
+        // Use the new() method to construct the orchestrator
+        Ok(IntentOrchestrator::new(
+            validator,
+            matching_engine,
+            solution_aggregator,
+            user_escrow,
+            solver_vault,
+            relayer,
+            relayer_service,
+            self.config,
+            self.timeout_config,
+        ))
+    }
+}
+
+impl<E, V, R> Default for IntentOrchestratorBuilder<E, V, R>
+where
+    E: EscrowContract + 'static,
+    V: SolverVaultContract + 'static,
+    R: RelayerService + 'static,
+{
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -110,6 +266,17 @@ pub struct IntentOrchestrator {
 }
 
 impl IntentOrchestrator {
+    /// Create a new builder for constructing an IntentOrchestrator
+    pub fn builder<E, V, R>() -> IntentOrchestratorBuilder<E, V, R>
+    where
+        E: EscrowContract + 'static,
+        V: SolverVaultContract + 'static,
+        R: RelayerService + 'static,
+    {
+        IntentOrchestratorBuilder::new()
+    }
+
+    /// Create a new IntentOrchestrator (constructor for backwards compatibility)
     pub fn new<E, V, R>(
         validator: Arc<IntentValidator>,
         matching_engine: MatchingEngine,
@@ -129,14 +296,13 @@ impl IntentOrchestrator {
         let matching_engine = Arc::new(Mutex::new(matching_engine));
 
         // Create settlement manager and wrap in trait object
-        let settlement_manager: Arc<dyn crate::executor::SettlementManager> = Arc::new(
-            TwoPhaseSettlementAdapter::new(
+        let settlement_manager: Arc<dyn crate::executor::SettlementManager> =
+            Arc::new(TwoPhaseSettlementAdapter::new(
                 user_escrow,
                 solver_vault,
                 relayer_service,
                 timeout_config.clone(),
-            )
-        );
+            ));
 
         let executor = Arc::new(ExecutionCoordinator::new(
             validator,
@@ -158,7 +324,10 @@ impl IntentOrchestrator {
     }
 
     /// Process a single intent end-to-end
-    pub async fn process_intent(&self, intent: Intent) -> Result<ExecutionResult, OrchestratorError> {
+    pub async fn process_intent(
+        &self,
+        intent: Intent,
+    ) -> Result<ExecutionResult, OrchestratorError> {
         let intent_id = intent.id.clone();
         info!(intent_id = %intent_id, "Processing intent");
 
@@ -169,7 +338,11 @@ impl IntentOrchestrator {
         let current_time = current_timestamp();
 
         // Execute the intent
-        match self.executor.coordinate_execution(intent.clone(), current_time).await {
+        match self
+            .executor
+            .coordinate_execution(intent.clone(), current_time)
+            .await
+        {
             Ok(ExecutionOutcome::Completed {
                 matched_amount,
                 solver_fills,
@@ -177,10 +350,7 @@ impl IntentOrchestrator {
                 ..
             }) => {
                 // Calculate total output and execution price
-                let total_output: Uint128 = solver_fills
-                    .iter()
-                    .map(|f| f.output_amount)
-                    .sum();
+                let total_output: Uint128 = solver_fills.iter().map(|f| f.output_amount).sum();
 
                 let execution_price = if !matched_amount.is_zero() {
                     Decimal::from(total_output.u128()) / Decimal::from(matched_amount.u128())
@@ -246,7 +416,10 @@ impl IntentOrchestrator {
     }
 
     /// Process a batch of intents (batch auction)
-    pub async fn process_batch(&self, intents: Vec<Intent>) -> Result<BatchResult, OrchestratorError> {
+    pub async fn process_batch(
+        &self,
+        intents: Vec<Intent>,
+    ) -> Result<BatchResult, OrchestratorError> {
         if intents.is_empty() {
             return Ok(BatchResult {
                 results: Vec::new(),
@@ -292,7 +465,13 @@ impl IntentOrchestrator {
             // Run batch auction
             let auction_result = {
                 let mut engine = self.matching_engine.lock().await;
-                engine.run_batch_auction(pair.clone(), pair_intents.clone(), solver_quotes, oracle_price)
+                engine
+                    .run_batch_auction(
+                        pair.clone(),
+                        pair_intents.clone(),
+                        solver_quotes,
+                        oracle_price,
+                    )
                     .map_err(|e| OrchestratorError::BatchAuction {
                         reason: e.to_string(),
                     })?
@@ -372,18 +551,14 @@ impl IntentOrchestrator {
                 self.update_status(intent_id, IntentStatus::Cancelled).await;
                 Ok(())
             }
-            IntentStatus::Executing { .. } => {
-                Err(OrchestratorError::CannotCancel {
-                    intent_id: intent_id.to_string(),
-                    reason: "Intent is currently executing".to_string(),
-                })
-            }
-            IntentStatus::Completed { .. } => {
-                Err(OrchestratorError::CannotCancel {
-                    intent_id: intent_id.to_string(),
-                    reason: "Intent already completed".to_string(),
-                })
-            }
+            IntentStatus::Executing { .. } => Err(OrchestratorError::CannotCancel {
+                intent_id: intent_id.to_string(),
+                reason: "Intent is currently executing".to_string(),
+            }),
+            IntentStatus::Completed { .. } => Err(OrchestratorError::CannotCancel {
+                intent_id: intent_id.to_string(),
+                reason: "Intent already completed".to_string(),
+            }),
             IntentStatus::Failed { .. } | IntentStatus::Cancelled => {
                 // Already in terminal state
                 Ok(())
@@ -490,7 +665,8 @@ impl IntentOrchestrator {
                         input_amount: solution.fill.input_amount,
                         output_amount: solution.fill.output_amount,
                         price: solution.fill.price,
-                        valid_for_ms: (solution.valid_until.saturating_sub(current_timestamp())) * 1000,
+                        valid_for_ms: (solution.valid_until.saturating_sub(current_timestamp()))
+                            * 1000,
                     };
                     quotes.push(quote);
                 }
@@ -525,7 +701,9 @@ pub enum IntentStatus {
     Matching,
 
     /// Executing
-    Executing { stage: crate::executor::ExecutionStage },
+    Executing {
+        stage: crate::executor::ExecutionStage,
+    },
 
     /// Completed successfully
     Completed { result: ExecutionResult },
@@ -586,13 +764,14 @@ pub enum OrchestratorError {
 fn current_timestamp() -> u64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
-        .unwrap()
+        .expect("System time is before UNIX epoch - clock error")
         .as_secs()
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::str::FromStr;
 
     #[test]
     fn test_orchestrator_config_default() {
@@ -631,14 +810,14 @@ mod tests {
         assert_eq!(result.internal_crosses, 0);
     }
 
-    #[tokio::test]
-    async fn test_get_solver_quotes_returns_quotes() {
-        use atom_intents_solver::{DexRoutingSolver, MockDexClient, MockOracle, SolutionAggregator};
+    #[test]
+    fn test_builder_pattern() {
         use atom_intents_matching_engine::MatchingEngine;
         use atom_intents_settlement::{
             EscrowContract, EscrowLock, IbcResult, RelayerService, SettlementError,
             SolverVaultContract, TimeoutConfig, VaultLock,
         };
+        use atom_intents_solver::{MockOracle, SolutionAggregator};
         use std::sync::Arc;
 
         // Simple mock implementations for testing
@@ -646,10 +825,20 @@ mod tests {
         struct TestEscrow;
         #[async_trait::async_trait]
         impl EscrowContract for TestEscrow {
-            async fn lock(&self, _user: &str, _amount: Uint128, _denom: &str, _timeout: u64) -> Result<EscrowLock, SettlementError> {
+            async fn lock(
+                &self,
+                _user: &str,
+                _amount: Uint128,
+                _denom: &str,
+                _timeout: u64,
+            ) -> Result<EscrowLock, SettlementError> {
                 unimplemented!()
             }
-            async fn release_to(&self, _lock: &EscrowLock, _recipient: &str) -> Result<(), SettlementError> {
+            async fn release_to(
+                &self,
+                _lock: &EscrowLock,
+                _recipient: &str,
+            ) -> Result<(), SettlementError> {
                 unimplemented!()
             }
             async fn refund(&self, _lock: &EscrowLock) -> Result<(), SettlementError> {
@@ -661,7 +850,13 @@ mod tests {
         struct TestVault;
         #[async_trait::async_trait]
         impl SolverVaultContract for TestVault {
-            async fn lock(&self, _solver_id: &str, _amount: Uint128, _denom: &str, _timeout: u64) -> Result<VaultLock, SettlementError> {
+            async fn lock(
+                &self,
+                _solver_id: &str,
+                _amount: Uint128,
+                _denom: &str,
+                _timeout: u64,
+            ) -> Result<VaultLock, SettlementError> {
                 unimplemented!()
             }
             async fn unlock(&self, _lock: &VaultLock) -> Result<(), SettlementError> {
@@ -676,10 +871,225 @@ mod tests {
         struct TestRelayerService;
         #[async_trait::async_trait]
         impl RelayerService for TestRelayerService {
-            async fn track_settlement(&self, _settlement_id: &str, _transfers: &[atom_intents_types::IbcTransferInfo]) -> Result<(), SettlementError> {
+            async fn track_settlement(
+                &self,
+                _settlement_id: &str,
+                _transfers: &[atom_intents_types::IbcTransferInfo],
+            ) -> Result<(), SettlementError> {
                 unimplemented!()
             }
-            async fn wait_for_ibc(&self, _transfer: &atom_intents_types::IbcTransferInfo) -> Result<IbcResult, SettlementError> {
+            async fn wait_for_ibc(
+                &self,
+                _transfer: &atom_intents_types::IbcTransferInfo,
+            ) -> Result<IbcResult, SettlementError> {
+                unimplemented!()
+            }
+        }
+
+        // Test builder pattern
+        let validator = Arc::new(IntentValidator::default_config());
+        let matching_engine = MatchingEngine::new();
+
+        let oracle = Arc::new(MockOracle::new("test-oracle"));
+        let solvers = vec![];
+        let aggregator = Arc::new(SolutionAggregator::new(solvers, oracle));
+
+        let escrow = TestEscrow;
+        let vault = TestVault;
+        let relayer_service = TestRelayerService;
+
+        use atom_intents_relayer::RelayerConfig;
+        let relayer_config = RelayerConfig {
+            solver_id: "test-solver".to_string(),
+            chains: vec![],
+            poll_interval_ms: 1000,
+            batch_size: 10,
+        };
+        let chain_clients = std::collections::HashMap::new();
+        let relayer = Arc::new(atom_intents_relayer::SolverRelayer::new(
+            relayer_config,
+            chain_clients,
+        ));
+
+        // Use builder pattern
+        let result = IntentOrchestrator::builder()
+            .with_validator(validator)
+            .with_matching_engine(matching_engine)
+            .with_solution_aggregator(aggregator)
+            .with_user_escrow(escrow)
+            .with_solver_vault(vault)
+            .with_relayer(relayer)
+            .with_relayer_service(relayer_service)
+            .with_config(OrchestratorConfig::default())
+            .with_timeout_config(TimeoutConfig::default())
+            .build();
+
+        assert!(result.is_ok(), "Builder should succeed with all fields set");
+    }
+
+    #[test]
+    fn test_builder_missing_fields() {
+        use atom_intents_settlement::{
+            EscrowContract, EscrowLock, IbcResult, RelayerService, SettlementError,
+            SolverVaultContract, VaultLock,
+        };
+
+        // Simple mock implementations for testing
+        #[derive(Clone)]
+        struct TestEscrow;
+        #[async_trait::async_trait]
+        impl EscrowContract for TestEscrow {
+            async fn lock(
+                &self,
+                _user: &str,
+                _amount: Uint128,
+                _denom: &str,
+                _timeout: u64,
+            ) -> Result<EscrowLock, SettlementError> {
+                unimplemented!()
+            }
+            async fn release_to(
+                &self,
+                _lock: &EscrowLock,
+                _recipient: &str,
+            ) -> Result<(), SettlementError> {
+                unimplemented!()
+            }
+            async fn refund(&self, _lock: &EscrowLock) -> Result<(), SettlementError> {
+                unimplemented!()
+            }
+        }
+
+        #[derive(Clone)]
+        struct TestVault;
+        #[async_trait::async_trait]
+        impl SolverVaultContract for TestVault {
+            async fn lock(
+                &self,
+                _solver_id: &str,
+                _amount: Uint128,
+                _denom: &str,
+                _timeout: u64,
+            ) -> Result<VaultLock, SettlementError> {
+                unimplemented!()
+            }
+            async fn unlock(&self, _lock: &VaultLock) -> Result<(), SettlementError> {
+                unimplemented!()
+            }
+            async fn mark_complete(&self, _lock: &VaultLock) -> Result<(), SettlementError> {
+                unimplemented!()
+            }
+        }
+
+        #[derive(Clone)]
+        struct TestRelayerService;
+        #[async_trait::async_trait]
+        impl RelayerService for TestRelayerService {
+            async fn track_settlement(
+                &self,
+                _settlement_id: &str,
+                _transfers: &[atom_intents_types::IbcTransferInfo],
+            ) -> Result<(), SettlementError> {
+                unimplemented!()
+            }
+            async fn wait_for_ibc(
+                &self,
+                _transfer: &atom_intents_types::IbcTransferInfo,
+            ) -> Result<IbcResult, SettlementError> {
+                unimplemented!()
+            }
+        }
+
+        // Test builder with missing required fields
+        let result: Result<IntentOrchestrator, BuilderError> =
+            IntentOrchestrator::builder::<TestEscrow, TestVault, TestRelayerService>().build();
+
+        assert!(
+            result.is_err(),
+            "Builder should fail when required fields are missing"
+        );
+
+        if let Err(BuilderError::MissingField { field }) = result {
+            assert_eq!(field, "validator", "Should report missing validator");
+        } else {
+            panic!("Expected MissingField error");
+        }
+    }
+
+    #[tokio::test]
+    async fn test_get_solver_quotes_returns_quotes() {
+        use atom_intents_matching_engine::MatchingEngine;
+        use atom_intents_settlement::{
+            EscrowContract, EscrowLock, IbcResult, RelayerService, SettlementError,
+            SolverVaultContract, TimeoutConfig, VaultLock,
+        };
+        use atom_intents_solver::{
+            DexRoutingSolver, MockDexClient, MockOracle, SolutionAggregator,
+        };
+        use std::sync::Arc;
+
+        // Simple mock implementations for testing
+        #[derive(Clone)]
+        struct TestEscrow;
+        #[async_trait::async_trait]
+        impl EscrowContract for TestEscrow {
+            async fn lock(
+                &self,
+                _user: &str,
+                _amount: Uint128,
+                _denom: &str,
+                _timeout: u64,
+            ) -> Result<EscrowLock, SettlementError> {
+                unimplemented!()
+            }
+            async fn release_to(
+                &self,
+                _lock: &EscrowLock,
+                _recipient: &str,
+            ) -> Result<(), SettlementError> {
+                unimplemented!()
+            }
+            async fn refund(&self, _lock: &EscrowLock) -> Result<(), SettlementError> {
+                unimplemented!()
+            }
+        }
+
+        #[derive(Clone)]
+        struct TestVault;
+        #[async_trait::async_trait]
+        impl SolverVaultContract for TestVault {
+            async fn lock(
+                &self,
+                _solver_id: &str,
+                _amount: Uint128,
+                _denom: &str,
+                _timeout: u64,
+            ) -> Result<VaultLock, SettlementError> {
+                unimplemented!()
+            }
+            async fn unlock(&self, _lock: &VaultLock) -> Result<(), SettlementError> {
+                unimplemented!()
+            }
+            async fn mark_complete(&self, _lock: &VaultLock) -> Result<(), SettlementError> {
+                unimplemented!()
+            }
+        }
+
+        #[derive(Clone)]
+        struct TestRelayerService;
+        #[async_trait::async_trait]
+        impl RelayerService for TestRelayerService {
+            async fn track_settlement(
+                &self,
+                _settlement_id: &str,
+                _transfers: &[atom_intents_types::IbcTransferInfo],
+            ) -> Result<(), SettlementError> {
+                unimplemented!()
+            }
+            async fn wait_for_ibc(
+                &self,
+                _transfer: &atom_intents_types::IbcTransferInfo,
+            ) -> Result<IbcResult, SettlementError> {
                 unimplemented!()
             }
         }
@@ -694,7 +1104,11 @@ mod tests {
         let oracle = Arc::new(MockOracle::new("test-oracle"));
         let pair = TradingPair::new("uatom", "uusdc");
         oracle
-            .set_price(&pair, Decimal::from_str("12.34").unwrap(), Decimal::from_str("0.01").unwrap())
+            .set_price(
+                &pair,
+                Decimal::from_str("12.34").unwrap(),
+                Decimal::from_str("0.01").unwrap(),
+            )
             .await
             .unwrap();
 
@@ -718,7 +1132,10 @@ mod tests {
             batch_size: 10,
         };
         let chain_clients = std::collections::HashMap::new();
-        let relayer = Arc::new(atom_intents_relayer::SolverRelayer::new(relayer_config, chain_clients));
+        let relayer = Arc::new(atom_intents_relayer::SolverRelayer::new(
+            relayer_config,
+            chain_clients,
+        ));
 
         let timeout_config = TimeoutConfig::default();
         let config = OrchestratorConfig::default();
@@ -739,25 +1156,40 @@ mod tests {
         let quotes = orchestrator.get_solver_quotes(&pair).await;
 
         // Verify quotes are returned
-        assert!(!quotes.is_empty(), "get_solver_quotes should return non-empty quotes");
-        assert_eq!(quotes.len(), 1, "Should have exactly one quote from test-solver");
+        assert!(
+            !quotes.is_empty(),
+            "get_solver_quotes should return non-empty quotes"
+        );
+        assert_eq!(
+            quotes.len(),
+            1,
+            "Should have exactly one quote from test-solver"
+        );
 
         // Verify quote contents
         let quote = &quotes[0];
         assert_eq!(quote.solver_id, "test-solver");
-        assert!(!quote.input_amount.is_zero(), "Quote should have non-zero input amount");
-        assert!(!quote.output_amount.is_zero(), "Quote should have non-zero output amount");
+        assert!(
+            !quote.input_amount.is_zero(),
+            "Quote should have non-zero input amount"
+        );
+        assert!(
+            !quote.output_amount.is_zero(),
+            "Quote should have non-zero output amount"
+        );
         assert!(!quote.price.is_empty(), "Quote should have a price");
         assert!(quote.valid_for_ms > 0, "Quote should have valid_for_ms > 0");
     }
 
     #[tokio::test]
     async fn test_get_solver_quotes_with_multiple_solvers() {
-        use atom_intents_solver::{DexRoutingSolver, MockDexClient, MockOracle, SolutionAggregator};
         use atom_intents_matching_engine::MatchingEngine;
         use atom_intents_settlement::{
             EscrowContract, EscrowLock, IbcResult, RelayerService, SettlementError,
             SolverVaultContract, TimeoutConfig, VaultLock,
+        };
+        use atom_intents_solver::{
+            DexRoutingSolver, MockDexClient, MockOracle, SolutionAggregator,
         };
         use std::sync::Arc;
 
@@ -766,10 +1198,20 @@ mod tests {
         struct TestEscrow;
         #[async_trait::async_trait]
         impl EscrowContract for TestEscrow {
-            async fn lock(&self, _user: &str, _amount: Uint128, _denom: &str, _timeout: u64) -> Result<EscrowLock, SettlementError> {
+            async fn lock(
+                &self,
+                _user: &str,
+                _amount: Uint128,
+                _denom: &str,
+                _timeout: u64,
+            ) -> Result<EscrowLock, SettlementError> {
                 unimplemented!()
             }
-            async fn release_to(&self, _lock: &EscrowLock, _recipient: &str) -> Result<(), SettlementError> {
+            async fn release_to(
+                &self,
+                _lock: &EscrowLock,
+                _recipient: &str,
+            ) -> Result<(), SettlementError> {
                 unimplemented!()
             }
             async fn refund(&self, _lock: &EscrowLock) -> Result<(), SettlementError> {
@@ -781,7 +1223,13 @@ mod tests {
         struct TestVault;
         #[async_trait::async_trait]
         impl SolverVaultContract for TestVault {
-            async fn lock(&self, _solver_id: &str, _amount: Uint128, _denom: &str, _timeout: u64) -> Result<VaultLock, SettlementError> {
+            async fn lock(
+                &self,
+                _solver_id: &str,
+                _amount: Uint128,
+                _denom: &str,
+                _timeout: u64,
+            ) -> Result<VaultLock, SettlementError> {
                 unimplemented!()
             }
             async fn unlock(&self, _lock: &VaultLock) -> Result<(), SettlementError> {
@@ -796,10 +1244,17 @@ mod tests {
         struct TestRelayerService;
         #[async_trait::async_trait]
         impl RelayerService for TestRelayerService {
-            async fn track_settlement(&self, _settlement_id: &str, _transfers: &[atom_intents_types::IbcTransferInfo]) -> Result<(), SettlementError> {
+            async fn track_settlement(
+                &self,
+                _settlement_id: &str,
+                _transfers: &[atom_intents_types::IbcTransferInfo],
+            ) -> Result<(), SettlementError> {
                 unimplemented!()
             }
-            async fn wait_for_ibc(&self, _transfer: &atom_intents_types::IbcTransferInfo) -> Result<IbcResult, SettlementError> {
+            async fn wait_for_ibc(
+                &self,
+                _transfer: &atom_intents_types::IbcTransferInfo,
+            ) -> Result<IbcResult, SettlementError> {
                 unimplemented!()
             }
         }
@@ -816,7 +1271,11 @@ mod tests {
         let oracle = Arc::new(MockOracle::new("test-oracle"));
         let pair = TradingPair::new("uatom", "uusdc");
         oracle
-            .set_price(&pair, Decimal::from_str("12.34").unwrap(), Decimal::from_str("0.01").unwrap())
+            .set_price(
+                &pair,
+                Decimal::from_str("12.34").unwrap(),
+                Decimal::from_str("0.01").unwrap(),
+            )
             .await
             .unwrap();
 
@@ -840,7 +1299,10 @@ mod tests {
             batch_size: 10,
         };
         let chain_clients = std::collections::HashMap::new();
-        let relayer = Arc::new(atom_intents_relayer::SolverRelayer::new(relayer_config, chain_clients));
+        let relayer = Arc::new(atom_intents_relayer::SolverRelayer::new(
+            relayer_config,
+            chain_clients,
+        ));
 
         let orchestrator = IntentOrchestrator::new(
             validator,
@@ -858,10 +1320,18 @@ mod tests {
         let quotes = orchestrator.get_solver_quotes(&pair).await;
 
         // Verify multiple quotes are returned
-        assert!(quotes.len() >= 2, "Should have quotes from multiple solvers, got {}", quotes.len());
+        assert!(
+            quotes.len() >= 2,
+            "Should have quotes from multiple solvers, got {}",
+            quotes.len()
+        );
 
         // Verify we have different solver IDs
-        let solver_ids: std::collections::HashSet<_> = quotes.iter().map(|q| q.solver_id.clone()).collect();
-        assert!(solver_ids.len() >= 2, "Should have quotes from at least 2 different solvers");
+        let solver_ids: std::collections::HashSet<_> =
+            quotes.iter().map(|q| q.solver_id.clone()).collect();
+        assert!(
+            solver_ids.len() >= 2,
+            "Should have quotes from at least 2 different solvers"
+        );
     }
 }

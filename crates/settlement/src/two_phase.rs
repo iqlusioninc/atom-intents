@@ -1,5 +1,5 @@
 use async_trait::async_trait;
-use atom_intents_types::{Intent, IbcTransferInfo, Settlement, SettlementStatus, Solution};
+use atom_intents_types::{IbcTransferInfo, Intent, Settlement, SettlementStatus, Solution};
 use cosmwasm_std::Uint128;
 
 use crate::{IbcTransferBuilder, SettlementError};
@@ -33,9 +33,9 @@ pub struct TimeoutConfig {
 impl Default for TimeoutConfig {
     fn default() -> Self {
         Self {
-            ibc_timeout_secs: 600,       // 10 minutes
-            safety_buffer_secs: 300,     // 5 minutes
-            max_timeout_secs: 1800,      // 30 minutes
+            ibc_timeout_secs: 600,   // 10 minutes
+            safety_buffer_secs: 300, // 5 minutes
+            max_timeout_secs: 1800,  // 30 minutes
         }
     }
 }
@@ -79,7 +79,13 @@ pub struct VaultLock {
 /// User escrow contract interface
 #[async_trait]
 pub trait EscrowContract: Send + Sync {
-    async fn lock(&self, user: &str, amount: Uint128, denom: &str, timeout: u64) -> Result<EscrowLock, SettlementError>;
+    async fn lock(
+        &self,
+        user: &str,
+        amount: Uint128,
+        denom: &str,
+        timeout: u64,
+    ) -> Result<EscrowLock, SettlementError>;
     async fn release_to(&self, lock: &EscrowLock, recipient: &str) -> Result<(), SettlementError>;
     async fn refund(&self, lock: &EscrowLock) -> Result<(), SettlementError>;
 }
@@ -87,7 +93,13 @@ pub trait EscrowContract: Send + Sync {
 /// Solver vault contract interface
 #[async_trait]
 pub trait SolverVaultContract: Send + Sync {
-    async fn lock(&self, solver_id: &str, amount: Uint128, denom: &str, timeout: u64) -> Result<VaultLock, SettlementError>;
+    async fn lock(
+        &self,
+        solver_id: &str,
+        amount: Uint128,
+        denom: &str,
+        timeout: u64,
+    ) -> Result<VaultLock, SettlementError>;
     async fn unlock(&self, lock: &VaultLock) -> Result<(), SettlementError>;
     async fn mark_complete(&self, lock: &VaultLock) -> Result<(), SettlementError>;
 }
@@ -95,7 +107,11 @@ pub trait SolverVaultContract: Send + Sync {
 /// Relayer service interface
 #[async_trait]
 pub trait RelayerService: Send + Sync {
-    async fn track_settlement(&self, settlement_id: &str, transfers: &[IbcTransferInfo]) -> Result<(), SettlementError>;
+    async fn track_settlement(
+        &self,
+        settlement_id: &str,
+        transfers: &[IbcTransferInfo],
+    ) -> Result<(), SettlementError>;
     async fn wait_for_ibc(&self, transfer: &IbcTransferInfo) -> Result<IbcResult, SettlementError>;
 }
 
@@ -227,8 +243,13 @@ where
 pub enum RecoveryAction {
     RetryWithDifferentSolver,
     UserCanRetry,
-    PartialSettlement { delivered: Uint128, refunded: Uint128 },
-    ManualIntervention { reason: String },
+    PartialSettlement {
+        delivered: Uint128,
+        refunded: Uint128,
+    },
+    ManualIntervention {
+        reason: String,
+    },
 }
 
 /// Handle settlement failures
@@ -242,9 +263,7 @@ pub fn handle_failure(failure: SettlementFailure) -> RecoveryAction {
                 refunded: failed,
             }
         }
-        SettlementFailure::Unknown { reason } => {
-            RecoveryAction::ManualIntervention { reason }
-        }
+        SettlementFailure::Unknown { reason } => RecoveryAction::ManualIntervention { reason },
     }
 }
 

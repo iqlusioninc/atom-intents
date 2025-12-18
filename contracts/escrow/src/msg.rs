@@ -21,9 +21,7 @@ pub enum ExecuteMsg {
         recipient: String,
     },
     /// Refund escrowed funds to owner (after expiry)
-    Refund {
-        escrow_id: String,
-    },
+    Refund { escrow_id: String },
     /// Update config (admin only)
     UpdateConfig {
         admin: Option<String>,
