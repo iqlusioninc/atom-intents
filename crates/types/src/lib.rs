@@ -1,4 +1,5 @@
 pub mod asset;
+pub mod cancellation;
 pub mod execution;
 pub mod fill;
 pub mod intent;
@@ -7,6 +8,7 @@ pub mod trading;
 pub mod verification;
 
 pub use asset::*;
+pub use cancellation::*;
 pub use execution::*;
 pub use fill::*;
 pub use intent::*;

@@ -130,6 +130,47 @@ pub fn sign_message(message: &[u8], private_key_bytes: &[u8]) -> Result<Binary, 
     Ok(Binary::from(signature.to_bytes().to_vec()))
 }
 
+/// Verify a signature against a message and public key
+///
+/// Generic signature verification that can be used for any signed message.
+///
+/// # Arguments
+/// * `message` - The message bytes that were signed
+/// * `signature` - The signature (64 bytes)
+/// * `public_key` - The public key (33 bytes compressed)
+///
+/// # Returns
+/// * `Ok(true)` if signature is valid
+/// * `Ok(false)` should not happen (errors returned instead)
+/// * `Err(VerificationError)` if verification fails
+pub fn verify_signature(
+    message: &[u8],
+    signature: &Binary,
+    public_key: &Binary,
+) -> Result<bool, VerificationError> {
+    if signature.is_empty() {
+        return Err(VerificationError::MissingSignature);
+    }
+
+    if public_key.is_empty() {
+        return Err(VerificationError::InvalidPublicKey(
+            "public key is empty".to_string(),
+        ));
+    }
+
+    let verifying_key = VerifyingKey::from_sec1_bytes(public_key)
+        .map_err(|e| VerificationError::InvalidPublicKey(e.to_string()))?;
+
+    let sig = Signature::from_slice(signature)
+        .map_err(|e| VerificationError::InvalidSignature(e.to_string()))?;
+
+    verifying_key
+        .verify(message, &sig)
+        .map_err(|_| VerificationError::VerificationFailed)?;
+
+    Ok(true)
+}
+
 /// Extract the public key from a private key
 ///
 /// # Arguments

@@ -96,7 +96,7 @@ fn execute_lock(
 
 fn execute_release(
     deps: DepsMut,
-    _env: Env,
+    env: Env,
     info: MessageInfo,
     escrow_id: String,
     recipient: String,
@@ -118,6 +118,15 @@ fn execute_release(
     // Check not already released
     if !matches!(escrow.status, EscrowStatus::Locked) {
         return Err(ContractError::EscrowNotFound { id: escrow_id });
+    }
+
+    // SECURITY FIX (5.6): Prevent release after expiration
+    // This prevents a race condition where:
+    // 1. Escrow expires
+    // 2. User initiates refund
+    // 3. Settlement contract tries to release (would be double-spend)
+    if env.block.time.seconds() >= escrow.expires_at {
+        return Err(ContractError::EscrowExpired { id: escrow_id });
     }
 
     // Update status

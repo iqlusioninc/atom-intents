@@ -293,11 +293,23 @@ impl Default for CexBackstopConfig {
     }
 }
 
+/// Pending inventory change for a settlement
+#[derive(Clone, Debug)]
+pub struct PendingInventoryChange {
+    pub settlement_id: String,
+    pub input_denom: String,
+    pub output_denom: String,
+    pub amount: i128,
+    pub timestamp: u64,
+}
+
 /// Inventory position tracker
 #[derive(Clone, Debug, Default)]
 struct InventoryPosition {
     /// Net position per asset (positive = long, negative = short)
     positions: HashMap<String, i128>,
+    /// Pending changes that can be rolled back (keyed by settlement_id)
+    pending_changes: HashMap<String, PendingInventoryChange>,
 }
 
 impl InventoryPosition {
@@ -307,6 +319,39 @@ impl InventoryPosition {
 
     fn get_position(&self, asset: &str) -> i128 {
         *self.positions.get(asset).unwrap_or(&0)
+    }
+
+    /// Record a pending inventory change that may need rollback
+    fn record_pending(&mut self, change: PendingInventoryChange) {
+        self.pending_changes
+            .insert(change.settlement_id.clone(), change);
+    }
+
+    /// SECURITY FIX (1.2): Rollback inventory for a failed settlement
+    ///
+    /// This reverses the inventory changes made when a solution was created
+    /// if the settlement ultimately fails.
+    fn rollback(&mut self, settlement_id: &str) -> Option<PendingInventoryChange> {
+        if let Some(change) = self.pending_changes.remove(settlement_id) {
+            // Reverse the position changes
+            self.update(&change.input_denom, change.amount); // Was sold, now buy back
+            self.update(&change.output_denom, -change.amount); // Was bought, now sold
+            Some(change)
+        } else {
+            None
+        }
+    }
+
+    /// Confirm a pending change (settlement succeeded)
+    fn confirm(&mut self, settlement_id: &str) -> Option<PendingInventoryChange> {
+        self.pending_changes.remove(settlement_id)
+    }
+
+    /// Clean up stale pending changes older than max_age_secs
+    fn cleanup_stale(&mut self, current_time: u64, max_age_secs: u64) {
+        let cutoff = current_time.saturating_sub(max_age_secs);
+        self.pending_changes
+            .retain(|_, change| change.timestamp > cutoff);
     }
 }
 
@@ -439,7 +484,35 @@ impl CexBackstopSolver {
         Ok((output_amount, avg_price.to_string()))
     }
 
-    /// Update inventory tracking
+    /// Update inventory tracking with pending change recording
+    fn update_inventory_with_pending(
+        &self,
+        settlement_id: &str,
+        input_denom: &str,
+        output_denom: &str,
+        amount: i128,
+    ) {
+        let current_time = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+
+        if let Ok(mut inventory) = self.inventory.write() {
+            inventory.update(input_denom, -amount); // Sold
+            inventory.update(output_denom, amount); // Bought
+
+            // Record as pending for potential rollback
+            inventory.record_pending(PendingInventoryChange {
+                settlement_id: settlement_id.to_string(),
+                input_denom: input_denom.to_string(),
+                output_denom: output_denom.to_string(),
+                amount,
+                timestamp: current_time,
+            });
+        }
+    }
+
+    /// Update inventory tracking (legacy - used in tests)
     fn update_inventory(&self, input_denom: &str, output_denom: &str, amount: i128) {
         if let Ok(mut inventory) = self.inventory.write() {
             inventory.update(input_denom, -amount); // Sold
@@ -454,6 +527,39 @@ impl CexBackstopSolver {
             .ok()
             .map(|inv| inv.get_position(asset))
             .unwrap_or(0)
+    }
+
+    /// SECURITY FIX (1.2): Rollback inventory for a failed settlement
+    ///
+    /// Call this when a settlement fails to reverse the inventory changes
+    /// that were made when the solution was created.
+    pub fn rollback_settlement(&self, settlement_id: &str) -> bool {
+        if let Ok(mut inventory) = self.inventory.write() {
+            inventory.rollback(settlement_id).is_some()
+        } else {
+            false
+        }
+    }
+
+    /// Confirm a settlement succeeded (removes from pending)
+    pub fn confirm_settlement(&self, settlement_id: &str) -> bool {
+        if let Ok(mut inventory) = self.inventory.write() {
+            inventory.confirm(settlement_id).is_some()
+        } else {
+            false
+        }
+    }
+
+    /// Clean up stale pending changes
+    pub fn cleanup_stale_pending(&self, max_age_secs: u64) {
+        let current_time = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+
+        if let Ok(mut inventory) = self.inventory.write() {
+            inventory.cleanup_stale(current_time, max_age_secs);
+        }
     }
 }
 
@@ -519,8 +625,10 @@ impl Solver for CexBackstopSolver {
         let output_to_user_dec = Decimal::from(output_to_user);
         let effective_price = output_to_user_dec / remaining_dec;
 
-        // Update inventory tracking
-        self.update_inventory(
+        // SECURITY FIX (1.2): Update inventory with pending tracking for rollback
+        // Use intent_id as the pending key - orchestrator will call confirm or rollback
+        self.update_inventory_with_pending(
+            &intent.id,
             &intent.input.denom,
             &intent.output.denom,
             ctx.remaining.u128() as i128,

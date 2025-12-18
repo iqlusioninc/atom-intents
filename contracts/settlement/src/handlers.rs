@@ -172,7 +172,16 @@ pub fn execute_mark_user_locked(
             id: settlement_id.clone(),
         })?;
 
-    settlement.status = SettlementStatus::UserLocked;
+    // SECURITY FIX (5.6/7.1): Validate state transition
+    let target_status = SettlementStatus::UserLocked;
+    if !settlement.status.can_transition_to(&target_status) {
+        return Err(ContractError::InvalidStateTransition {
+            from: settlement.status.as_str().to_string(),
+            to: target_status.as_str().to_string(),
+        });
+    }
+
+    settlement.status = target_status;
     settlement.escrow_id = Some(escrow_id);
     SETTLEMENTS.save(deps.storage, &settlement_id, &settlement)?;
 
@@ -198,7 +207,16 @@ pub fn execute_mark_solver_locked(
         return Err(ContractError::Unauthorized {});
     }
 
-    settlement.status = SettlementStatus::SolverLocked;
+    // SECURITY FIX (5.6/7.1): Validate state transition
+    let target_status = SettlementStatus::SolverLocked;
+    if !settlement.status.can_transition_to(&target_status) {
+        return Err(ContractError::InvalidStateTransition {
+            from: settlement.status.as_str().to_string(),
+            to: target_status.as_str().to_string(),
+        });
+    }
+
+    settlement.status = target_status;
     SETTLEMENTS.save(deps.storage, &settlement_id, &settlement)?;
 
     Ok(Response::new()
@@ -224,7 +242,16 @@ pub fn execute_mark_executing(
         return Err(ContractError::Unauthorized {});
     }
 
-    settlement.status = SettlementStatus::Executing;
+    // SECURITY FIX (5.6/7.1): Validate state transition
+    let target_status = SettlementStatus::Executing;
+    if !settlement.status.can_transition_to(&target_status) {
+        return Err(ContractError::InvalidStateTransition {
+            from: settlement.status.as_str().to_string(),
+            to: target_status.as_str().to_string(),
+        });
+    }
+
+    settlement.status = target_status;
     SETTLEMENTS.save(deps.storage, &settlement_id, &settlement)?;
 
     Ok(Response::new()
@@ -249,12 +276,21 @@ pub fn execute_mark_completed(
         return Err(ContractError::Unauthorized {});
     }
 
+    // SECURITY FIX (7.1): Validate state transition - prevents double completion
+    let target_status = SettlementStatus::Completed;
+    if !settlement.status.can_transition_to(&target_status) {
+        return Err(ContractError::InvalidStateTransition {
+            from: settlement.status.as_str().to_string(),
+            to: target_status.as_str().to_string(),
+        });
+    }
+
     // Update solver stats
     let mut solver = SOLVERS.load(deps.storage, &settlement.solver_id)?;
     solver.total_settlements += 1;
     SOLVERS.save(deps.storage, &settlement.solver_id, &solver)?;
 
-    settlement.status = SettlementStatus::Completed;
+    settlement.status = target_status;
     SETTLEMENTS.save(deps.storage, &settlement_id, &settlement)?;
 
     Ok(Response::new()
@@ -280,15 +316,24 @@ pub fn execute_mark_failed(
         return Err(ContractError::Unauthorized {});
     }
 
+    // SECURITY FIX (5.6/7.1): Validate state transition
+    let target_status = SettlementStatus::Failed {
+        reason: reason.clone(),
+    };
+    if !settlement.status.can_transition_to(&target_status) {
+        return Err(ContractError::InvalidStateTransition {
+            from: settlement.status.as_str().to_string(),
+            to: "Failed".to_string(),
+        });
+    }
+
     // Update solver stats
     let mut solver = SOLVERS.load(deps.storage, &settlement.solver_id)?;
     solver.total_settlements += 1;
     solver.failed_settlements += 1;
     SOLVERS.save(deps.storage, &settlement.solver_id, &solver)?;
 
-    settlement.status = SettlementStatus::Failed {
-        reason: reason.clone(),
-    };
+    settlement.status = target_status;
     SETTLEMENTS.save(deps.storage, &settlement_id, &settlement)?;
 
     Ok(Response::new()
@@ -303,6 +348,8 @@ pub fn execute_slash_solver(
     solver_id: String,
     settlement_id: String,
 ) -> Result<Response, ContractError> {
+    use crate::state::MIN_SLASH_AMOUNT;
+
     let config = CONFIG.load(deps.storage)?;
 
     // Only admin can slash
@@ -317,22 +364,37 @@ pub fn execute_slash_solver(
                 id: solver_id.clone(),
             })?;
 
-    let settlement = SETTLEMENTS
+    let mut settlement = SETTLEMENTS
         .load(deps.storage, &settlement_id)
         .map_err(|_| ContractError::SettlementNotFound {
             id: settlement_id.clone(),
         })?;
 
+    // SECURITY FIX (5.6/7.1): Validate state transition
+    let target_status = SettlementStatus::Slashed {
+        amount: Uint128::zero(), // Placeholder, actual amount calculated below
+    };
+    if !settlement.status.can_transition_to(&target_status) {
+        return Err(ContractError::InvalidStateTransition {
+            from: settlement.status.as_str().to_string(),
+            to: "Slashed".to_string(),
+        });
+    }
+
     // Calculate slash amount (base_slash_bps of settlement value)
-    let slash_amount = settlement.user_input_amount * Uint128::from(config.base_slash_bps)
+    let calculated_slash = settlement.user_input_amount * Uint128::from(config.base_slash_bps)
         / Uint128::from(10000u64);
-    let actual_slash = std::cmp::min(slash_amount, solver.bond_amount);
+
+    // SECURITY FIX (1.7): Apply minimum slash threshold to prevent dust attacks
+    let slash_with_minimum = std::cmp::max(calculated_slash, Uint128::new(MIN_SLASH_AMOUNT));
+
+    // Cap at solver's bond amount
+    let actual_slash = std::cmp::min(slash_with_minimum, solver.bond_amount);
 
     solver.bond_amount = solver.bond_amount.saturating_sub(actual_slash);
     SOLVERS.save(deps.storage, &solver_id, &solver)?;
 
     // Update settlement status
-    let mut settlement = settlement;
     settlement.status = SettlementStatus::Slashed {
         amount: actual_slash,
     };

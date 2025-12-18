@@ -41,6 +41,9 @@ pub struct Settlement {
     pub escrow_id: Option<String>,
 }
 
+/// Minimum slash amount to prevent dust attacks (10 ATOM = 10_000_000 uatom)
+pub const MIN_SLASH_AMOUNT: u128 = 10_000_000;
+
 #[cw_serde]
 pub enum SettlementStatus {
     Pending,
@@ -50,6 +53,60 @@ pub enum SettlementStatus {
     Completed,
     Failed { reason: String },
     Slashed { amount: Uint128 },
+}
+
+impl SettlementStatus {
+    /// SECURITY FIX (5.6/7.1): Validates state machine transitions
+    ///
+    /// Valid transitions:
+    /// - Pending -> UserLocked | Failed | Slashed
+    /// - UserLocked -> SolverLocked | Failed | Slashed
+    /// - SolverLocked -> Executing | Failed | Slashed
+    /// - Executing -> Completed | Failed | Slashed
+    /// - Failed -> Slashed (for penalty after failure)
+    ///
+    /// Slashing is allowed from any active state because solvers can misbehave
+    /// at any point after taking a position on a settlement.
+    ///
+    /// Invalid transitions return false.
+    pub fn can_transition_to(&self, target: &SettlementStatus) -> bool {
+        match (self, target) {
+            // Normal flow
+            (SettlementStatus::Pending, SettlementStatus::UserLocked) => true,
+            (SettlementStatus::UserLocked, SettlementStatus::SolverLocked) => true,
+            (SettlementStatus::SolverLocked, SettlementStatus::Executing) => true,
+            (SettlementStatus::Executing, SettlementStatus::Completed) => true,
+
+            // Failure can happen from any active state
+            (SettlementStatus::Pending, SettlementStatus::Failed { .. }) => true,
+            (SettlementStatus::UserLocked, SettlementStatus::Failed { .. }) => true,
+            (SettlementStatus::SolverLocked, SettlementStatus::Failed { .. }) => true,
+            (SettlementStatus::Executing, SettlementStatus::Failed { .. }) => true,
+
+            // Slashing can happen from any active state or after failure
+            (SettlementStatus::Pending, SettlementStatus::Slashed { .. }) => true,
+            (SettlementStatus::UserLocked, SettlementStatus::Slashed { .. }) => true,
+            (SettlementStatus::SolverLocked, SettlementStatus::Slashed { .. }) => true,
+            (SettlementStatus::Executing, SettlementStatus::Slashed { .. }) => true,
+            (SettlementStatus::Failed { .. }, SettlementStatus::Slashed { .. }) => true,
+
+            // All other transitions are invalid (e.g., Completed -> anything)
+            _ => false,
+        }
+    }
+
+    /// Returns a string representation for error messages
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            SettlementStatus::Pending => "Pending",
+            SettlementStatus::UserLocked => "UserLocked",
+            SettlementStatus::SolverLocked => "SolverLocked",
+            SettlementStatus::Executing => "Executing",
+            SettlementStatus::Completed => "Completed",
+            SettlementStatus::Failed { .. } => "Failed",
+            SettlementStatus::Slashed { .. } => "Slashed",
+        }
+    }
 }
 
 #[cw_serde]

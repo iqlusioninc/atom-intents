@@ -398,9 +398,8 @@ fn test_double_completion_behavior() {
     )
     .unwrap();
 
-    // Second completion - currently allowed but should ideally fail
-    // IMPROVEMENT: Add status check in execute_mark_completed to prevent
-    // double completion and double-counting of solver stats
+    // Second completion attempt - should fail with state machine guards
+    // FIX APPLIED (5.6/7.1): State machine guards prevent double completion
     let result = execute(
         deps.as_mut(),
         env,
@@ -410,9 +409,8 @@ fn test_double_completion_behavior() {
         },
     );
 
-    // Currently succeeds - documenting actual behavior
-    // TODO: Consider adding status check to prevent double completion
-    assert!(result.is_ok(), "Current contract allows double completion");
+    // With state machine guards, double completion is now properly rejected
+    assert!(result.is_err(), "State machine guards should prevent double completion");
 }
 
 // ═══════════════════════════════════════════════════════════════════════════

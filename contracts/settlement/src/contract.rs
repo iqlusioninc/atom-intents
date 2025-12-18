@@ -957,7 +957,8 @@ mod tests {
     #[test]
     fn test_slash_solver_success() {
         let (mut deps, env, addrs) = setup_contract();
-        register_solver(&mut deps, &env, &addrs, "solver-1", 2_000_000);
+        // Use 100 ATOM bond (100_000_000 uatom) to absorb MIN_SLASH_AMOUNT (10 ATOM)
+        register_solver(&mut deps, &env, &addrs, "solver-1", 100_000_000);
         create_settlement(&mut deps, &env, &addrs, "settlement-1", "solver-1");
 
         let info = message_info(&addrs.admin, &[]);
@@ -985,8 +986,10 @@ mod tests {
             .unwrap(),
         )
         .unwrap();
-        // 2_000_000 - 2000 = 1_998_000 (2% of 100_000 = 2000)
-        assert_eq!(solver.bond_amount, Uint128::new(1_998_000));
+        // Calculated: 2% of 100_000 = 2000, but MIN_SLASH_AMOUNT = 10_000_000 (10 ATOM)
+        // Actual slash: max(2000, 10_000_000) = 10_000_000
+        // Remaining bond: 100_000_000 - 10_000_000 = 90_000_000
+        assert_eq!(solver.bond_amount, Uint128::new(90_000_000));
     }
 
     #[test]
@@ -1673,7 +1676,8 @@ mod tests {
     #[test]
     fn test_reputation_with_slashing() {
         let (mut deps, env, addrs) = setup_contract();
-        register_solver(&mut deps, &env, &addrs, "solver-1", 2_000_000);
+        // Use 100 ATOM bond to absorb MIN_SLASH_AMOUNT (10 ATOM)
+        register_solver(&mut deps, &env, &addrs, "solver-1", 100_000_000);
 
         // Create settlement and slash solver
         create_settlement(&mut deps, &env, &addrs, "settlement-1", "solver-1");

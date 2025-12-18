@@ -99,17 +99,22 @@ fn test_frontrunning_defense_via_limit_price() {
     // This is the defense against front-running in intent systems
 }
 
-/// Test that limit price protects against price manipulation
+/// Test that midpoint pricing protects against oracle manipulation
+///
+/// With midpoint pricing (architectural fix 5.1), execution price is derived
+/// from the limit prices, not the oracle. Oracle manipulation doesn't affect
+/// execution as long as the deviation is within tolerance.
 #[test]
-fn test_limit_price_protects_against_price_slippage() {
+fn test_midpoint_pricing_protects_against_oracle_manipulation() {
     let mut engine = MatchingEngine::new();
     let pair = TradingPair::new("uatom", "uusdc");
 
-    // User sets strict limit: willing to pay max 10 USDC/ATOM
+    // User sets strict limit: willing to pay max 10 USDC/ATOM (0.1 ATOM/USDC)
     let user_buy = make_test_intent(
         "user-buy", "user", "uusdc", 10_000_000, "uatom", 1_000_000, "0.1",
     );
 
+    // Seller wants min 10 USDC/ATOM
     let sell = make_test_intent(
         "sell-1", "seller", "uatom", 1_000_000, "uusdc", 10_000_000, "10.0",
     );
@@ -117,10 +122,44 @@ fn test_limit_price_protects_against_price_slippage() {
     // ATTACK: Oracle manipulated to 11 USDC/ATOM
     let manipulated_oracle = Decimal::from_str("11.0").unwrap();
 
-    let result = engine.run_batch_auction(pair, vec![user_buy, sell], vec![], manipulated_oracle);
+    let result = engine.run_batch_auction(pair.clone(), vec![user_buy, sell], vec![], manipulated_oracle);
 
-    // User's order should be rejected - protects against price manipulation
-    assert!(result.is_err());
+    // With midpoint pricing, execution happens at midpoint of limits (10 USDC/ATOM)
+    // NOT at the manipulated oracle price! User is protected.
+    assert!(result.is_ok(), "Midpoint pricing should execute at limit-derived price");
+    let auction = result.unwrap();
+
+    // Verify trade executed despite oracle manipulation
+    assert!(!auction.internal_fills.is_empty(), "Trade should execute at fair midpoint price");
+}
+
+/// Test that extreme oracle deviation triggers sanity check rejection
+#[test]
+fn test_extreme_oracle_deviation_rejected() {
+    let mut engine = MatchingEngine::new();
+    let pair = TradingPair::new("uatom", "uusdc");
+
+    // Buyer willing to pay max 10 USDC/ATOM
+    let user_buy = make_test_intent(
+        "buy-1", "buyer", "uusdc", 10_000_000, "uatom", 1_000_000, "0.1",
+    );
+
+    // Seller wants min 8 USDC/ATOM - would execute at midpoint 9 USDC/ATOM
+    let sell = make_test_intent(
+        "sell-1", "seller", "uatom", 1_000_000, "uusdc", 8_000_000, "8.0",
+    );
+
+    // ATTACK: Oracle extremely manipulated to 20 USDC/ATOM (>10% deviation from midpoint 9)
+    // Deviation = |9 - 20| / 20 = 55% > 10% threshold
+    let extremely_manipulated_oracle = Decimal::from_str("20.0").unwrap();
+
+    let result = engine.run_batch_auction(pair, vec![user_buy, sell], vec![], extremely_manipulated_oracle);
+
+    // Sanity check should prevent execution when oracle deviates too much
+    // This catches potential stale oracles or extreme manipulation
+    assert!(result.is_ok()); // Run succeeds but...
+    let auction = result.unwrap();
+    assert!(auction.internal_fills.is_empty(), "Extreme oracle deviation should prevent matching");
 }
 
 // ═══════════════════════════════════════════════════════════════════════════

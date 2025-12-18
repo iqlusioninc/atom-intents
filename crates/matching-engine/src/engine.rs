@@ -6,7 +6,7 @@ use rust_decimal::Decimal;
 use std::collections::HashMap;
 use std::str::FromStr;
 
-use crate::{MatchingError, OrderBook};
+use crate::{MatchingError, OrderBook, MAX_ORACLE_DEVIATION, MAX_SAFE_AMOUNT};
 
 /// Matching engine managing multiple order books
 pub struct MatchingEngine {
@@ -20,6 +20,19 @@ impl MatchingEngine {
             books: HashMap::new(),
             current_epoch: 0,
         }
+    }
+
+    /// Validate that an amount is safe for decimal arithmetic
+    ///
+    /// Prevents overflow/panic when converting to rust_decimal::Decimal
+    fn validate_amount(amount: Uint128) -> Result<(), MatchingError> {
+        if amount.u128() > MAX_SAFE_AMOUNT {
+            return Err(MatchingError::AmountTooLarge {
+                amount: amount.u128(),
+                max: MAX_SAFE_AMOUNT,
+            });
+        }
+        Ok(())
     }
 
     /// Get or create order book for a pair
@@ -143,6 +156,17 @@ impl MatchingEngine {
         Ok(())
     }
 
+    /// ARCHITECTURAL FIX (5.1): Oracle-free intent crossing using midpoint pricing
+    ///
+    /// This removes unnecessary oracle dependency identified in security review.
+    /// Instead of using an external oracle price, we derive the execution price
+    /// entirely from the intents themselves:
+    ///
+    /// - Check if intents cross: buy_max_price >= sell_min_price
+    /// - Execute at midpoint: (buy_max_price + sell_min_price) / 2
+    /// - Both parties get price improvement (surplus split fairly)
+    ///
+    /// Oracle is now only used as optional sanity check, not for price determination.
     fn cross_internal(
         &self,
         buys: &[&Intent],
@@ -156,8 +180,20 @@ impl MatchingEngine {
         let mut buy_remaining: Vec<Uint128> = buys.iter().map(|i| i.input.amount).collect();
         let mut sell_remaining: Vec<Uint128> = sells.iter().map(|i| i.input.amount).collect();
 
-        // Match at oracle price
+        // Parse max deviation for sanity check
+        let max_deviation = Decimal::from_str(MAX_ORACLE_DEVIATION).unwrap_or(Decimal::ONE);
+
+        // Safety: track iterations to prevent infinite loops
+        let max_iterations = (buys.len() + sells.len()) * 2 + 10;
+        let mut iterations = 0;
+
         while buy_idx < buys.len() && sell_idx < sells.len() {
+            iterations += 1;
+            if iterations > max_iterations {
+                // Safety exit - should never happen with correct logic
+                break;
+            }
+
             let buy = buys[buy_idx];
             let sell = sells[sell_idx];
 
@@ -173,16 +209,65 @@ impl MatchingEngine {
                 continue;
             }
 
-            // Validate limit prices before matching
-            Self::validate_limit_price(buy, oracle_price, Side::Buy)?;
-            Self::validate_limit_price(sell, oracle_price, Side::Sell)?;
+            // Validate amounts are safe for decimal arithmetic (Fix 7.3)
+            Self::validate_amount(buy_amount)?;
+            Self::validate_amount(sell_amount)?;
 
-            // Convert to common units using oracle price
-            let buy_in_base = self.quote_to_base(buy_amount, oracle_price);
+            // Parse limit prices from intents
+            let buy_limit = buy.output.limit_price_decimal().map_err(|e| {
+                MatchingError::InvalidPrice(format!("Buy limit: {}", e))
+            })?;
+            let sell_limit = sell.output.limit_price_decimal().map_err(|e| {
+                MatchingError::InvalidPrice(format!("Sell limit: {}", e))
+            })?;
+
+            // Buy limit is in output/input (ATOM/USDC for buy)
+            // Sell limit is in output/input (USDC/ATOM for sell)
+            // To cross: seller wants at least sell_limit USDC per ATOM
+            //           buyer willing to pay up to 1/buy_limit USDC per ATOM
+            // Cross condition: sell_limit <= 1/buy_limit
+
+            if buy_limit.is_zero() {
+                buy_idx += 1;
+                continue;
+            }
+
+            let buy_max_price = Decimal::ONE / buy_limit; // Max USDC/ATOM buyer will pay
+            let sell_min_price = sell_limit; // Min USDC/ATOM seller wants
+
+            // Check if intents cross (derived from limits, not oracle!)
+            if buy_max_price < sell_min_price {
+                // These specific intents don't cross, try next sell
+                sell_idx += 1;
+                continue;
+            }
+
+            // MIDPOINT PRICING: Execute at fair price between the two limits
+            // Both parties get price improvement (surplus split)
+            let execution_price = (buy_max_price + sell_min_price) / Decimal::TWO;
+
+            // SANITY CHECK: Ensure execution price doesn't deviate too far from oracle
+            // This catches potential manipulation without making oracle the source of truth
+            if oracle_price > Decimal::ZERO {
+                let deviation = if execution_price > oracle_price {
+                    (execution_price - oracle_price) / oracle_price
+                } else {
+                    (oracle_price - execution_price) / oracle_price
+                };
+
+                if deviation > max_deviation {
+                    // Price deviates too much from oracle - skip this match for safety
+                    sell_idx += 1;
+                    continue;
+                }
+            }
+
+            // Convert to common units using the derived execution price
+            let buy_in_base = self.quote_to_base(buy_amount, execution_price);
             let sell_in_base = sell_amount;
 
             let match_base = std::cmp::min(buy_in_base, sell_in_base);
-            let match_quote = self.base_to_quote(match_base, oracle_price);
+            let match_quote = self.base_to_quote(match_base, execution_price);
 
             if !match_base.is_zero() {
                 fills.push(AuctionFill {
@@ -201,12 +286,16 @@ impl MatchingEngine {
 
                 buy_remaining[buy_idx] = buy_remaining[buy_idx].saturating_sub(match_quote);
                 sell_remaining[sell_idx] = sell_remaining[sell_idx].saturating_sub(match_base);
-            }
 
-            if buy_remaining[buy_idx].is_zero() {
-                buy_idx += 1;
-            }
-            if sell_remaining[sell_idx].is_zero() {
+                // Advance indices if amounts exhausted
+                if buy_remaining[buy_idx].is_zero() {
+                    buy_idx += 1;
+                }
+                if sell_idx < sells.len() && sell_remaining[sell_idx].is_zero() {
+                    sell_idx += 1;
+                }
+            } else {
+                // Match resulted in zero (rounding) - try next sell
                 sell_idx += 1;
             }
         }
@@ -767,15 +856,23 @@ mod tests {
         assert!(result.solver_fills.is_empty());
     }
 
-    // ==================== Limit Price Validation Tests ====================
+    // ==================== Midpoint Pricing Tests ====================
+    //
+    // With architectural fix 5.1 (midpoint pricing), we no longer reject orders
+    // based on oracle price vs limit. Instead:
+    // - Orders with incompatible limits simply don't match
+    // - Oracle is only used as a sanity check (>10% deviation skips match)
+    // - Execution price is derived from limit prices, not oracle
 
     #[test]
-    fn test_buy_order_rejected_when_oracle_price_exceeds_limit() {
+    fn test_incompatible_limits_no_match_oracle_deviation() {
         let mut engine = MatchingEngine::new();
         let pair = TradingPair::new("uatom", "uusdc");
 
         // Buy order with limit price of 0.08 ATOM/USDC (willing to pay max 1/0.08 = 12.5 USDC/ATOM)
-        // Oracle price is 13.0 USDC/ATOM, which exceeds the max acceptable price
+        // Sell order wants min 10.0 USDC/ATOM
+        // Limits ARE compatible (12.5 >= 10.0), midpoint = 11.25 USDC/ATOM
+        // But oracle is 13.0 which deviates 13.5% from midpoint (>10% threshold)
         let buy = make_test_intent(
             "buy-1", "buyer", "uusdc", 10_000_000, "uatom", 1_000_000, "0.08",
         );
@@ -784,31 +881,23 @@ mod tests {
         );
 
         let intents = vec![buy, sell];
-        let oracle_price = Decimal::from_str("13.0").unwrap(); // Too high for buyer
+        let oracle_price = Decimal::from_str("13.0").unwrap(); // >10% deviation from midpoint
 
         let result = engine.run_batch_auction(pair, intents, vec![], oracle_price);
 
-        // Should fail with PriceExceedsLimit error
-        assert!(result.is_err());
-        match result.unwrap_err() {
-            MatchingError::PriceExceedsLimit {
-                oracle_price,
-                limit_price,
-            } => {
-                assert_eq!(oracle_price, Decimal::from_str("13.0").unwrap());
-                assert_eq!(limit_price, Decimal::from_str("0.08").unwrap());
-            }
-            e => panic!("Expected PriceExceedsLimit error, got: {:?}", e),
-        }
+        // With midpoint pricing, this succeeds but produces no fills due to sanity check
+        assert!(result.is_ok());
+        assert!(result.unwrap().internal_fills.is_empty(), "Oracle deviation >10% should prevent matching");
     }
 
     #[test]
-    fn test_sell_order_rejected_when_oracle_price_below_limit() {
+    fn test_incompatible_limits_no_match() {
         let mut engine = MatchingEngine::new();
         let pair = TradingPair::new("uatom", "uusdc");
 
         // Sell order with limit price of 11.0 USDC/ATOM (wants at least 11.0)
-        // But oracle price is 10.0 USDC/ATOM, which is below the limit
+        // Buy order willing to pay max 10.0 USDC/ATOM
+        // Limits are INCOMPATIBLE (10.0 < 11.0), so no match possible
         let buy = make_test_intent(
             "buy-1", "buyer", "uusdc", 10_000_000, "uatom", 1_000_000, "0.1",
         );
@@ -817,22 +906,13 @@ mod tests {
         );
 
         let intents = vec![buy, sell];
-        let oracle_price = Decimal::from_str("10.0").unwrap(); // Too low for seller
+        let oracle_price = Decimal::from_str("10.0").unwrap();
 
         let result = engine.run_batch_auction(pair, intents, vec![], oracle_price);
 
-        // Should fail with PriceBelowLimit error
-        assert!(result.is_err());
-        match result.unwrap_err() {
-            MatchingError::PriceBelowLimit {
-                oracle_price,
-                limit_price,
-            } => {
-                assert_eq!(oracle_price, Decimal::from_str("10.0").unwrap());
-                assert_eq!(limit_price, Decimal::from_str("11.0").unwrap());
-            }
-            e => panic!("Expected PriceBelowLimit error, got: {:?}", e),
-        }
+        // With midpoint pricing, incompatible limits just means no match (not error)
+        assert!(result.is_ok());
+        assert!(result.unwrap().internal_fills.is_empty(), "Incompatible limits should not match");
     }
 
     #[test]
@@ -887,12 +967,14 @@ mod tests {
     }
 
     #[test]
-    fn test_buy_order_accepted_when_oracle_price_below_limit() {
+    fn test_compatible_limits_within_oracle_tolerance() {
         let mut engine = MatchingEngine::new();
         let pair = TradingPair::new("uatom", "uusdc");
 
         // Buy with limit 0.11 ATOM/USDC (willing to pay up to 1/0.11 = ~9.09 USDC/ATOM)
-        // Oracle price is 9.0 USDC/ATOM - below max acceptable, should accept
+        // Sell with limit 9.0 USDC/ATOM
+        // Limits compatible (9.09 >= 9.0), midpoint = 9.045 USDC/ATOM
+        // Oracle = 9.0, deviation = 0.5% < 10%, passes sanity check
         let buy = make_test_intent(
             "buy-1", "buyer", "uusdc", 9_000_000, "uatom", 1_000_000, "0.11",
         );
@@ -907,7 +989,7 @@ mod tests {
             .run_batch_auction(pair, intents, vec![], oracle_price)
             .unwrap();
 
-        // Should successfully match
+        // Should successfully match - limits compatible and within oracle tolerance
         assert!(!result.internal_fills.is_empty());
     }
 
@@ -937,18 +1019,22 @@ mod tests {
     }
 
     #[test]
-    fn test_multiple_orders_first_fails_limit_check() {
+    fn test_multiple_orders_high_oracle_deviation_no_match() {
         let mut engine = MatchingEngine::new();
         let pair = TradingPair::new("uatom", "uusdc");
 
-        // First buy has tight limit that will fail at oracle price 10.0
-        // limit 0.09 ATOM/USDC means max price is 1/0.09 = 11.11 USDC/ATOM, but oracle is 10.0, so it passes
-        // Let's use 0.08 which gives max price 1/0.08 = 12.5, still passes at 10.0
-        // Use 0.09 with oracle 12.0 instead
+        // With midpoint pricing, we don't reject individual orders for limit violations.
+        // Instead, orders that would have high oracle deviation simply don't match.
+        //
+        // buy1: max 12.5 USDC/ATOM, buy2: max 10 USDC/ATOM, sell: min 10 USDC/ATOM
+        // Oracle = 13.0 USDC/ATOM
+        //
+        // buy1 + sell: midpoint = 11.25, deviation = |11.25 - 13| / 13 = 13.5% > 10%, skip
+        // buy2 + sell: midpoint = 10.0, deviation = |10 - 13| / 13 = 23% > 10%, skip
+        // Result: no matches due to sanity check failures
         let buy1 = make_test_intent(
             "buy-1", "buyer1", "uusdc", 10_000_000, "uatom", 1_000_000, "0.08",
         );
-        // Second buy has acceptable limit
         let buy2 = make_test_intent(
             "buy-2", "buyer2", "uusdc", 10_000_000, "uatom", 1_000_000, "0.1",
         );
@@ -957,17 +1043,12 @@ mod tests {
         );
 
         let intents = vec![buy1, buy2, sell];
-        let oracle_price = Decimal::from_str("13.0").unwrap(); // Exceeds buy1's max price of 12.5
+        let oracle_price = Decimal::from_str("13.0").unwrap();
 
         let result = engine.run_batch_auction(pair, intents, vec![], oracle_price);
 
-        // Should fail on the first buy order that violates limit
-        assert!(result.is_err());
-        match result.unwrap_err() {
-            MatchingError::PriceExceedsLimit { .. } => {
-                // Expected
-            }
-            e => panic!("Expected PriceExceedsLimit error, got: {:?}", e),
-        }
+        // With midpoint pricing, high oracle deviation means no matches (not error)
+        assert!(result.is_ok());
+        assert!(result.unwrap().internal_fills.is_empty(), "High oracle deviation should prevent all matches");
     }
 }
