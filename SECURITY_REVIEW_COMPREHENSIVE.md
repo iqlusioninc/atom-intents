@@ -19,7 +19,7 @@ This review builds upon the previous audit (AUDIT_REPORT.md) to identify **addit
 | Liquidity | 0 | 2 | 2 | 1 |
 | Timing Games | 0 | 3 | 2 | 1 |
 | Toxic Flow | 0 | 2 | 3 | 2 |
-| **Architecture** | **1** | 0 | 0 | 0 |
+| **Architecture** | **2** | **4** | **3** | 0 |
 
 ---
 
@@ -783,29 +783,418 @@ Removing unnecessary oracle dependency:
 
 ---
 
+## 5.2 [CRITICAL] Centralized Coordination Layer (Skip Select)
+
+**Location:** Spec Section 5, `SPECIFICATION.md:102-128`
+
+**Description:** The entire system routes through a centralized coordination layer called "Skip Select":
+
+```
+┌─────────────────────────────────────────────────────────────────────────┐
+│                           SKIP SELECT                                    │
+│  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐  ┌─────────────┐  │
+│  │  REST API    │  │  WebSocket   │  │   Matching   │  │   Auction   │  │
+│  │  (Users)     │  │  (Solvers)   │  │   Engine     │  │   Engine    │  │
+│  └──────────────┘  └──────────────┘  └──────────────┘  └─────────────┘  │
+└─────────────────────────────────────────────────────────────────────────┘
+```
+
+**This creates a single point of centralization** that can:
+- **Censor** specific users or intents
+- **Front-run** by seeing all intents before solvers
+- **Extract MEV** by timing auction clearing
+- **Halt** the entire system
+- **Surveil** all trading activity
+
+### Trust Assumptions
+
+| Component | Trust Required | Failure Impact |
+|-----------|---------------|----------------|
+| Skip Select API | Full custody of intent data | Complete data exposure |
+| Skip Select Matching | Fair price discovery | Systematic user losses |
+| Skip Select Auction | Unbiased winner selection | Solver collusion enabled |
+| Skip Select WebSocket | Timely delivery to solvers | Solver disadvantage |
+
+### Comparison to Alternatives
+
+| System | Coordination | Decentralization |
+|--------|-------------|------------------|
+| **This System** | Skip Select (centralized) | Low |
+| UniswapX | Dutch auction on-chain | Medium |
+| CoW Protocol | Solver competition off-chain | Medium |
+| 0x RFQ | Decentralized relayer network | Medium-High |
+
+### Recommended Mitigations
+
+1. **On-chain intent submission** - Remove off-chain coordination for critical path
+2. **Threshold encryption** - Encrypt intents until commitment time
+3. **Decentralized sequencing** - Multiple independent coordinators
+4. **Verifiable delay functions** - Prevent timing manipulation
+5. **Commit-reveal for auctions** - Remove information advantage
+
+**Severity: CRITICAL** - This centralization is a fundamental trust assumption that contradicts the "trustless" claims in the specification.
+
+---
+
+## 5.3 [HIGH] Two-Phase Commit Non-Atomicity
+
+**Location:** `crates/settlement/src/two_phase.rs:136-162`
+
+**Description:** The two-phase commit implementation has a **non-atomic window** between user lock and solver lock:
+
+```rust
+// Phase 1a: Lock user's input
+let user_lock = self.user_escrow.lock(...).await?;  // USER LOCKED
+
+// Phase 1b: Lock solver's output
+let solver_lock = self.solver_vault.lock(...)
+    .await
+    .map_err(|e| {
+        // Rollback user lock on failure
+        // In production, this would be atomic  <-- ADMITS NON-ATOMICITY!
+        SettlementError::SolverVaultLockFailed(e.to_string())
+    })?;
+```
+
+**The comment explicitly admits this is NOT atomic in production.**
+
+### Race Window
+
+```
+T+0ms    User lock succeeds
+T+1ms    <-- RACE WINDOW: User locked, solver not yet
+T+50ms   Solver lock fails
+T+51ms   Rollback attempted (but may fail!)
+```
+
+During the race window:
+- User funds are locked
+- Solver has not committed
+- If rollback fails, user funds are stuck
+
+### Attack Vector
+
+1. Solver monitors for user lock transactions
+2. Sees user lock succeed
+3. Deliberately fails solver lock (e.g., claims insufficient funds)
+4. User funds locked but no settlement occurs
+5. User must wait for timeout expiration to refund
+
+**Impact:** Griefing attack that locks user funds without commitment
+
+### Recommended Fix
+
+Use atomic cross-contract calls or escrow with conditional release:
+
+```rust
+// Atomic approach: Single transaction locks both
+pub fn atomic_lock(user_funds: Coin, solver_bond: Coin) -> Result<LockPair> {
+    // Both succeed or both fail in same tx
+}
+```
+
+---
+
+## 5.4 [HIGH] IBC Latency vs. Claimed Performance
+
+**Location:** Spec Executive Summary, `SPECIFICATION.md:9-14`
+
+**Description:** The specification makes performance claims that are **physically impossible** given IBC constraints:
+
+| Claim | Reality | Gap |
+|-------|---------|-----|
+| "2-5 second execution" | IBC finality: 6-30 seconds | 4-25 seconds |
+| "Near-zero solver capital" | CEX backstop: $50k+ buffer | $50k+ |
+| "Atomic IBC settlement" | IBC is async, not atomic | Fundamental |
+
+### IBC Timing Reality
+
+```
+T+0ms      User signs intent
+T+50ms     Skip Select receives
+T+500ms    Auction completes
+T+1000ms   Settlement tx submitted
+T+6000ms   Block inclusion (1 block)
+T+12000ms  IBC packet sent
+T+18000ms  Relayer picks up packet
+T+24000ms  Destination block inclusion
+T+30000ms  IBC acknowledgment
+```
+
+**Minimum realistic latency: 20-30 seconds** for cross-chain settlement.
+
+### Solver Capital Reality
+
+Even with "JIT execution", solvers need:
+- **CEX buffer inventory:** $50k+ per asset pair
+- **IBC in-flight capital:** Locked during 20-30s settlement
+- **Gas reserves:** For relaying and transactions
+- **Bond capital:** For registration and slashing
+
+**Realistic capital requirement: $100k+ per active solver**
+
+### Implications
+
+1. Marketing claims are misleading
+2. Users will experience slower execution than promised
+3. Solver economics require more capital than advertised
+4. System may underperform vs. alternatives
+
+---
+
+## 5.5 [HIGH] Cross-Chain State Inconsistency
+
+**Location:** `crates/settlement/src/manager.rs`, `contracts/settlement/`, `crates/solver/src/cex.rs`
+
+**Description:** The system maintains **four independent state stores** with no reconciliation mechanism:
+
+| State Store | Location | Data |
+|-------------|----------|------|
+| Settlement Contract | On-chain (Hub) | Settlement status |
+| SQLite Store | Off-chain (Solver) | Settlement records |
+| Solver Inventory | Off-chain (Solver) | Asset positions |
+| CEX Positions | External (Binance) | Hedge positions |
+
+### Failure Scenarios
+
+**Scenario 1: SQLite corruption**
+- Off-chain state lost
+- On-chain settlement still exists
+- No way to reconcile
+
+**Scenario 2: CEX API failure during hedge**
+- Solver thinks hedge placed
+- CEX rejected order
+- Inventory tracking wrong
+
+**Scenario 3: IBC packet dropped**
+- Settlement contract shows "Executing"
+- Destination never received funds
+- No automatic recovery
+
+### Missing Reconciliation
+
+```rust
+// NO reconciliation exists in the codebase!
+// Should have:
+pub async fn reconcile_state(&self) -> Result<Vec<Discrepancy>> {
+    let on_chain = self.query_settlement_contract().await?;
+    let off_chain = self.store.get_all().await?;
+    let cex = self.cex_client.get_positions().await?;
+
+    // Compare and flag discrepancies
+    find_discrepancies(on_chain, off_chain, cex)
+}
+```
+
+**Impact:** State drift leads to incorrect behavior, fund loss, or stuck settlements
+
+---
+
+## 5.6 [HIGH] Escrow/Settlement Race Condition
+
+**Location:** `contracts/escrow/src/contract.rs:142-186`, `contracts/settlement/src/contract.rs:346-374`
+
+**Description:** There's a race condition between escrow refund and settlement release:
+
+```rust
+// Escrow: User can refund after expiration
+fn execute_refund(...) {
+    if env.block.time.seconds() < escrow.expires_at {
+        return Err(ContractError::EscrowNotExpired { .. });
+    }
+    // Refund to user
+}
+
+// Settlement: Can call release at any time
+fn execute_release(...) {
+    // Only checks sender is settlement contract
+    // Does NOT check expiration!
+}
+```
+
+### Race Window
+
+```
+T+0          Escrow created, expires at T+3600
+T+3599       IBC transfer in flight
+T+3600       User calls refund (escrow expired!)
+T+3601       Settlement tries release (escrow empty!)
+```
+
+**Both operations can succeed** if timed correctly, causing:
+- User gets refund
+- Solver also sent output (via IBC)
+- Double-spend condition
+
+### Recommended Fix
+
+```rust
+// Settlement should check expiration and lock status atomically
+fn execute_release(...) {
+    if env.block.time.seconds() >= escrow.expires_at {
+        return Err(ContractError::EscrowExpired);
+    }
+    // Release only if not expired
+}
+```
+
+---
+
+## 5.7 [MEDIUM] Solver Insolvency / Bankruptcy Risk
+
+**Location:** `contracts/settlement/src/contract.rs:411-457`, Spec Section 20
+
+**Description:** The system has **no mechanism to detect or handle solver insolvency**:
+
+### Insolvency Scenarios
+
+1. **CEX position loss:** Market moves against hedged position
+2. **IBC cascade failures:** Multiple settlements timeout simultaneously
+3. **Slashing spiral:** Failed settlements → slashing → reduced bond → more failures
+
+### Missing Protections
+
+| Protection | Status | Impact |
+|------------|--------|--------|
+| Real-time solvency monitoring | ❌ Missing | No early warning |
+| Gradual wind-down mechanism | ❌ Missing | Chaotic failure |
+| User priority in bankruptcy | ❌ Missing | Unclear fund recovery |
+| Insurance fund | ❌ Missing | No backstop |
+| Cross-solver netting | ❌ Missing | No risk sharing |
+
+### Failure Mode
+
+```
+Day 1: Solver has 100 ATOM bond, processes 500 ATOM/day
+Day 2: Market crashes, 3 settlements fail simultaneously
+Day 3: Slashing: 3 × 10 ATOM = 30 ATOM
+Day 4: Bond now 70 ATOM, still processing 500 ATOM/day
+Day 5: Undercollateralized, more failures likely
+```
+
+**Recommendation:** Implement dynamic position limits based on bond ratio:
+
+```rust
+fn max_open_settlements(&self, solver: &Solver) -> u64 {
+    let bond_ratio = solver.bond / solver.total_exposure;
+    if bond_ratio < 0.1 { return 0; }  // Circuit breaker
+    (bond_ratio * 10.0) as u64
+}
+```
+
+---
+
+## 5.8 [MEDIUM] No Intent Cancellation Mechanism
+
+**Location:** `crates/types/src/intent.rs`, `crates/matching-engine/`
+
+**Description:** Once an intent is submitted, **there is no cancellation mechanism**:
+
+```rust
+pub struct Intent {
+    pub id: String,
+    pub nonce: u64,
+    // ... no cancel flag, no revocation mechanism
+}
+```
+
+### Problems
+
+1. **User changes mind:** Cannot cancel pending intent
+2. **Price moved:** Cannot update limit price
+3. **Partial fill:** Cannot cancel remainder
+4. **Double-submission:** Cannot revoke duplicate
+
+### Edge Cases
+
+```
+T+0      User submits buy ATOM at 10.50
+T+100ms  User realizes mistake, wants to cancel
+T+200ms  No cancel mechanism available
+T+500ms  Intent matched, user forced to buy
+```
+
+**Recommendation:** Implement on-chain cancellation registry:
+
+```rust
+pub fn cancel_intent(intent_id: &str, user_signature: &[u8]) -> Result<()> {
+    // Verify signature
+    // Add to cancellation set
+    // Matching engine checks before filling
+}
+```
+
+---
+
+## 5.9 [MEDIUM] Fee Model Sustainability
+
+**Location:** Spec Section 21, Economic Analysis
+
+**Description:** The spec claims "near-zero fees" for users but this is economically unsustainable:
+
+### Cost Structure (Per Settlement)
+
+| Cost Component | Amount | Who Pays |
+|----------------|--------|----------|
+| Gas (Hub transaction) | ~0.01 ATOM | Solver |
+| Gas (IBC relaying) | ~0.02 ATOM | Solver relayer |
+| CEX trading fees | 0.1% of volume | Solver |
+| CEX withdrawal fees | ~0.1 ATOM | Solver |
+| Infrastructure (servers, monitoring) | ~$0.01 | Solver |
+| Capital cost (opportunity) | Variable | Solver |
+
+### Revenue Sources
+
+| Source | Amount | Reliability |
+|--------|--------|-------------|
+| Spread capture | 0.1-0.5% | Competition-dependent |
+| Surplus sharing | 10% of improvement | Flow-dependent |
+| Paid relay fees | Variable | Volume-dependent |
+
+### Sustainability Analysis
+
+- **Break-even spread:** ~0.15% minimum
+- **Claimed spread:** 0.1-0.5%
+- **Margin:** Very thin, easily competed away
+
+If spreads compress (competition), solvers become unprofitable and exit.
+
+**Impact:** System may experience solver exodus during low-margin periods
+
+---
+
 # Part VI: Recommendations Summary
 
 ## Critical Actions (Implement Before Mainnet)
 
 1. **Remove unnecessary oracle dependency** from intent matching (use midpoint pricing)
-2. **Implement nonce tracking** to prevent replay attacks
-3. **Add flow toxicity detection** to protect solvers
-4. **Implement commit-reveal** for solver quotes
-5. **Retain oracle only for sanity checks** and circuit breakers
+2. **Decentralize coordination layer** - On-chain intent submission or threshold encryption
+3. **Implement nonce tracking** to prevent replay attacks
+4. **Add flow toxicity detection** to protect solvers
+5. **Implement commit-reveal** for solver quotes
+6. **Retain oracle only for sanity checks** and circuit breakers
 
 ## High Priority (Implement in Phase 1)
 
-1. Add settlement state machine guards
-2. Implement CEX inventory rollback on settlement failure
-3. Add expiration checks in batch auction
-4. Implement quote validity scaling with volatility
+1. **Fix two-phase commit atomicity** - Single-tx lock for user and solver
+2. **Add escrow expiration check** in settlement release to prevent race condition
+3. **Implement state reconciliation** across on-chain, off-chain, and CEX
+4. **Update performance claims** to reflect realistic IBC latency (20-30s)
+5. Add settlement state machine guards
+6. Implement CEX inventory rollback on settlement failure
+7. Add expiration checks in batch auction
+8. Implement quote validity scaling with volatility
 
 ## Medium Priority (Implement in Phase 2)
 
-1. Bound solver quote array sizes
-2. Add minimum slash thresholds
-3. Volume-weight reputation scoring
-4. Implement partial fill fees
+1. **Implement intent cancellation mechanism**
+2. **Add solver insolvency detection** and dynamic position limits
+3. **Review fee model sustainability** - Ensure solver profitability
+4. Bound solver quote array sizes
+5. Add minimum slash thresholds
+6. Volume-weight reputation scoring
+7. Implement partial fill fees
 
 ## Monitoring Requirements
 
