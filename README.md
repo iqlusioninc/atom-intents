@@ -7,6 +7,8 @@ An intent-based trading system for Cosmos Hub that achieves:
 - **CEX-competitive pricing** (within 0.1-0.5% of Binance)
 - **Robust IBC infrastructure** (solver-incentivized relayers)
 
+**[Read the full specification](docs/SPECIFICATION.md)**
+
 ## Architecture
 
 ```
