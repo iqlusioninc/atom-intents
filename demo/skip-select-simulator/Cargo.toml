@@ -5,12 +5,17 @@ edition = "2021"
 description = "Simplified Skip Select coordination layer for ATOM Intents demo"
 license = "Apache-2.0"
 
+[features]
+default = ["memory"]
+memory = []  # In-memory storage (default for local dev)
+postgres = ["sqlx"]  # PostgreSQL storage (for production)
+
 [dependencies]
 # Web framework
 axum = { version = "0.7", features = ["ws"] }
 axum-extra = { version = "0.9", features = ["typed-header"] }
 tower = "0.4"
-tower-http = { version = "0.5", features = ["cors", "trace"] }
+tower-http = { version = "0.5", features = ["cors", "trace", "request-id", "timeout"] }
 
 # Async runtime
 tokio = { version = "1.35", features = ["full"] }
@@ -44,6 +49,26 @@ anyhow = "1.0"
 
 # HTTP client (for price feeds)
 reqwest = { version = "0.11", features = ["json"] }
+
+# Database (optional for production)
+sqlx = { version = "0.7", features = ["runtime-tokio", "postgres", "chrono", "uuid"], optional = true }
+
+# Redis for rate limiting and caching
+redis = { version = "0.24", features = ["tokio-comp", "connection-manager"] }
+
+# Rate limiting
+governor = "0.6"
+
+# Metrics
+metrics = "0.22"
+metrics-exporter-prometheus = "0.13"
+
+# Security
+jsonwebtoken = "9"
+argon2 = "0.5"
+
+# Async trait
+async-trait = "0.1"
 
 [dev-dependencies]
 tokio-test = "0.4"
