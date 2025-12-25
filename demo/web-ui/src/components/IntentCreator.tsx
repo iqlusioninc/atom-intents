@@ -1,10 +1,10 @@
 import { useState } from 'react';
 import { useMutation } from '@tanstack/react-query';
-import { ArrowRight, Loader2, Check, Wallet, AlertCircle } from 'lucide-react';
+import { ArrowRight, Loader2, Check, Wallet, AlertCircle, Info } from 'lucide-react';
 import * as api from '../services/api';
 import { useStore } from '../hooks/useStore';
 import { useWallet } from '../hooks/useWallet';
-import { TOKENS, CHAINS } from '../types';
+import { TOKENS } from '../types';
 
 export default function IntentCreator() {
   const prices = useStore((state) => state.prices);
@@ -80,18 +80,35 @@ export default function IntentCreator() {
     });
   };
 
+  const getTokenIcon = (denom: string) => {
+    const colors: Record<string, { bg: string; text: string }> = {
+      ATOM: { bg: 'bg-cosmos-500/20', text: 'text-cosmos-400' },
+      OSMO: { bg: 'bg-pink-500/20', text: 'text-pink-400' },
+      USDC: { bg: 'bg-blue-500/20', text: 'text-blue-400' },
+      NTRN: { bg: 'bg-orange-500/20', text: 'text-orange-400' },
+    };
+    const style = colors[denom] || { bg: 'bg-space-700', text: 'text-space-300' };
+
+    return (
+      <div className={`w-10 h-10 rounded-full ${style.bg} flex items-center justify-center`}>
+        <span className={`${style.text} text-lg font-bold`}>{denom[0]}</span>
+      </div>
+    );
+  };
+
   return (
     <div className="space-y-6 animate-slide-in">
-      <div>
-        <h2 className="text-2xl font-bold text-white">Create Intent</h2>
-        <p className="text-gray-400">Submit a new trading intent to the system</p>
+      <div className="mb-8">
+        <h2 className="text-2xl font-bold text-white tracking-tight">Create Intent</h2>
+        <p className="text-space-400 mt-1">Submit a new trading intent to the system</p>
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
         {/* Intent Form */}
         <form onSubmit={handleSubmit} className="card space-y-6">
+          {/* Input Token */}
           <div>
-            <label className="block text-sm font-medium text-gray-300 mb-2">
+            <label className="block text-sm font-medium text-space-300 mb-3">
               From (Input)
             </label>
             <div className="flex gap-3">
@@ -102,7 +119,7 @@ export default function IntentCreator() {
               >
                 {Object.entries(TOKENS).map(([denom, token]) => (
                   <option key={denom} value={denom}>
-                    {token.logo} {denom}
+                    {denom} - {token.name}
                   </option>
                 ))}
               </select>
@@ -116,34 +133,37 @@ export default function IntentCreator() {
                 min="0"
               />
             </div>
-            <div className="flex items-center justify-between mt-1">
-              <p className="text-xs text-gray-500">
+            <div className="flex items-center justify-between mt-2">
+              <p className="text-xs text-space-500">
                 ≈ ${inputValueUsd.toFixed(2)} USD @ ${inputPrice.toFixed(4)}/{inputDenom}
               </p>
               {connected && (
-                <p className="text-xs text-gray-400">
-                  Balance: <span className={hasInsufficientBalance ? 'text-red-400' : 'text-green-400'}>
+                <p className="text-xs text-space-400">
+                  Balance:{' '}
+                  <span className={hasInsufficientBalance ? 'text-red-400' : 'text-atom-green'}>
                     {userBalanceFormatted.toFixed(2)} {inputDenom}
                   </span>
                 </p>
               )}
             </div>
             {hasInsufficientBalance && connected && (
-              <p className="text-xs text-red-400 mt-1 flex items-center gap-1">
-                <AlertCircle className="w-3 h-3" />
+              <div className="mt-2 flex items-center gap-1.5 text-xs text-red-400">
+                <AlertCircle className="w-3.5 h-3.5" />
                 Insufficient balance
-              </p>
+              </div>
             )}
           </div>
 
+          {/* Swap Arrow */}
           <div className="flex justify-center">
-            <div className="p-2 bg-gray-800 rounded-full">
+            <div className="p-3 rounded-xl bg-space-800/80 border border-white/5">
               <ArrowRight className="w-5 h-5 text-cosmos-400" />
             </div>
           </div>
 
+          {/* Output Token */}
           <div>
-            <label className="block text-sm font-medium text-gray-300 mb-2">
+            <label className="block text-sm font-medium text-space-300 mb-3">
               To (Output)
             </label>
             <div className="flex gap-3">
@@ -156,7 +176,7 @@ export default function IntentCreator() {
                   .filter(([denom]) => denom !== inputDenom)
                   .map(([denom, token]) => (
                     <option key={denom} value={denom}>
-                      {token.logo} {denom}
+                      {denom} - {token.name}
                     </option>
                   ))}
               </select>
@@ -164,16 +184,17 @@ export default function IntentCreator() {
                 type="text"
                 value={estimatedOutput.toFixed(4)}
                 readOnly
-                className="input flex-1 bg-gray-900/50"
+                className="input flex-1 bg-space-900/50 text-space-300"
               />
             </div>
-            <p className="text-xs text-gray-500 mt-1">
+            <p className="text-xs text-space-500 mt-2">
               Estimated output @ ${outputPrice.toFixed(4)}/{outputDenom}
             </p>
           </div>
 
+          {/* Slippage */}
           <div>
-            <label className="block text-sm font-medium text-gray-300 mb-2">
+            <label className="block text-sm font-medium text-space-300 mb-3">
               Slippage Tolerance
             </label>
             <div className="flex gap-2">
@@ -182,28 +203,31 @@ export default function IntentCreator() {
                   key={val}
                   type="button"
                   onClick={() => setSlippage(val)}
-                  className={`px-4 py-2 rounded-lg transition-colors ${
+                  className={`flex-1 px-4 py-2.5 rounded-xl font-medium text-sm transition-all ${
                     slippage === val
-                      ? 'bg-cosmos-600 text-white'
-                      : 'bg-gray-800 text-gray-400 hover:bg-gray-700'
+                      ? 'bg-cosmos-500/20 text-cosmos-400 border border-cosmos-500/30'
+                      : 'bg-space-800/80 text-space-400 border border-white/5 hover:bg-space-700/80 hover:text-white'
                   }`}
                 >
                   {val}%
                 </button>
               ))}
             </div>
-            <p className="text-xs text-gray-500 mt-2">
+            <p className="text-xs text-space-500 mt-2">
               Minimum output: {minOutput.toFixed(4)} {outputDenom}
             </p>
           </div>
 
+          {/* Submit Button or Wallet Prompt */}
           {!connected ? (
-            <div className="p-4 bg-yellow-900/20 border border-yellow-700/50 rounded-lg">
+            <div className="p-4 rounded-xl bg-atom-gold/10 border border-atom-gold/20">
               <div className="flex items-center gap-3">
-                <Wallet className="w-5 h-5 text-yellow-400" />
+                <div className="p-2 rounded-lg bg-atom-gold/20">
+                  <Wallet className="w-5 h-5 text-atom-gold" />
+                </div>
                 <div>
-                  <p className="text-yellow-300 font-medium">Connect Wallet</p>
-                  <p className="text-sm text-gray-400">
+                  <p className="text-atom-gold font-medium">Connect Wallet</p>
+                  <p className="text-sm text-space-400">
                     Connect a wallet to submit intents
                   </p>
                 </div>
@@ -213,7 +237,7 @@ export default function IntentCreator() {
             <button
               type="submit"
               disabled={mutation.isPending || !inputAmount || parseFloat(inputAmount) <= 0 || hasInsufficientBalance}
-              className="w-full btn-primary flex items-center justify-center gap-2 py-3 disabled:opacity-50"
+              className="w-full btn-primary py-3.5 text-base disabled:opacity-50 disabled:cursor-not-allowed"
             >
               {mutation.isPending ? (
                 <>
@@ -232,64 +256,86 @@ export default function IntentCreator() {
           )}
 
           {mutation.isError && (
-            <p className="text-red-400 text-sm text-center">
-              Error: {(mutation.error as Error).message}
-            </p>
+            <div className="p-3 rounded-xl bg-red-500/10 border border-red-500/20">
+              <p className="text-red-400 text-sm text-center">
+                Error: {(mutation.error as Error).message}
+              </p>
+            </div>
           )}
         </form>
 
         {/* Intent Preview */}
-        <div className="card space-y-4">
+        <div className="card space-y-6">
           <h3 className="text-lg font-semibold text-white">Intent Preview</h3>
 
-          <div className="space-y-4">
-            <div className="p-4 bg-gray-800/50 rounded-lg">
-              <p className="text-sm text-gray-400 mb-2">Trade Summary</p>
-              <div className="flex items-center gap-3">
-                <div className="text-center">
-                  <p className="text-2xl mb-1">{TOKENS[inputDenom]?.logo}</p>
-                  <p className="text-white font-medium">{inputAmount} {inputDenom}</p>
-                  <p className="text-xs text-gray-400">{TOKENS[inputDenom]?.name}</p>
-                </div>
-                <ArrowRight className="w-6 h-6 text-cosmos-400 flex-shrink-0" />
-                <div className="text-center">
-                  <p className="text-2xl mb-1">{TOKENS[outputDenom]?.logo}</p>
-                  <p className="text-white font-medium">{estimatedOutput.toFixed(4)} {outputDenom}</p>
-                  <p className="text-xs text-gray-400">{TOKENS[outputDenom]?.name}</p>
-                </div>
+          {/* Trade Summary */}
+          <div className="p-5 rounded-xl bg-space-900/60 border border-white/5">
+            <p className="text-sm text-space-400 mb-4">Trade Summary</p>
+            <div className="flex items-center justify-between">
+              <div className="text-center">
+                {getTokenIcon(inputDenom)}
+                <p className="text-white font-semibold mt-2">{inputAmount} {inputDenom}</p>
+                <p className="text-xs text-space-500">{TOKENS[inputDenom]?.name}</p>
+              </div>
+              <div className="flex-1 flex justify-center">
+                <div className="w-12 h-[2px] bg-gradient-to-r from-cosmos-500 to-atom-cyan" />
+              </div>
+              <div className="text-center">
+                {getTokenIcon(outputDenom)}
+                <p className="text-white font-semibold mt-2">{estimatedOutput.toFixed(4)} {outputDenom}</p>
+                <p className="text-xs text-space-500">{TOKENS[outputDenom]?.name}</p>
               </div>
             </div>
+          </div>
 
-            <div className="p-4 bg-gray-800/50 rounded-lg space-y-2">
-              <p className="text-sm text-gray-400">Execution Details</p>
-              <div className="grid grid-cols-2 gap-4 text-sm">
-                <div>
-                  <p className="text-gray-500">Source Chain</p>
-                  <p className="text-white">{TOKENS[inputDenom]?.chain}</p>
-                </div>
-                <div>
-                  <p className="text-gray-500">Destination Chain</p>
-                  <p className="text-white">{TOKENS[outputDenom]?.chain}</p>
-                </div>
-                <div>
-                  <p className="text-gray-500">Max Slippage</p>
-                  <p className="text-white">{slippage}%</p>
-                </div>
-                <div>
-                  <p className="text-gray-500">Timeout</p>
-                  <p className="text-white">60 seconds</p>
-                </div>
+          {/* Execution Details */}
+          <div className="p-5 rounded-xl bg-space-900/60 border border-white/5">
+            <p className="text-sm text-space-400 mb-4">Execution Details</p>
+            <div className="grid grid-cols-2 gap-4 text-sm">
+              <div>
+                <p className="text-space-500">Source Chain</p>
+                <p className="text-white font-medium">{TOKENS[inputDenom]?.chain}</p>
+              </div>
+              <div>
+                <p className="text-space-500">Destination Chain</p>
+                <p className="text-white font-medium">{TOKENS[outputDenom]?.chain}</p>
+              </div>
+              <div>
+                <p className="text-space-500">Max Slippage</p>
+                <p className="text-white font-medium">{slippage}%</p>
+              </div>
+              <div>
+                <p className="text-space-500">Timeout</p>
+                <p className="text-white font-medium">60 seconds</p>
               </div>
             </div>
+          </div>
 
-            <div className="p-4 bg-cosmos-900/30 border border-cosmos-700/50 rounded-lg">
-              <p className="text-sm text-cosmos-300 mb-2">How it works:</p>
-              <ol className="text-sm text-gray-400 space-y-1">
-                <li>1. Your intent is broadcast to all solvers</li>
-                <li>2. Solvers compete in a batch auction</li>
-                <li>3. Best price wins, funds are escrowed</li>
-                <li>4. Settlement via IBC (2-5 seconds)</li>
-              </ol>
+          {/* How it works */}
+          <div className="p-5 rounded-xl bg-cosmos-500/10 border border-cosmos-500/20">
+            <div className="flex items-start gap-3">
+              <Info className="w-5 h-5 text-cosmos-400 mt-0.5 flex-shrink-0" />
+              <div>
+                <p className="text-sm font-medium text-cosmos-300 mb-2">How it works</p>
+                <ol className="text-sm text-space-400 space-y-1.5">
+                  <li className="flex items-start gap-2">
+                    <span className="text-cosmos-400 font-medium">1.</span>
+                    Your intent is broadcast to all solvers
+                  </li>
+                  <li className="flex items-start gap-2">
+                    <span className="text-cosmos-400 font-medium">2.</span>
+                    Solvers compete in a batch auction
+                  </li>
+                  <li className="flex items-start gap-2">
+                    <span className="text-cosmos-400 font-medium">3.</span>
+                    Best price wins, funds are escrowed
+                  </li>
+                  <li className="flex items-start gap-2">
+                    <span className="text-cosmos-400 font-medium">4.</span>
+                    Settlement via IBC (2-5 seconds)
+                  </li>
+                </ol>
+              </div>
             </div>
           </div>
         </div>
