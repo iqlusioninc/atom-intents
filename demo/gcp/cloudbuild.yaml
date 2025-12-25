@@ -1,0 +1,135 @@
+# Cloud Build CI/CD pipeline for Atom Intents Demo
+# Triggers on push to main branch
+
+substitutions:
+  _REGION: us-central1
+  _CLUSTER_NAME: atom-intents-demo-gke
+  _REGISTRY: ${_REGION}-docker.pkg.dev/${PROJECT_ID}/atom-intents
+
+options:
+  logging: CLOUD_LOGGING_ONLY
+  machineType: E2_HIGHCPU_8
+
+steps:
+  # Step 1: Build Skip Select Simulator
+  - id: build-skip-select
+    name: gcr.io/cloud-builders/docker
+    args:
+      - build
+      - -t
+      - ${_REGISTRY}/skip-select-simulator:${SHORT_SHA}
+      - -t
+      - ${_REGISTRY}/skip-select-simulator:latest
+      - -f
+      - demo/skip-select-simulator/Dockerfile
+      - demo/skip-select-simulator
+    waitFor: ["-"]
+
+  # Step 2: Build Web UI
+  - id: build-web-ui
+    name: gcr.io/cloud-builders/docker
+    args:
+      - build
+      - -t
+      - ${_REGISTRY}/atom-intents-web-ui:${SHORT_SHA}
+      - -t
+      - ${_REGISTRY}/atom-intents-web-ui:latest
+      - -f
+      - demo/web-ui/Dockerfile
+      - demo/web-ui
+    waitFor: ["-"]
+
+  # Step 3: Push Skip Select image
+  - id: push-skip-select
+    name: gcr.io/cloud-builders/docker
+    args:
+      - push
+      - --all-tags
+      - ${_REGISTRY}/skip-select-simulator
+    waitFor:
+      - build-skip-select
+
+  # Step 4: Push Web UI image
+  - id: push-web-ui
+    name: gcr.io/cloud-builders/docker
+    args:
+      - push
+      - --all-tags
+      - ${_REGISTRY}/atom-intents-web-ui
+    waitFor:
+      - build-web-ui
+
+  # Step 5: Get GKE credentials
+  - id: get-credentials
+    name: gcr.io/cloud-builders/gcloud
+    args:
+      - container
+      - clusters
+      - get-credentials
+      - ${_CLUSTER_NAME}
+      - --region
+      - ${_REGION}
+    waitFor:
+      - push-skip-select
+      - push-web-ui
+
+  # Step 6: Update image tags in manifests
+  - id: update-manifests
+    name: gcr.io/cloud-builders/gcloud
+    entrypoint: bash
+    args:
+      - -c
+      - |
+        sed -i "s|REGISTRY|${_REGISTRY}|g" demo/gcp/k8s/*.yaml
+        sed -i "s|PROJECT_ID|${PROJECT_ID}|g" demo/gcp/k8s/*.yaml
+        sed -i "s|:latest|:${SHORT_SHA}|g" demo/gcp/k8s/*-deployment.yaml
+    waitFor:
+      - get-credentials
+
+  # Step 7: Apply Kubernetes manifests
+  - id: deploy
+    name: gcr.io/cloud-builders/kubectl
+    args:
+      - apply
+      - -f
+      - demo/gcp/k8s/namespace.yaml
+      - -f
+      - demo/gcp/k8s/configmap.yaml
+      - -f
+      - demo/gcp/k8s/skip-select-deployment.yaml
+      - -f
+      - demo/gcp/k8s/web-ui-deployment.yaml
+      - -f
+      - demo/gcp/k8s/ingress.yaml
+      - -f
+      - demo/gcp/k8s/monitoring.yaml
+    env:
+      - CLOUDSDK_COMPUTE_REGION=${_REGION}
+      - CLOUDSDK_CONTAINER_CLUSTER=${_CLUSTER_NAME}
+    waitFor:
+      - update-manifests
+
+  # Step 8: Wait for rollout
+  - id: verify-deployment
+    name: gcr.io/cloud-builders/kubectl
+    args:
+      - rollout
+      - status
+      - deployment/skip-select
+      - deployment/web-ui
+      - -n
+      - atom-intents
+      - --timeout=300s
+    env:
+      - CLOUDSDK_COMPUTE_REGION=${_REGION}
+      - CLOUDSDK_CONTAINER_CLUSTER=${_CLUSTER_NAME}
+    waitFor:
+      - deploy
+
+images:
+  - ${_REGISTRY}/skip-select-simulator:${SHORT_SHA}
+  - ${_REGISTRY}/skip-select-simulator:latest
+  - ${_REGISTRY}/atom-intents-web-ui:${SHORT_SHA}
+  - ${_REGISTRY}/atom-intents-web-ui:latest
+
+timeout: 1800s

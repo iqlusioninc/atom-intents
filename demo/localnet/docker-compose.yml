@@ -1,0 +1,154 @@
+version: '3.8'
+
+services:
+  # Cosmos Hub Local Node
+  cosmoshub:
+    image: ghcr.io/strangelove-ventures/heighliner/gaia:v18.1.0
+    container_name: atom-intents-hub
+    volumes:
+      - ./chains/hub:/root/.gaia
+      - ./scripts:/scripts
+    ports:
+      - "26657:26657"  # RPC
+      - "26656:26656"  # P2P
+      - "9090:9090"    # gRPC
+      - "1317:1317"    # REST
+    environment:
+      - CHAIN_ID=localhub-1
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        if [ ! -f /root/.gaia/config/genesis.json ]; then
+          echo "Initializing Cosmos Hub..."
+          gaiad init validator --chain-id localhub-1
+
+          # Add keys
+          echo "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon art" | gaiad keys add validator --recover --keyring-backend test
+          echo "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about" | gaiad keys add alice --recover --keyring-backend test
+          echo "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon above" | gaiad keys add bob --recover --keyring-backend test
+          echo "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon absent" | gaiad keys add solver1 --recover --keyring-backend test
+          echo "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon absorb" | gaiad keys add solver2 --recover --keyring-backend test
+
+          # Add genesis accounts
+          gaiad genesis add-genesis-account validator 1000000000000uatom --keyring-backend test
+          gaiad genesis add-genesis-account alice 10000000000uatom --keyring-backend test
+          gaiad genesis add-genesis-account bob 10000000000uatom --keyring-backend test
+          gaiad genesis add-genesis-account solver1 50000000000uatom --keyring-backend test
+          gaiad genesis add-genesis-account solver2 50000000000uatom --keyring-backend test
+
+          # Create gentx
+          gaiad genesis gentx validator 100000000uatom --chain-id localhub-1 --keyring-backend test
+          gaiad genesis collect-gentxs
+
+          # Configure for local testing
+          sed -i 's/minimum-gas-prices = ""/minimum-gas-prices = "0.0025uatom"/g' /root/.gaia/config/app.toml
+          sed -i 's/enable = false/enable = true/g' /root/.gaia/config/app.toml
+          sed -i 's/swagger = false/swagger = true/g' /root/.gaia/config/app.toml
+          sed -i 's/laddr = "tcp:\/\/127.0.0.1:26657"/laddr = "tcp:\/\/0.0.0.0:26657"/g' /root/.gaia/config/config.toml
+          sed -i 's/cors_allowed_origins = \[\]/cors_allowed_origins = \["*"\]/g' /root/.gaia/config/config.toml
+          sed -i 's/address = "tcp:\/\/localhost:1317"/address = "tcp:\/\/0.0.0.0:1317"/g' /root/.gaia/config/app.toml
+          sed -i 's/address = "localhost:9090"/address = "0.0.0.0:9090"/g' /root/.gaia/config/app.toml
+
+          # Speed up blocks for testing
+          sed -i 's/timeout_commit = "5s"/timeout_commit = "1s"/g' /root/.gaia/config/config.toml
+        fi
+        gaiad start
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:26657/status"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - localnet
+
+  # Osmosis Local Node
+  osmosis:
+    image: ghcr.io/strangelove-ventures/heighliner/osmosis:v25.0.0
+    container_name: atom-intents-osmosis
+    volumes:
+      - ./chains/osmosis:/root/.osmosisd
+      - ./scripts:/scripts
+    ports:
+      - "26667:26657"  # RPC
+      - "26666:26656"  # P2P
+      - "9091:9090"    # gRPC
+      - "1318:1317"    # REST
+    environment:
+      - CHAIN_ID=localosmo-1
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        if [ ! -f /root/.osmosisd/config/genesis.json ]; then
+          echo "Initializing Osmosis..."
+          osmosisd init validator --chain-id localosmo-1
+
+          # Add keys
+          echo "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon art" | osmosisd keys add validator --recover --keyring-backend test
+          echo "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about" | osmosisd keys add alice --recover --keyring-backend test
+          echo "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon above" | osmosisd keys add bob --recover --keyring-backend test
+          echo "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon absent" | osmosisd keys add solver1 --recover --keyring-backend test
+          echo "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon absorb" | osmosisd keys add solver2 --recover --keyring-backend test
+
+          # Add genesis accounts
+          osmosisd genesis add-genesis-account validator 1000000000000uosmo --keyring-backend test
+          osmosisd genesis add-genesis-account alice 100000000000uosmo --keyring-backend test
+          osmosisd genesis add-genesis-account bob 100000000000uosmo --keyring-backend test
+          osmosisd genesis add-genesis-account solver1 500000000000uosmo --keyring-backend test
+          osmosisd genesis add-genesis-account solver2 500000000000uosmo --keyring-backend test
+
+          # Create gentx
+          osmosisd genesis gentx validator 100000000uosmo --chain-id localosmo-1 --keyring-backend test
+          osmosisd genesis collect-gentxs
+
+          # Configure for local testing
+          sed -i 's/minimum-gas-prices = ""/minimum-gas-prices = "0.0025uosmo"/g' /root/.osmosisd/config/app.toml
+          sed -i 's/enable = false/enable = true/g' /root/.osmosisd/config/app.toml
+          sed -i 's/swagger = false/swagger = true/g' /root/.osmosisd/config/app.toml
+          sed -i 's/laddr = "tcp:\/\/127.0.0.1:26657"/laddr = "tcp:\/\/0.0.0.0:26657"/g' /root/.osmosisd/config/config.toml
+          sed -i 's/cors_allowed_origins = \[\]/cors_allowed_origins = \["*"\]/g' /root/.osmosisd/config/config.toml
+          sed -i 's/address = "tcp:\/\/localhost:1317"/address = "tcp:\/\/0.0.0.0:1317"/g' /root/.osmosisd/config/app.toml
+          sed -i 's/address = "localhost:9090"/address = "0.0.0.0:9090"/g' /root/.osmosisd/config/app.toml
+
+          # Speed up blocks for testing
+          sed -i 's/timeout_commit = "5s"/timeout_commit = "1s"/g' /root/.osmosisd/config/config.toml
+        fi
+        osmosisd start
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:26657/status"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - localnet
+
+  # Hermes IBC Relayer
+  hermes:
+    image: informalsystems/hermes:v1.8.0
+    container_name: atom-intents-relayer
+    volumes:
+      - ./hermes:/home/hermes/.hermes
+    depends_on:
+      cosmoshub:
+        condition: service_healthy
+      osmosis:
+        condition: service_healthy
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        echo "Waiting for chains to be ready..."
+        sleep 10
+
+        # Create channel if not exists
+        if ! hermes query channels --chain localhub-1 2>/dev/null | grep -q channel-0; then
+          echo "Creating IBC channel..."
+          hermes create channel --a-chain localhub-1 --b-chain localosmo-1 --a-port transfer --b-port transfer --new-client-connection
+        fi
+
+        echo "Starting relayer..."
+        hermes start
+    networks:
+      - localnet
+
+networks:
+  localnet:
+    driver: bridge

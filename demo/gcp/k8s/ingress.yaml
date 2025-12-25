@@ -1,0 +1,88 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: atom-intents-ingress
+  namespace: atom-intents
+  annotations:
+    kubernetes.io/ingress.class: "gce"
+    kubernetes.io/ingress.global-static-ip-name: "atom-intents-demo-ip"
+    networking.gke.io/managed-certificates: "atom-intents-cert"
+    networking.gke.io/v1beta1.FrontendConfig: "atom-intents-frontend"
+spec:
+  rules:
+    - host: demo.atom-intents.io
+      http:
+        paths:
+          - path: /api/*
+            pathType: ImplementationSpecific
+            backend:
+              service:
+                name: skip-select
+                port:
+                  number: 8080
+          - path: /ws
+            pathType: Exact
+            backend:
+              service:
+                name: skip-select
+                port:
+                  number: 8080
+          - path: /*
+            pathType: ImplementationSpecific
+            backend:
+              service:
+                name: web-ui
+                port:
+                  number: 80
+
+---
+apiVersion: networking.gke.io/v1
+kind: ManagedCertificate
+metadata:
+  name: atom-intents-cert
+  namespace: atom-intents
+spec:
+  domains:
+    - demo.atom-intents.io
+
+---
+apiVersion: networking.gke.io/v1beta1
+kind: FrontendConfig
+metadata:
+  name: atom-intents-frontend
+  namespace: atom-intents
+spec:
+  redirectToHttps:
+    enabled: true
+    responseCodeName: MOVED_PERMANENTLY_DEFAULT
+  sslPolicy: atom-intents-ssl-policy
+
+---
+apiVersion: compute.cnrm.cloud.google.com/v1beta1
+kind: ComputeSSLPolicy
+metadata:
+  name: atom-intents-ssl-policy
+  namespace: atom-intents
+spec:
+  minTlsVersion: TLS_1_2
+  profile: MODERN
+
+---
+apiVersion: compute.cnrm.cloud.google.com/v1beta1
+kind: ComputeBackendConfig
+metadata:
+  name: skip-select-backend-config
+  namespace: atom-intents
+spec:
+  securityPolicy:
+    name: atom-intents-demo-security-policy
+  connectionDraining:
+    drainingTimeoutSec: 30
+  healthCheck:
+    checkIntervalSec: 10
+    timeoutSec: 5
+    healthyThreshold: 2
+    unhealthyThreshold: 3
+    type: HTTP
+    requestPath: /health
+    port: 8080

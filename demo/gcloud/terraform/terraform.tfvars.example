@@ -1,0 +1,14 @@
+# ATOM Intents Demo - Terraform Variables Example
+# Copy this file to terraform.tfvars and fill in your values
+
+project_id  = "your-gcp-project-id"
+region      = "us-central1"
+zone        = "us-central1-a"
+environment = "dev"
+
+# Optional: Set a domain for HTTPS
+# domain = "demo.atom-intents.example.com"
+
+# Optional: Override container images
+# skip_select_image = "us-central1-docker.pkg.dev/your-project/atom-intents-demo/skip-select:latest"
+# web_ui_image = "us-central1-docker.pkg.dev/your-project/atom-intents-demo/web-ui:latest"
