@@ -1,5 +1,5 @@
 # Build stage
-FROM rust:1.75-alpine AS builder
+FROM rust:1.85-alpine AS builder
 
 RUN apk add --no-cache musl-dev openssl-dev openssl-libs-static pkgconfig
 
@@ -9,8 +9,10 @@ WORKDIR /app
 COPY Cargo.toml Cargo.lock* ./
 
 # Create dummy source for dependency caching
+# Pin home crate to version compatible with Rust 1.85
 RUN mkdir src && \
     echo "fn main() {}" > src/main.rs && \
+    cargo update home@0.5.12 --precise 0.5.9 && \
     cargo build --release --features postgres && \
     rm -rf src
 

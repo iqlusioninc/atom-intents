@@ -23,8 +23,8 @@ pub async fn run_mock_solvers(state: AppStateRef) {
 }
 
 async fn update_solver_stats(state: &AppStateRef) {
-    let mut rng = rand::thread_rng();
     let mut state = state.write().await;
+    let mut rng = rand::thread_rng();
 
     for solver in state.solvers.values_mut() {
         // Simulate occasional status changes

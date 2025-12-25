@@ -206,41 +206,47 @@ pub async fn generate_demo_intent(
 ) -> Json<GenerateDemoIntentResponse> {
     use rand::Rng;
 
-    let mut rng = rand::thread_rng();
+    // Generate all random values in a block that ends before await
+    let (req, input_denom, output_denom, output_chain, amount) = {
+        let mut rng = rand::thread_rng();
 
-    // Generate random demo intent
-    let pairs = vec![
-        ("ATOM", "OSMO", "cosmoshub-4", "osmosis-1"),
-        ("OSMO", "ATOM", "osmosis-1", "cosmoshub-4"),
-        ("ATOM", "USDC", "cosmoshub-4", "noble-1"),
-        ("USDC", "ATOM", "noble-1", "cosmoshub-4"),
-        ("NTRN", "ATOM", "neutron-1", "cosmoshub-4"),
-        ("TIA", "USDC", "celestia", "noble-1"),  // Featured: Celestia swap
-        ("TIA", "ATOM", "celestia", "cosmoshub-4"),
-    ];
+        // Generate random demo intent
+        let pairs = vec![
+            ("ATOM", "OSMO", "cosmoshub-4", "osmosis-1"),
+            ("OSMO", "ATOM", "osmosis-1", "cosmoshub-4"),
+            ("ATOM", "USDC", "cosmoshub-4", "noble-1"),
+            ("USDC", "ATOM", "noble-1", "cosmoshub-4"),
+            ("NTRN", "ATOM", "neutron-1", "cosmoshub-4"),
+            ("TIA", "USDC", "celestia", "noble-1"),  // Featured: Celestia swap
+            ("TIA", "ATOM", "celestia", "cosmoshub-4"),
+        ];
 
-    let (input_denom, output_denom, input_chain, output_chain) =
-        pairs[rng.gen_range(0..pairs.len())];
+        let (input_denom, output_denom, input_chain, output_chain) =
+            pairs[rng.gen_range(0..pairs.len())];
 
-    let amount: u128 = rng.gen_range(1_000_000..100_000_000); // 1-100 tokens
+        let amount: u128 = rng.gen_range(1_000_000..100_000_000); // 1-100 tokens
 
-    let req = CreateIntentRequest {
-        user_address: format!("cosmos1demo{:08x}", rng.gen::<u32>()),
-        input: Asset {
-            chain_id: input_chain.to_string(),
-            denom: input_denom.to_string(),
-            amount,
-        },
-        output: OutputSpec {
-            chain_id: output_chain.to_string(),
-            denom: output_denom.to_string(),
-            min_amount: amount * 90 / 100, // 10% slippage tolerance
-            max_price: None,
-        },
-        fill_config: Some(FillConfig::default()),
-        constraints: Some(ExecutionConstraints::default()),
-        timeout_seconds: Some(60),
+        let req = CreateIntentRequest {
+            user_address: format!("cosmos1demo{:08x}", rng.gen::<u32>()),
+            input: Asset {
+                chain_id: input_chain.to_string(),
+                denom: input_denom.to_string(),
+                amount,
+            },
+            output: OutputSpec {
+                chain_id: output_chain.to_string(),
+                denom: output_denom.to_string(),
+                min_amount: amount * 90 / 100, // 10% slippage tolerance
+                max_price: None,
+            },
+            fill_config: Some(FillConfig::default()),
+            constraints: Some(ExecutionConstraints::default()),
+            timeout_seconds: Some(60),
+        };
+
+        (req, input_denom.to_string(), output_denom.to_string(), output_chain.to_string(), amount)
     };
+    // rng is dropped here, before the await
 
     let intent = Intent::new(req);
     let intent_clone = intent.clone();

@@ -24,8 +24,8 @@ pub async fn run_price_feed(state: AppStateRef) {
 }
 
 async fn update_prices(state: &AppStateRef) {
-    let mut rng = rand::thread_rng();
     let mut state = state.write().await;
+    let mut rng = rand::thread_rng();
     let mut updated_prices = Vec::new();
 
     for price_feed in state.prices.values_mut() {

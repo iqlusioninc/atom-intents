@@ -42,22 +42,47 @@ async fn process_settlements(state: &AppStateRef) {
 }
 
 async fn process_single_settlement(state: &AppStateRef, settlement_id: &str) {
-    let mut rng = rand::thread_rng();
+    // Generate random values before await
+    let (delay_ms, ibc_packet_id, success, execution_txid) = {
+        let mut rng = rand::thread_rng();
+        (
+            rng.gen_range(100..300),
+            format!("ibc_{}_{}", rng.gen::<u32>(), rng.gen::<u32>()),
+            rng.gen_bool(0.95),
+            format!("tx_{}", Uuid::new_v4()),
+        )
+    };
 
     // Simulate processing delay
-    tokio::time::sleep(Duration::from_millis(rng.gen_range(100..300))).await;
+    tokio::time::sleep(Duration::from_millis(delay_ms)).await;
 
     let mut state = state.write().await;
+
+    // First, get the current phase and necessary data from settlement
+    let (current_phase, intent_ids, solver_id, input_amount) = {
+        let settlement = match state.settlements.get(settlement_id) {
+            Some(s) => s,
+            None => return,
+        };
+        (
+            settlement.phase.clone(),
+            settlement.intent_ids.clone(),
+            settlement.solver_id.clone(),
+            settlement.input_amount,
+        )
+    };
+
+    let now = Utc::now();
+
+    // Now update the settlement
     let settlement = match state.settlements.get_mut(settlement_id) {
         Some(s) => s,
         None => return,
     };
-
-    let now = Utc::now();
     settlement.updated_at = now;
 
     // Progress through settlement phases
-    match settlement.phase {
+    match current_phase {
         SettlementPhase::Init => {
             // Start escrow lock
             settlement.phase = SettlementPhase::EscrowLocked;
@@ -100,10 +125,7 @@ async fn process_single_settlement(state: &AppStateRef, settlement_id: &str) {
             // Initiate IBC transfer (if cross-chain)
             settlement.phase = SettlementPhase::IbcInFlight;
             settlement.status = SettlementStatus::Executing;
-            settlement.ibc_packet_id = Some(format!("ibc_{}_{}",
-                rng.gen::<u32>(),
-                rng.gen::<u32>()
-            ));
+            settlement.ibc_packet_id = Some(ibc_packet_id);
             settlement.events.push(SettlementEvent {
                 event_type: "ibc_initiated".to_string(),
                 timestamp: now,
@@ -121,13 +143,11 @@ async fn process_single_settlement(state: &AppStateRef, settlement_id: &str) {
         }
         SettlementPhase::IbcInFlight => {
             // Simulate IBC completion (with small chance of failure for realism)
-            let success = rng.gen_bool(0.95); // 95% success rate
-
             if success {
                 settlement.phase = SettlementPhase::Finalized;
                 settlement.status = SettlementStatus::Completed;
                 settlement.completed_at = Some(now);
-                settlement.execution_txid = Some(format!("tx_{}", Uuid::new_v4()));
+                settlement.execution_txid = Some(execution_txid);
                 settlement.events.push(SettlementEvent {
                     event_type: "completed".to_string(),
                     timestamp: now,
@@ -138,26 +158,9 @@ async fn process_single_settlement(state: &AppStateRef, settlement_id: &str) {
                     }),
                 });
 
-                // Update intent status
-                for intent_id in &settlement.intent_ids {
-                    if let Some(intent) = state.intents.get_mut(intent_id) {
-                        intent.status = IntentStatus::Completed;
-                    }
-                }
-
-                // Update solver stats
-                if let Some(solver) = state.solvers.get_mut(&settlement.solver_id) {
-                    solver.total_volume += settlement.input_amount;
-                }
-
-                // Update system stats
-                state.stats.pending_intents = state.stats.pending_intents.saturating_sub(
-                    settlement.intent_ids.len() as u64
-                );
-
                 info!(
                     "Settlement {} - completed successfully",
-                    settlement.id
+                    settlement_id
                 );
             } else {
                 // Simulate failure and refund
@@ -182,16 +185,9 @@ async fn process_single_settlement(state: &AppStateRef, settlement_id: &str) {
                     }),
                 });
 
-                // Update intent status
-                for intent_id in &settlement.intent_ids {
-                    if let Some(intent) = state.intents.get_mut(intent_id) {
-                        intent.status = IntentStatus::Failed;
-                    }
-                }
-
                 info!(
                     "Settlement {} - failed and refunded",
-                    settlement.id
+                    settlement_id
                 );
             }
         }
@@ -200,12 +196,46 @@ async fn process_single_settlement(state: &AppStateRef, settlement_id: &str) {
         }
     }
 
+    // Get settlement data for broadcast before dropping the mutable borrow
+    let (settlement_clone, phase, status) = {
+        let settlement = state.settlements.get(settlement_id).unwrap();
+        (settlement.clone(), settlement.phase.clone(), settlement.status.clone())
+    };
+
+    // Now update related state based on current phase
+    if current_phase == SettlementPhase::IbcInFlight {
+        if success {
+            // Update intent status
+            for intent_id in &intent_ids {
+                if let Some(intent) = state.intents.get_mut(intent_id) {
+                    intent.status = IntentStatus::Completed;
+                }
+            }
+
+            // Update solver stats
+            if let Some(solver) = state.solvers.get_mut(&solver_id) {
+                solver.total_volume += input_amount;
+            }
+
+            // Update system stats
+            state.stats.pending_intents = state.stats.pending_intents.saturating_sub(
+                intent_ids.len() as u64
+            );
+        } else {
+            // Update intent status for failure
+            for intent_id in &intent_ids {
+                if let Some(intent) = state.intents.get_mut(intent_id) {
+                    intent.status = IntentStatus::Failed;
+                }
+            }
+        }
+    }
+
     // Broadcast settlement update
-    let settlement_clone = settlement.clone();
     state.broadcast(WsMessage::SettlementUpdate(settlement_clone));
 
     debug!(
         "Processed settlement {} - phase: {:?}, status: {:?}",
-        settlement_id, settlement.phase, settlement.status
+        settlement_id, phase, status
     );
 }

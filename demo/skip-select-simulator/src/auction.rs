@@ -5,7 +5,7 @@ use std::time::Duration;
 
 use chrono::Utc;
 use tokio::sync::RwLock;
-use tracing::{debug, info, warn};
+use tracing::{debug, info};
 use uuid::Uuid;
 
 use crate::models::*;
@@ -80,15 +80,20 @@ async fn run_auction_cycle(state: &AppStateRef) {
     // Complete auction
     {
         let mut state = state.write().await;
-        if let Some(auction) = state.auctions.get_mut(&auction.id) {
+        let auction_to_broadcast = if let Some(auction) = state.auctions.get_mut(&auction.id) {
             auction.status = AuctionStatus::Completed;
             auction.completed_at = Some(Utc::now());
             auction.winning_quote = clearing_result.winning_quote.clone();
             auction.clearing_price = clearing_result.clearing_price;
             auction.stats = clearing_result.stats.clone();
+            Some(auction.clone())
+        } else {
+            None
+        };
 
-            // Broadcast completion
-            state.broadcast(WsMessage::AuctionCompleted(auction.clone()));
+        // Broadcast completion outside of the mutable borrow
+        if let Some(auction_clone) = auction_to_broadcast {
+            state.broadcast(WsMessage::AuctionCompleted(auction_clone));
         }
 
         // Update intents based on result
