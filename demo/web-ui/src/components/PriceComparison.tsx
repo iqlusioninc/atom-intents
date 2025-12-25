@@ -1,6 +1,6 @@
 import { useMemo } from 'react';
 import { useStore } from '../hooks/useStore';
-import { TrendingUp, TrendingDown, Minus, ExternalLink } from 'lucide-react';
+import { TrendingUp, TrendingDown } from 'lucide-react';
 
 interface ComparisonRow {
   venue: string;
@@ -13,7 +13,6 @@ interface ComparisonRow {
 }
 
 export default function PriceComparison() {
-  const prices = useStore((state) => state.prices);
   const currentAuction = useStore((state) => {
     const id = state.currentAuctionId;
     return id ? state.auctions.get(id) : null;
@@ -28,7 +27,6 @@ export default function PriceComparison() {
       q.output_amount > best.output_amount ? q : best
     , quotes[0]);
 
-    const inputAmount = bestQuote.input_amount / 1_000_000;
     const baseOutput = bestQuote.output_amount / 1_000_000;
 
     const comparisons: ComparisonRow[] = [

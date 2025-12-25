@@ -192,7 +192,7 @@ export default function ExecutionTimeline() {
 
         {/* Timeline steps */}
         <div className="space-y-6">
-          {timeline.map((step, i) => {
+          {timeline.map((step) => {
             const Icon = step.icon;
             const isCompleted = step.status === 'completed';
             const isActive = step.status === 'active';
