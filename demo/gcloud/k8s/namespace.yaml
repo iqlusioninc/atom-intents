@@ -1,0 +1,7 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: atom-intents
+  labels:
+    app.kubernetes.io/name: atom-intents
+    app.kubernetes.io/component: demo

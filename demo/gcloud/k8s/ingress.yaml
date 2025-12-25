@@ -1,0 +1,66 @@
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: atom-intents-ingress
+  namespace: atom-intents
+  annotations:
+    kubernetes.io/ingress.class: "gce"
+    kubernetes.io/ingress.global-static-ip-name: "atom-intents-ip-dev"
+    # Uncomment for HTTPS with managed cert
+    # networking.gke.io/managed-certificates: "atom-intents-cert"
+spec:
+  rules:
+    - http:
+        paths:
+          # API routes
+          - path: /api/*
+            pathType: ImplementationSpecific
+            backend:
+              service:
+                name: skip-select
+                port:
+                  number: 8080
+          # WebSocket route
+          - path: /ws
+            pathType: Exact
+            backend:
+              service:
+                name: skip-select
+                port:
+                  number: 8080
+          # Health check
+          - path: /health
+            pathType: Exact
+            backend:
+              service:
+                name: skip-select
+                port:
+                  number: 8080
+          # Web UI (catch-all)
+          - path: /*
+            pathType: ImplementationSpecific
+            backend:
+              service:
+                name: web-ui
+                port:
+                  number: 80
+---
+# Backend config for WebSocket support
+apiVersion: cloud.google.com/v1
+kind: BackendConfig
+metadata:
+  name: skip-select-config
+  namespace: atom-intents
+spec:
+  timeoutSec: 86400
+  connectionDraining:
+    drainingTimeoutSec: 60
+  healthCheck:
+    checkIntervalSec: 15
+    timeoutSec: 10
+    healthyThreshold: 2
+    unhealthyThreshold: 3
+    type: HTTP
+    requestPath: /health
+    port: 8080

@@ -1,0 +1,454 @@
+//! Batch auction engine for intent execution
+
+use std::sync::Arc;
+use std::time::Duration;
+
+use chrono::Utc;
+use tokio::sync::RwLock;
+use tracing::{debug, info, warn};
+use uuid::Uuid;
+
+use crate::models::*;
+use crate::oracle;
+use crate::state::AppState;
+
+type AppStateRef = Arc<RwLock<AppState>>;
+
+/// Run the main auction loop
+pub async fn run_auction_loop(state: AppStateRef, interval: Duration) {
+    let mut ticker = tokio::time::interval(interval);
+
+    loop {
+        ticker.tick().await;
+        run_auction_cycle(&state).await;
+    }
+}
+
+/// Execute one auction cycle
+async fn run_auction_cycle(state: &AppStateRef) {
+    // Get pending intents
+    let pending_intents = {
+        let state = state.read().await;
+        state.get_pending_intents()
+    };
+
+    if pending_intents.is_empty() {
+        return;
+    }
+
+    info!("Starting auction with {} pending intents", pending_intents.len());
+
+    // Create auction
+    let intent_ids: Vec<String> = pending_intents.iter().map(|i| i.id.clone()).collect();
+    let mut auction = Auction::new(intent_ids.clone());
+    auction.stats.num_intents = pending_intents.len();
+
+    // Update state with new auction
+    {
+        let mut state = state.write().await;
+        state.current_auction_id = Some(auction.id.clone());
+        state.auctions.insert(auction.id.clone(), auction.clone());
+
+        // Mark intents as in auction
+        for intent_id in &intent_ids {
+            if let Some(intent) = state.intents.get_mut(intent_id) {
+                intent.status = IntentStatus::InAuction;
+                intent.auction_id = Some(auction.id.clone());
+            }
+        }
+
+        state.stats.total_auctions += 1;
+        state.broadcast(WsMessage::AuctionStarted(auction.clone()));
+    }
+
+    // Simulate quote collection phase
+    let quotes = collect_quotes(state, &auction.id, &pending_intents).await;
+
+    // Update auction with quotes
+    {
+        let mut state = state.write().await;
+        if let Some(auction) = state.auctions.get_mut(&auction.id) {
+            auction.status = AuctionStatus::Collecting;
+            auction.quotes = quotes.clone();
+            auction.stats.num_quotes = quotes.len();
+        }
+    }
+
+    // Run clearing algorithm
+    let clearing_result = run_clearing_algorithm(&quotes, &pending_intents);
+
+    // Complete auction
+    {
+        let mut state = state.write().await;
+        if let Some(auction) = state.auctions.get_mut(&auction.id) {
+            auction.status = AuctionStatus::Completed;
+            auction.completed_at = Some(Utc::now());
+            auction.winning_quote = clearing_result.winning_quote.clone();
+            auction.clearing_price = clearing_result.clearing_price;
+            auction.stats = clearing_result.stats.clone();
+
+            // Broadcast completion
+            state.broadcast(WsMessage::AuctionCompleted(auction.clone()));
+        }
+
+        // Update intents based on result
+        if let Some(winning_quote) = &clearing_result.winning_quote {
+            for intent_id in &winning_quote.intent_ids {
+                if let Some(intent) = state.intents.get_mut(intent_id) {
+                    intent.status = IntentStatus::Matched;
+                }
+            }
+
+            // Create settlement
+            let settlement = Settlement {
+                id: format!("settlement_{}", Uuid::new_v4()),
+                auction_id: auction.id.clone(),
+                intent_ids: winning_quote.intent_ids.clone(),
+                solver_id: winning_quote.solver_id.clone(),
+                status: SettlementStatus::Pending,
+                phase: SettlementPhase::Init,
+                input_amount: winning_quote.input_amount,
+                output_amount: winning_quote.output_amount,
+                escrow_txid: None,
+                execution_txid: None,
+                ibc_packet_id: None,
+                created_at: Utc::now(),
+                updated_at: Utc::now(),
+                completed_at: None,
+                events: vec![SettlementEvent {
+                    event_type: "created".to_string(),
+                    timestamp: Utc::now(),
+                    description: "Settlement created from auction".to_string(),
+                    metadata: serde_json::json!({
+                        "auction_id": auction.id,
+                        "solver_id": winning_quote.solver_id,
+                    }),
+                }],
+            };
+
+            for intent_id in &winning_quote.intent_ids {
+                if let Some(intent) = state.intents.get_mut(intent_id) {
+                    intent.settlement_id = Some(settlement.id.clone());
+                }
+            }
+
+            state.settlements.insert(settlement.id.clone(), settlement.clone());
+            state.stats.total_settlements += 1;
+            state.broadcast(WsMessage::SettlementUpdate(settlement));
+        } else {
+            // No winning quote - return intents to pending
+            for intent_id in &intent_ids {
+                if let Some(intent) = state.intents.get_mut(intent_id) {
+                    if intent.is_expired() {
+                        intent.status = IntentStatus::Expired;
+                    } else {
+                        intent.status = IntentStatus::Pending;
+                        intent.auction_id = None;
+                    }
+                }
+            }
+        }
+
+        state.update_stats();
+    }
+}
+
+/// Collect quotes from mock solvers
+async fn collect_quotes(
+    state: &AppStateRef,
+    auction_id: &str,
+    intents: &[Intent],
+) -> Vec<SolverQuote> {
+    let mut quotes = Vec::new();
+
+    let (solvers, prices) = {
+        let state = state.read().await;
+        (state.solvers.clone(), state.prices.clone())
+    };
+
+    for solver in solvers.values() {
+        if solver.status != SolverStatus::Active {
+            continue;
+        }
+
+        // Simulate solver latency
+        tokio::time::sleep(Duration::from_millis(50)).await;
+
+        // Generate quotes for compatible intents
+        for intent in intents {
+            // Check if solver supports this trading pair
+            if !solver.supported_denoms.contains(&intent.input.denom)
+                || !solver.supported_denoms.contains(&intent.output.denom)
+            {
+                continue;
+            }
+
+            // Calculate quote based on solver type
+            let quote = generate_solver_quote(solver, intent, &prices);
+            if let Some(quote) = quote {
+                // Broadcast quote received
+                {
+                    let state = state.read().await;
+                    state.broadcast(WsMessage::QuoteReceived(quote.clone()));
+                }
+                quotes.push(quote);
+            }
+        }
+    }
+
+    debug!("Collected {} quotes for auction {}", quotes.len(), auction_id);
+    quotes
+}
+
+fn generate_solver_quote(
+    solver: &Solver,
+    intent: &Intent,
+    prices: &std::collections::HashMap<String, PriceFeed>,
+) -> Option<SolverQuote> {
+    use rand::Rng;
+    let mut rng = rand::thread_rng();
+
+    // Get exchange rate
+    let rate = oracle::get_exchange_rate(prices, &intent.input.denom, &intent.output.denom)?;
+
+    // Apply solver-specific spread
+    let spread = match solver.solver_type {
+        SolverType::IntentMatcher => 0.0, // No spread for direct matching
+        SolverType::DexRouter => rng.gen_range(0.1..0.5) / 100.0, // 0.1-0.5%
+        SolverType::CexBackstop => rng.gen_range(0.3..0.8) / 100.0, // 0.3-0.8%
+        SolverType::Hybrid => rng.gen_range(0.15..0.4) / 100.0,
+    };
+
+    let effective_rate = rate * (1.0 - spread);
+    let output_amount = (intent.input.amount as f64 * effective_rate) as u128;
+
+    // Check if output meets minimum
+    if output_amount < intent.output.min_amount {
+        return None;
+    }
+
+    // Generate execution plan
+    let execution_plan = generate_execution_plan(solver, intent);
+
+    Some(SolverQuote {
+        id: format!("quote_{}", Uuid::new_v4()),
+        solver_id: solver.id.clone(),
+        solver_name: solver.name.clone(),
+        solver_type: solver.solver_type.clone(),
+        intent_ids: vec![intent.id.clone()],
+        input_amount: intent.input.amount,
+        output_amount,
+        effective_price: effective_rate,
+        execution_plan,
+        estimated_gas: rng.gen_range(200_000..500_000),
+        confidence: solver.reputation_score * rng.gen_range(0.9..1.0),
+        submitted_at: Utc::now(),
+    })
+}
+
+fn generate_execution_plan(solver: &Solver, intent: &Intent) -> ExecutionPlan {
+    use rand::Rng;
+    let mut rng = rand::thread_rng();
+
+    match solver.solver_type {
+        SolverType::IntentMatcher => ExecutionPlan {
+            plan_type: ExecutionPlanType::DirectMatch,
+            steps: vec![ExecutionStep {
+                step_type: "direct_transfer".to_string(),
+                chain_id: intent.output.chain_id.clone(),
+                venue: None,
+                input_denom: intent.input.denom.clone(),
+                output_denom: intent.output.denom.clone(),
+                amount: intent.input.amount,
+                description: "Direct match with opposing intent".to_string(),
+            }],
+            estimated_duration_ms: 1500,
+        },
+        SolverType::DexRouter => {
+            let needs_ibc = intent.input.chain_id != intent.output.chain_id;
+            let steps = if needs_ibc {
+                vec![
+                    ExecutionStep {
+                        step_type: "ibc_transfer".to_string(),
+                        chain_id: intent.input.chain_id.clone(),
+                        venue: None,
+                        input_denom: intent.input.denom.clone(),
+                        output_denom: intent.input.denom.clone(),
+                        amount: intent.input.amount,
+                        description: format!(
+                            "IBC transfer to {}",
+                            intent.output.chain_id
+                        ),
+                    },
+                    ExecutionStep {
+                        step_type: "swap".to_string(),
+                        chain_id: intent.output.chain_id.clone(),
+                        venue: Some("osmosis_amm".to_string()),
+                        input_denom: intent.input.denom.clone(),
+                        output_denom: intent.output.denom.clone(),
+                        amount: intent.input.amount,
+                        description: format!(
+                            "Swap {} -> {} on Osmosis",
+                            intent.input.denom, intent.output.denom
+                        ),
+                    },
+                ]
+            } else {
+                vec![ExecutionStep {
+                    step_type: "swap".to_string(),
+                    chain_id: intent.output.chain_id.clone(),
+                    venue: Some("osmosis_amm".to_string()),
+                    input_denom: intent.input.denom.clone(),
+                    output_denom: intent.output.denom.clone(),
+                    amount: intent.input.amount,
+                    description: format!(
+                        "Swap {} -> {}",
+                        intent.input.denom, intent.output.denom
+                    ),
+                }]
+            };
+
+            ExecutionPlan {
+                plan_type: if needs_ibc {
+                    ExecutionPlanType::MultiHop
+                } else {
+                    ExecutionPlanType::DexRoute
+                },
+                steps,
+                estimated_duration_ms: rng.gen_range(2000..4000),
+            }
+        }
+        SolverType::CexBackstop => ExecutionPlan {
+            plan_type: ExecutionPlanType::CexHedge,
+            steps: vec![
+                ExecutionStep {
+                    step_type: "escrow".to_string(),
+                    chain_id: intent.input.chain_id.clone(),
+                    venue: None,
+                    input_denom: intent.input.denom.clone(),
+                    output_denom: intent.input.denom.clone(),
+                    amount: intent.input.amount,
+                    description: "Lock funds in escrow".to_string(),
+                },
+                ExecutionStep {
+                    step_type: "cex_hedge".to_string(),
+                    chain_id: "cex".to_string(),
+                    venue: Some("binance".to_string()),
+                    input_denom: intent.input.denom.clone(),
+                    output_denom: intent.output.denom.clone(),
+                    amount: intent.input.amount,
+                    description: "Hedge on CEX".to_string(),
+                },
+                ExecutionStep {
+                    step_type: "delivery".to_string(),
+                    chain_id: intent.output.chain_id.clone(),
+                    venue: None,
+                    input_denom: intent.output.denom.clone(),
+                    output_denom: intent.output.denom.clone(),
+                    amount: 0, // Will be filled in
+                    description: "Deliver output to user".to_string(),
+                },
+            ],
+            estimated_duration_ms: rng.gen_range(3000..5000),
+        },
+        SolverType::Hybrid => ExecutionPlan {
+            plan_type: ExecutionPlanType::DexRoute,
+            steps: vec![ExecutionStep {
+                step_type: "hybrid_fill".to_string(),
+                chain_id: intent.output.chain_id.clone(),
+                venue: Some("multiple".to_string()),
+                input_denom: intent.input.denom.clone(),
+                output_denom: intent.output.denom.clone(),
+                amount: intent.input.amount,
+                description: "Split between DEX and inventory".to_string(),
+            }],
+            estimated_duration_ms: rng.gen_range(2500..3500),
+        },
+    }
+}
+
+struct ClearingResult {
+    winning_quote: Option<SolverQuote>,
+    clearing_price: Option<f64>,
+    stats: AuctionStats,
+}
+
+fn run_clearing_algorithm(quotes: &[SolverQuote], intents: &[Intent]) -> ClearingResult {
+    if quotes.is_empty() {
+        return ClearingResult {
+            winning_quote: None,
+            clearing_price: None,
+            stats: AuctionStats::default(),
+        };
+    }
+
+    // Sort quotes by effective price (best price first)
+    let mut sorted_quotes = quotes.to_vec();
+    sorted_quotes.sort_by(|a, b| {
+        b.effective_price
+            .partial_cmp(&a.effective_price)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+
+    // Select winning quote (best price that meets requirements)
+    let winning_quote = sorted_quotes.into_iter().find(|q| {
+        // Check if quote meets all intent requirements
+        q.intent_ids.iter().all(|id| {
+            intents
+                .iter()
+                .find(|i| &i.id == id)
+                .is_some_and(|intent| q.output_amount >= intent.output.min_amount)
+        })
+    });
+
+    let clearing_price = winning_quote.as_ref().map(|q| q.effective_price);
+
+    // Calculate stats
+    let total_input: u128 = intents.iter().map(|i| i.input.amount).sum();
+    let total_output: u128 = winning_quote
+        .as_ref()
+        .map(|q| q.output_amount)
+        .unwrap_or(0);
+
+    let matched_volume = winning_quote
+        .as_ref()
+        .map(|q| q.input_amount)
+        .unwrap_or(0);
+
+    // Calculate price improvement (vs worst quote)
+    let price_improvement_bps = if let (Some(best), Some(worst)) = (
+        quotes.iter().max_by(|a, b| {
+            a.effective_price
+                .partial_cmp(&b.effective_price)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        }),
+        quotes.iter().min_by(|a, b| {
+            a.effective_price
+                .partial_cmp(&b.effective_price)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        }),
+    ) {
+        ((best.effective_price - worst.effective_price) / worst.effective_price * 10000.0) as i32
+    } else {
+        0
+    };
+
+    // Solver competition score (how many unique solvers)
+    let unique_solvers: std::collections::HashSet<_> =
+        quotes.iter().map(|q| &q.solver_id).collect();
+    let competition_score = (unique_solvers.len() as f64).min(1.0);
+
+    ClearingResult {
+        winning_quote,
+        clearing_price,
+        stats: AuctionStats {
+            num_intents: intents.len(),
+            num_quotes: quotes.len(),
+            total_input_amount: total_input,
+            total_output_amount: total_output,
+            matched_volume,
+            price_improvement_bps,
+            solver_competition_score: competition_score,
+        },
+    }
+}

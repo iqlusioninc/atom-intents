@@ -1,0 +1,144 @@
+version: '3.8'
+
+services:
+  # Skip Select Simulator (Coordination Layer)
+  skip-select:
+    build:
+      context: ../skip-select-simulator
+      dockerfile: ../docker/Dockerfile.skip-select
+    ports:
+      - "8080:8080"
+    environment:
+      - SKIP_SELECT_PORT=8080
+      - AUCTION_INTERVAL_MS=500
+      - MOCK_LATENCY_MS=100
+      - ENABLE_ANALYTICS=true
+      - RUST_LOG=info,skip_select_simulator=debug
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+    networks:
+      - atom-intents
+
+  # Web UI
+  web-ui:
+    build:
+      context: ../web-ui
+      dockerfile: ../docker/Dockerfile.web-ui
+    ports:
+      - "3000:80"
+    depends_on:
+      - skip-select
+    environment:
+      - API_URL=http://skip-select:8080
+    networks:
+      - atom-intents
+
+  # Mock Cosmos Hub Node (for local testing)
+  mock-cosmoshub:
+    image: ghcr.io/strangelove-ventures/heighliner/cosmoshub:v14.1.0
+    ports:
+      - "26657:26657"
+      - "9090:9090"
+      - "1317:1317"
+    volumes:
+      - cosmoshub-data:/root/.gaia
+    environment:
+      - CHAIN_ID=cosmoshub-local
+    command: ["start"]
+    networks:
+      - atom-intents
+    profiles:
+      - full
+
+  # Mock Osmosis Node (for local testing)
+  mock-osmosis:
+    image: ghcr.io/strangelove-ventures/heighliner/osmosis:v23.0.0
+    ports:
+      - "26658:26657"
+      - "9091:9090"
+      - "1318:1317"
+    volumes:
+      - osmosis-data:/root/.osmosisd
+    environment:
+      - CHAIN_ID=osmosis-local
+    command: ["start"]
+    networks:
+      - atom-intents
+    profiles:
+      - full
+
+  # Redis (for session storage and caching)
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+    networks:
+      - atom-intents
+    profiles:
+      - full
+
+  # PostgreSQL (for analytics and persistence)
+  postgres:
+    image: postgres:16-alpine
+    ports:
+      - "5432:5432"
+    environment:
+      - POSTGRES_DB=atom_intents
+      - POSTGRES_USER=atom
+      - POSTGRES_PASSWORD=intents_demo
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    networks:
+      - atom-intents
+    profiles:
+      - full
+
+  # Prometheus (for metrics)
+  prometheus:
+    image: prom/prometheus:latest
+    ports:
+      - "9092:9090"
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml
+      - prometheus-data:/prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+    networks:
+      - atom-intents
+    profiles:
+      - monitoring
+
+  # Grafana (for dashboards)
+  grafana:
+    image: grafana/grafana:latest
+    ports:
+      - "3001:3000"
+    environment:
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+    volumes:
+      - grafana-data:/var/lib/grafana
+      - ./grafana/provisioning:/etc/grafana/provisioning
+    depends_on:
+      - prometheus
+    networks:
+      - atom-intents
+    profiles:
+      - monitoring
+
+networks:
+  atom-intents:
+    driver: bridge
+
+volumes:
+  cosmoshub-data:
+  osmosis-data:
+  redis-data:
+  postgres-data:
+  prometheus-data:
+  grafana-data:

@@ -1,0 +1,186 @@
+# ATOM Intents Simulation Configuration
+
+# Token definitions
+tokens:
+  ATOM:
+    chain_id: cosmoshub-4
+    initial_price_usd: 9.50
+    volatility: 0.03
+    liquidity_depth: 10000000  # $10M
+
+  OSMO:
+    chain_id: osmosis-1
+    initial_price_usd: 0.65
+    volatility: 0.04
+    liquidity_depth: 5000000  # $5M
+
+  USDC:
+    chain_id: noble-1
+    initial_price_usd: 1.00
+    volatility: 0.001
+    liquidity_depth: 50000000  # $50M
+
+  NTRN:
+    chain_id: neutron-1
+    initial_price_usd: 0.45
+    volatility: 0.05
+    liquidity_depth: 2000000  # $2M
+
+  STRD:
+    chain_id: stride-1
+    initial_price_usd: 1.20
+    volatility: 0.04
+    liquidity_depth: 1000000  # $1M
+
+# Trading pair configurations
+trading_pairs:
+  - input: ATOM
+    output: OSMO
+    volume_weight: 0.25
+    dex_spread_bps: 30
+
+  - input: OSMO
+    output: ATOM
+    volume_weight: 0.20
+    dex_spread_bps: 30
+
+  - input: ATOM
+    output: USDC
+    volume_weight: 0.20
+    dex_spread_bps: 20
+
+  - input: USDC
+    output: ATOM
+    volume_weight: 0.15
+    dex_spread_bps: 20
+
+  - input: NTRN
+    output: ATOM
+    volume_weight: 0.10
+    dex_spread_bps: 40
+
+  - input: ATOM
+    output: NTRN
+    volume_weight: 0.05
+    dex_spread_bps: 40
+
+  - input: OSMO
+    output: USDC
+    volume_weight: 0.05
+    dex_spread_bps: 25
+
+# User profiles
+user_profiles:
+  retail:
+    weight: 0.70
+    amount_range_usd: [10, 500]
+    slippage_tolerance_percent: [0.5, 2.0]
+    timeout_seconds: [30, 120]
+    partial_fill_ratio: 0.7
+
+  trader:
+    weight: 0.20
+    amount_range_usd: [500, 10000]
+    slippage_tolerance_percent: [0.1, 0.5]
+    timeout_seconds: [15, 60]
+    partial_fill_ratio: 0.9
+
+  whale:
+    weight: 0.10
+    amount_range_usd: [10000, 1000000]
+    slippage_tolerance_percent: [0.2, 1.0]
+    timeout_seconds: [60, 300]
+    partial_fill_ratio: 0.5
+
+# Market simulation
+market:
+  # Price update interval
+  update_interval_ms: 1000
+
+  # Volatility model
+  volatility_model: geometric_brownian_motion
+
+  # Correlation between assets
+  correlations:
+    ATOM-OSMO: 0.7
+    ATOM-NTRN: 0.6
+    ATOM-STRD: 0.5
+    OSMO-NTRN: 0.5
+
+  # Market regimes
+  regimes:
+    normal:
+      probability: 0.85
+      volatility_multiplier: 1.0
+
+    high_volatility:
+      probability: 0.10
+      volatility_multiplier: 2.5
+
+    low_volatility:
+      probability: 0.05
+      volatility_multiplier: 0.5
+
+# Solver simulation
+solvers:
+  dex_router:
+    base_spread_bps: 30
+    latency_ms: [100, 500]
+    success_rate: 0.98
+
+  intent_matcher:
+    spread_bps: 0
+    latency_ms: [50, 200]
+    success_rate: 0.99
+    matching_probability: 0.3
+
+  cex_backstop:
+    base_spread_bps: 50
+    latency_ms: [200, 1000]
+    success_rate: 0.97
+    capital_limit_usd: 50000
+
+# Load test scenarios
+load_scenarios:
+  light:
+    requests_per_second: 5
+    duration_seconds: 300
+    description: Light load for basic testing
+
+  normal:
+    requests_per_second: 20
+    duration_seconds: 600
+    description: Normal production load
+
+  heavy:
+    requests_per_second: 100
+    duration_seconds: 300
+    description: Heavy load stress test
+
+  spike:
+    base_rps: 10
+    spike_rps: 200
+    spike_duration: 30
+    total_duration: 300
+    description: Traffic spike simulation
+
+# Analytics
+analytics:
+  # Metrics to collect
+  metrics:
+    - intent_submission_latency
+    - auction_duration
+    - quote_count
+    - settlement_time
+    - price_improvement
+    - solver_win_rate
+
+  # Aggregation intervals
+  aggregation_intervals:
+    - 1s
+    - 10s
+    - 1m
+    - 5m
+
+  # Export format
+  export_format: prometheus
