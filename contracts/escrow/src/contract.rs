@@ -1,13 +1,13 @@
 use cosmwasm_std::{
-    entry_point, to_json_binary, BankMsg, Binary, Coin, Deps, DepsMut, Env, MessageInfo, Response,
-    StdResult,
+    entry_point, to_json_binary, BankMsg, Binary, Coin, CosmosMsg, Deps, DepsMut, Env,
+    IbcMsg, IbcTimeout, MessageInfo, Response, StdResult,
 };
 
 use crate::error::ContractError;
 use crate::msg::{
     ConfigResponse, EscrowResponse, EscrowsResponse, ExecuteMsg, InstantiateMsg, QueryMsg,
 };
-use crate::state::{Config, Escrow, EscrowStatus, CONFIG, ESCROWS, USER_ESCROWS};
+use crate::state::{Config, Escrow, EscrowStatus, CONFIG, ESCROWS, ESCROWS_BY_INTENT, USER_ESCROWS};
 
 #[entry_point]
 pub fn instantiate(
@@ -38,11 +38,28 @@ pub fn execute(
             intent_id,
             expires_at,
         } => execute_lock(deps, env, info, escrow_id, intent_id, expires_at),
+        ExecuteMsg::LockFromIbc {
+            intent_id,
+            expires_at,
+            user_source_address,
+            source_chain_id,
+            source_channel,
+        } => execute_lock_from_ibc(
+            deps,
+            env,
+            info,
+            intent_id,
+            expires_at,
+            user_source_address,
+            source_chain_id,
+            source_channel,
+        ),
         ExecuteMsg::Release {
             escrow_id,
             recipient,
         } => execute_release(deps, env, info, escrow_id, recipient),
         ExecuteMsg::Refund { escrow_id } => execute_refund(deps, env, info, escrow_id),
+        ExecuteMsg::RetryRefund { escrow_id } => execute_retry_refund(deps, env, info, escrow_id),
         ExecuteMsg::UpdateConfig {
             admin,
             settlement_contract,
@@ -63,6 +80,13 @@ fn execute_lock(
         return Err(ContractError::EscrowAlreadyExists { id: escrow_id });
     }
 
+    // Verify intent doesn't already have an escrow
+    if ESCROWS_BY_INTENT.has(deps.storage, &intent_id) {
+        return Err(ContractError::IntentAlreadyEscrowed {
+            intent_id: intent_id.clone(),
+        });
+    }
+
     // Require exactly one coin
     if info.funds.len() != 1 {
         return Err(ContractError::InvalidFunds {
@@ -78,18 +102,96 @@ fn execute_lock(
         owner: info.sender.clone(),
         amount: coin.amount,
         denom: coin.denom.clone(),
-        intent_id,
+        intent_id: intent_id.clone(),
         expires_at,
         status: EscrowStatus::Locked,
+        // Local escrow - no cross-chain fields
+        owner_chain_id: None,
+        owner_source_address: None,
+        source_channel: None,
+        source_denom: None,
     };
 
     ESCROWS.save(deps.storage, &escrow_id, &escrow)?;
     USER_ESCROWS.save(deps.storage, (&info.sender, &escrow_id), &true)?;
+    ESCROWS_BY_INTENT.save(deps.storage, &intent_id, &escrow_id)?;
 
     Ok(Response::new()
         .add_attribute("action", "lock")
         .add_attribute("escrow_id", escrow_id)
         .add_attribute("owner", info.sender)
+        .add_attribute("amount", coin.amount)
+        .add_attribute("denom", &coin.denom))
+}
+
+/// Lock funds via IBC Hooks - called when funds arrive from a cross-chain transfer
+/// The IBC Hooks middleware calls this with the transferred funds attached
+fn execute_lock_from_ibc(
+    deps: DepsMut,
+    _env: Env,
+    info: MessageInfo,
+    intent_id: String,
+    expires_at: u64,
+    user_source_address: String,
+    source_chain_id: String,
+    source_channel: String,
+) -> Result<Response, ContractError> {
+    // Verify intent doesn't already have an escrow (replay protection)
+    if ESCROWS_BY_INTENT.has(deps.storage, &intent_id) {
+        return Err(ContractError::IntentAlreadyEscrowed {
+            intent_id: intent_id.clone(),
+        });
+    }
+
+    // Verify exactly one IBC coin was sent
+    let ibc_funds: Vec<_> = info
+        .funds
+        .iter()
+        .filter(|c| c.denom.starts_with("ibc/"))
+        .collect();
+
+    if ibc_funds.len() != 1 {
+        return Err(ContractError::NotIbcFunds {});
+    }
+
+    let coin = ibc_funds[0];
+
+    // Generate escrow ID from intent ID for predictability
+    let escrow_id = format!("esc_{}", intent_id);
+
+    // Verify escrow doesn't already exist
+    if ESCROWS.has(deps.storage, &escrow_id) {
+        return Err(ContractError::EscrowAlreadyExists { id: escrow_id });
+    }
+
+    // For IBC Hooks, the sender is typically the IBC transfer module or a derived address
+    // We store both the on-chain sender and the original source address
+    let escrow = Escrow {
+        id: escrow_id.clone(),
+        owner: info.sender.clone(), // On-chain sender (IBC derived address)
+        amount: coin.amount,
+        denom: coin.denom.clone(), // This will be ibc/... denom
+        intent_id: intent_id.clone(),
+        expires_at,
+        status: EscrowStatus::Locked,
+        // Cross-chain escrow fields
+        owner_chain_id: Some(source_chain_id.clone()),
+        owner_source_address: Some(user_source_address.clone()),
+        source_channel: Some(source_channel.clone()),
+        source_denom: None, // Will be derived from ibc denom trace if needed
+    };
+
+    ESCROWS.save(deps.storage, &escrow_id, &escrow)?;
+    USER_ESCROWS.save(deps.storage, (&info.sender, &escrow_id), &true)?;
+    ESCROWS_BY_INTENT.save(deps.storage, &intent_id, &escrow_id)?;
+
+    Ok(Response::new()
+        .add_attribute("action", "lock_from_ibc")
+        .add_attribute("escrow_id", escrow_id)
+        .add_attribute("intent_id", intent_id)
+        .add_attribute("source_chain", source_chain_id)
+        .add_attribute("source_address", user_source_address)
+        .add_attribute("source_channel", source_channel)
         .add_attribute("amount", coin.amount)
         .add_attribute("denom", &coin.denom))
 }
@@ -166,8 +268,13 @@ fn execute_refund(
                 id: escrow_id.clone(),
             })?;
 
-    // Only owner can refund
-    if info.sender != escrow.owner {
+    // Only owner can refund (for local escrows)
+    // For cross-chain escrows, we also allow the admin to trigger refunds
+    let config = CONFIG.load(deps.storage)?;
+    let is_owner = info.sender == escrow.owner;
+    let is_admin = info.sender == config.admin;
+
+    if !is_owner && !is_admin {
         return Err(ContractError::Unauthorized {});
     }
 
@@ -176,29 +283,124 @@ fn execute_refund(
         return Err(ContractError::EscrowNotExpired { id: escrow_id });
     }
 
-    // Check not already released
+    // Check status allows refund
     if !matches!(escrow.status, EscrowStatus::Locked) {
-        return Err(ContractError::EscrowNotFound { id: escrow_id });
+        return Err(ContractError::InvalidStatus {});
     }
 
-    // Update status
-    escrow.status = EscrowStatus::Refunded;
+    // Determine refund method based on whether this is a cross-chain escrow
+    let (refund_msg, refund_type): (CosmosMsg, &str) =
+        if let (Some(source_channel), Some(source_address)) =
+            (&escrow.source_channel, &escrow.owner_source_address)
+        {
+            // Cross-chain refund via IBC
+            escrow.status = EscrowStatus::Refunding;
+
+            let ibc_msg = IbcMsg::Transfer {
+                channel_id: source_channel.clone(),
+                to_address: source_address.clone(),
+                amount: Coin {
+                    denom: escrow.denom.clone(),
+                    amount: escrow.amount,
+                },
+                timeout: IbcTimeout::with_timestamp(env.block.time.plus_seconds(600)),
+                memo: Some(format!(
+                    "{{\"refund\":{{\"escrow_id\":\"{}\",\"intent_id\":\"{}\"}}}}",
+                    escrow.id, escrow.intent_id
+                )),
+            };
+
+            (ibc_msg.into(), "ibc_refund")
+        } else {
+            // Local refund via bank send
+            escrow.status = EscrowStatus::Refunded;
+
+            let bank_msg = BankMsg::Send {
+                to_address: escrow.owner.to_string(),
+                amount: vec![Coin {
+                    denom: escrow.denom.clone(),
+                    amount: escrow.amount,
+                }],
+            };
+
+            (bank_msg.into(), "local_refund")
+        };
+
     ESCROWS.save(deps.storage, &escrow_id, &escrow)?;
 
-    // Send funds back to owner
-    let send_msg = BankMsg::Send {
-        to_address: escrow.owner.to_string(),
-        amount: vec![Coin {
+    Ok(Response::new()
+        .add_message(refund_msg)
+        .add_attribute("action", "refund")
+        .add_attribute("refund_type", refund_type)
+        .add_attribute("escrow_id", escrow_id)
+        .add_attribute("owner", escrow.owner)
+        .add_attribute("amount", escrow.amount))
+}
+
+/// Retry a failed IBC refund
+fn execute_retry_refund(
+    deps: DepsMut,
+    env: Env,
+    info: MessageInfo,
+    escrow_id: String,
+) -> Result<Response, ContractError> {
+    let mut escrow =
+        ESCROWS
+            .load(deps.storage, &escrow_id)
+            .map_err(|_| ContractError::EscrowNotFound {
+                id: escrow_id.clone(),
+            })?;
+
+    // Only admin can retry failed refunds
+    let config = CONFIG.load(deps.storage)?;
+    if info.sender != config.admin {
+        return Err(ContractError::Unauthorized {});
+    }
+
+    // Check status is RefundFailed
+    if !matches!(escrow.status, EscrowStatus::RefundFailed) {
+        return Err(ContractError::InvalidStatus {});
+    }
+
+    // Must be a cross-chain escrow
+    let source_channel = escrow
+        .source_channel
+        .as_ref()
+        .ok_or(ContractError::MissingCrossChainField {
+            field: "source_channel".to_string(),
+        })?;
+    let source_address = escrow
+        .owner_source_address
+        .as_ref()
+        .ok_or(ContractError::MissingCrossChainField {
+            field: "owner_source_address".to_string(),
+        })?;
+
+    // Update status to Refunding
+    escrow.status = EscrowStatus::Refunding;
+    ESCROWS.save(deps.storage, &escrow_id, &escrow)?;
+
+    // Retry IBC transfer
+    let ibc_msg = IbcMsg::Transfer {
+        channel_id: source_channel.clone(),
+        to_address: source_address.clone(),
+        amount: Coin {
             denom: escrow.denom.clone(),
             amount: escrow.amount,
-        }],
+        },
+        timeout: IbcTimeout::with_timestamp(env.block.time.plus_seconds(600)),
+        memo: Some(format!(
+            "{{\"refund\":{{\"escrow_id\":\"{}\",\"intent_id\":\"{}\",\"retry\":true}}}}",
+            escrow.id, escrow.intent_id
+        )),
     };
 
     Ok(Response::new()
-        .add_message(send_msg)
-        .add_attribute("action", "refund")
+        .add_message(ibc_msg)
+        .add_attribute("action", "retry_refund")
         .add_attribute("escrow_id", escrow_id)
-        .add_attribute("owner", escrow.owner)
+        .add_attribute("destination", source_address)
+        .add_attribute("channel", source_channel)
         .add_attribute("amount", escrow.amount))
 }
 
@@ -236,6 +438,9 @@ pub fn query(deps: Deps, _env: Env, msg: QueryMsg) -> StdResult<Binary> {
             start_after,
             limit,
         } => to_json_binary(&query_escrows_by_user(deps, user, start_after, limit)?),
+        QueryMsg::EscrowByIntent { intent_id } => {
+            to_json_binary(&query_escrow_by_intent(deps, intent_id)?)
+        }
     }
 }
 
@@ -248,6 +453,12 @@ fn query_config(deps: Deps) -> StdResult<ConfigResponse> {
 }
 
 fn query_escrow(deps: Deps, escrow_id: String) -> StdResult<EscrowResponse> {
+    let escrow = ESCROWS.load(deps.storage, &escrow_id)?;
+    Ok(escrow_to_response(escrow))
+}
+
+fn query_escrow_by_intent(deps: Deps, intent_id: String) -> StdResult<EscrowResponse> {
+    let escrow_id = ESCROWS_BY_INTENT.load(deps.storage, &intent_id)?;
     let escrow = ESCROWS.load(deps.storage, &escrow_id)?;
     Ok(escrow_to_response(escrow))
 }
@@ -282,6 +493,8 @@ fn escrow_to_response(escrow: Escrow) -> EscrowResponse {
         EscrowStatus::Locked => "locked".to_string(),
         EscrowStatus::Released { recipient } => format!("released to {recipient}"),
         EscrowStatus::Refunded => "refunded".to_string(),
+        EscrowStatus::Refunding => "refunding".to_string(),
+        EscrowStatus::RefundFailed => "refund_failed".to_string(),
     };
 
     EscrowResponse {
@@ -292,6 +505,9 @@ fn escrow_to_response(escrow: Escrow) -> EscrowResponse {
         intent_id: escrow.intent_id,
         expires_at: escrow.expires_at,
         status,
+        owner_chain_id: escrow.owner_chain_id,
+        owner_source_address: escrow.owner_source_address,
+        source_channel: escrow.source_channel,
     }
 }
 
@@ -803,7 +1019,7 @@ mod tests {
         )
         .unwrap_err();
 
-        assert!(matches!(err, ContractError::EscrowNotFound { .. }));
+        assert!(matches!(err, ContractError::InvalidStatus {}));
     }
 
     #[test]
@@ -826,8 +1042,12 @@ mod tests {
         .unwrap();
 
         assert_eq!(res.messages.len(), 1);
-        assert_eq!(res.attributes[2].value, addrs.user.to_string());
-        assert_eq!(res.attributes[3].value, "100000");
+        // Attributes: action, refund_type, escrow_id, owner, amount
+        assert_eq!(res.attributes[0].value, "refund");
+        assert_eq!(res.attributes[1].value, "local_refund");
+        assert_eq!(res.attributes[2].value, "escrow-1");
+        assert_eq!(res.attributes[3].value, addrs.user.to_string());
+        assert_eq!(res.attributes[4].value, "100000");
     }
 
     // ==================== QUERY TESTS ====================
@@ -1094,7 +1314,8 @@ mod tests {
         )
         .unwrap_err();
 
-        assert!(matches!(err, ContractError::EscrowNotFound { .. }));
+        // Can't refund after release - escrow is in Released status
+        assert!(matches!(err, ContractError::InvalidStatus {}));
     }
 
     // ==================== UPDATE CONFIG TESTS ====================
