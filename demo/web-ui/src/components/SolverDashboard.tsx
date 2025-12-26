@@ -2,8 +2,6 @@ import { useMemo } from 'react';
 import { useStore } from '../hooks/useStore';
 import {
   Trophy,
-  TrendingUp,
-  Clock,
   Zap,
   ArrowRight,
   CheckCircle,
