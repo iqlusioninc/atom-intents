@@ -252,6 +252,12 @@ pub async fn generate_demo_intent(
 ) -> Json<GenerateDemoIntentResponse> {
     use rand::Rng;
 
+    // Get prices first for calculating realistic min_amount
+    let prices = {
+        let state = state.read().await;
+        state.prices.clone()
+    };
+
     // Generate all random values in a block that ends before await
     let (req, input_denom, output_denom, output_chain, amount) = {
         let mut rng = rand::thread_rng();
@@ -272,6 +278,14 @@ pub async fn generate_demo_intent(
 
         let amount: u128 = rng.gen_range(1_000_000..100_000_000); // 1-100 tokens
 
+        // Calculate expected output based on current exchange rate
+        let expected_output = crate::oracle::get_exchange_rate(&prices, input_denom, output_denom)
+            .map(|rate| (amount as f64 * rate) as u128)
+            .unwrap_or(amount); // Fallback to 1:1 if no price data
+
+        // min_amount is 80% of expected output (20% slippage tolerance for demo)
+        let min_amount = expected_output * 80 / 100;
+
         let req = CreateIntentRequest {
             user_address: format!("cosmos1demo{:08x}", rng.gen::<u32>()),
             input: Asset {
@@ -282,7 +296,7 @@ pub async fn generate_demo_intent(
             output: OutputSpec {
                 chain_id: output_chain.to_string(),
                 denom: output_denom.to_string(),
-                min_amount: amount * 90 / 100, // 10% slippage tolerance
+                min_amount,
                 max_price: None,
             },
             fill_config: Some(FillConfig::default()),
