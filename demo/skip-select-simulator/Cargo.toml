@@ -5,6 +5,8 @@ edition = "2021"
 description = "Simplified Skip Select coordination layer for ATOM Intents demo"
 license = "Apache-2.0"
 
+[workspace]
+
 [features]
 default = ["memory"]
 memory = []  # In-memory storage (default for local dev)

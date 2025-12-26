@@ -142,7 +142,7 @@ export default function DemoScenarios() {
           <span className="px-2 py-1 text-xs bg-purple-600/50 rounded-full text-purple-200">Featured</span>
         </div>
         <p className="text-gray-400 text-sm mb-4">
-          Celestia has no smart contracts, so the system uses <strong className="text-purple-300">Hub escrow with solver relay risk</strong>.
+          Celestia has no smart contracts, so the system uses <strong className="text-purple-300">Hub escrow via IBC Hooks (LockFromIbc)</strong> with solver relay risk.
         </p>
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
           {/* Phase 1 */}
@@ -158,7 +158,7 @@ export default function DemoScenarios() {
                 <span className="text-cosmos-400">Hub</span>
               </div>
               <p>TIA sent via IBC with wasm hook memo</p>
-              <p className="text-purple-300">Escrow locks atomically on receive</p>
+              <p className="text-purple-300">LockFromIbc locks atomically on receive</p>
             </div>
           </div>
           {/* Phase 2 */}

@@ -19,10 +19,11 @@ terraform {
     }
   }
 
-  backend "gcs" {
-    bucket = "atom-intents-terraform-state"
-    prefix = "demo"
-  }
+  # Using local backend for new project deployment
+  # backend "gcs" {
+  #   bucket = "atom-intents-terraform-state"
+  #   prefix = "demo"
+  # }
 }
 
 # Variables
@@ -47,6 +48,17 @@ variable "domain" {
   description = "Domain name for the demo"
   type        = string
   default     = "demo.atom-intents.io"
+}
+
+# Provider configuration
+provider "google" {
+  project = var.project_id
+  region  = var.region
+}
+
+provider "google-beta" {
+  project = var.project_id
+  region  = var.region
 }
 
 # Locals

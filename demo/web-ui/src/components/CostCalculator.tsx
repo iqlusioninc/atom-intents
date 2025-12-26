@@ -17,7 +17,15 @@ export default function CostCalculator() {
     const inputValueUsd = input * inputPrice;
 
     // Calculate for different methods
-    const methods = {
+    const methods: Record<string, {
+      name: string;
+      spread: number;
+      gas: number;
+      slippage: number;
+      time: number;
+      withdrawalFee?: number;
+      withdrawalTime?: number;
+    }> = {
       atomIntents: {
         name: 'ATOM Intents',
         spread: 0.15, // 15 bps

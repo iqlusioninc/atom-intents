@@ -1,52 +1,109 @@
-//! Mock price oracle for simulated price feeds
+//! Price oracle with real CoinGecko price feeds
 
+use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 
 use chrono::Utc;
-use rand::Rng;
+use reqwest::Client;
+use serde::Deserialize;
 use tokio::sync::RwLock;
-use tracing::debug;
+use tracing::{debug, warn, info};
 
 use crate::models::{PriceFeed, WsMessage};
 use crate::state::AppState;
 
 type AppStateRef = Arc<RwLock<AppState>>;
 
-/// Run the price feed update loop
-pub async fn run_price_feed(state: AppStateRef) {
-    let mut interval = tokio::time::interval(Duration::from_secs(2));
+/// CoinGecko API response for price data
+#[derive(Debug, Deserialize)]
+struct CoinGeckoPrice {
+    usd: f64,
+    #[serde(default)]
+    usd_24h_change: Option<f64>,
+    #[serde(default)]
+    usd_24h_vol: Option<f64>,
+}
 
-    loop {
-        interval.tick().await;
-        update_prices(&state).await;
+/// Mapping from our token symbols to CoinGecko IDs
+fn get_coingecko_id(symbol: &str) -> Option<&'static str> {
+    match symbol.to_uppercase().as_str() {
+        "ATOM" => Some("cosmos"),
+        "OSMO" => Some("osmosis"),
+        "USDC" => Some("usd-coin"),
+        "NTRN" => Some("neutron-3"),
+        "STRD" => Some("stride"),
+        "TIA" => Some("celestia"),
+        _ => None,
     }
 }
 
-async fn update_prices(state: &AppStateRef) {
-    let mut state = state.write().await;
-    let mut rng = rand::thread_rng();
-    let mut updated_prices = Vec::new();
+/// Fetch prices from CoinGecko API
+async fn fetch_coingecko_prices(client: &Client) -> Result<HashMap<String, CoinGeckoPrice>, reqwest::Error> {
+    let url = "https://api.coingecko.com/api/v3/simple/price?ids=cosmos,osmosis,usd-coin,neutron-3,stride,celestia&vs_currencies=usd&include_24hr_change=true&include_24hr_vol=true";
 
-    for price_feed in state.prices.values_mut() {
-        // Simulate small price movements (-0.5% to +0.5%)
-        let change_percent = rng.gen_range(-0.5..0.5);
-        let new_price = price_feed.price_usd * (1.0 + change_percent / 100.0);
+    let response = client
+        .get(url)
+        .header("Accept", "application/json")
+        .timeout(Duration::from_secs(10))
+        .send()
+        .await?
+        .json::<HashMap<String, CoinGeckoPrice>>()
+        .await?;
 
-        // Update the price feed
-        price_feed.price_usd = new_price;
-        price_feed.change_24h += change_percent; // Accumulate for 24h change
-        price_feed.volume_24h += rng.gen_range(10000.0..100000.0);
-        price_feed.confidence = rng.gen_range(0.95..0.99);
-        price_feed.updated_at = Utc::now();
+    Ok(response)
+}
 
-        updated_prices.push(price_feed.clone());
+/// Run the price feed update loop
+pub async fn run_price_feed(state: AppStateRef) {
+    // Update every 30 seconds to respect CoinGecko rate limits (free tier)
+    let mut interval = tokio::time::interval(Duration::from_secs(30));
+    let client = Client::new();
+
+    info!("Starting real-time price feed from CoinGecko");
+
+    loop {
+        interval.tick().await;
+        update_prices(&state, &client).await;
     }
+}
 
-    debug!("Updated {} price feeds", updated_prices.len());
+async fn update_prices(state: &AppStateRef, client: &Client) {
+    // Try to fetch real prices from CoinGecko
+    match fetch_coingecko_prices(client).await {
+        Ok(cg_prices) => {
+            let mut state = state.write().await;
+            let mut updated_prices = Vec::new();
 
-    // Broadcast price update
-    state.broadcast(WsMessage::PriceUpdate(updated_prices));
+            for price_feed in state.prices.values_mut() {
+                // Map our symbol to CoinGecko ID
+                if let Some(cg_id) = get_coingecko_id(&price_feed.denom) {
+                    if let Some(cg_price) = cg_prices.get(cg_id) {
+                        // Update with real price data
+                        price_feed.price_usd = cg_price.usd;
+                        price_feed.change_24h = cg_price.usd_24h_change.unwrap_or(0.0);
+                        price_feed.volume_24h = cg_price.usd_24h_vol.unwrap_or(0.0);
+                        price_feed.confidence = 0.99; // High confidence for real data
+                        price_feed.updated_at = Utc::now();
+
+                        updated_prices.push(price_feed.clone());
+                    }
+                }
+            }
+
+            info!("Updated {} prices from CoinGecko: ATOM=${:.4}, OSMO=${:.4}",
+                updated_prices.len(),
+                cg_prices.get("cosmos").map(|p| p.usd).unwrap_or(0.0),
+                cg_prices.get("osmosis").map(|p| p.usd).unwrap_or(0.0)
+            );
+
+            // Broadcast price update
+            state.broadcast(WsMessage::PriceUpdate(updated_prices));
+        }
+        Err(e) => {
+            warn!("Failed to fetch prices from CoinGecko: {}. Prices unchanged.", e);
+        }
+    }
 }
 
 /// Get the exchange rate between two denominations

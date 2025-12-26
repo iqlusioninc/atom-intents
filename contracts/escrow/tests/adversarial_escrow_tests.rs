@@ -9,11 +9,11 @@
 /// - Time manipulation attacks
 
 use cosmwasm_std::testing::{message_info, mock_dependencies, mock_env, MockApi};
-use cosmwasm_std::{from_json, Addr, Coin, Timestamp, Uint128};
+use cosmwasm_std::{from_json, Addr, Coin, Timestamp};
 
 use atom_intents_escrow::contract::{execute, instantiate, query};
 use atom_intents_escrow::error::ContractError;
-use atom_intents_escrow::msg::{ConfigResponse, EscrowResponse, ExecuteMsg, InstantiateMsg, QueryMsg};
+use atom_intents_escrow::msg::{EscrowResponse, ExecuteMsg, InstantiateMsg, QueryMsg};
 
 // Helper to get test addresses using MockApi
 struct TestAddrs {
@@ -645,4 +645,198 @@ fn test_release_invalid_recipient() {
 
     // Should fail on address validation
     assert!(result.is_err());
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// LOCK FROM IBC (CROSS-CHAIN ESCROW) TESTS
+// ═══════════════════════════════════════════════════════════════════════════
+
+/// Test LockFromIbc with valid IBC funds
+#[test]
+fn test_lock_from_ibc_success() {
+    let (mut deps, env, addrs) = setup_contract();
+
+    // Send IBC funds (denom starts with "ibc/")
+    let ibc_denom = "ibc/27394FB092D2ECCD56123C74F36E4C1F926001CEADA9CA97EA622B25F41E5EB2";
+    let info = message_info(&addrs.user, &[Coin::new(1_000_000u128, ibc_denom)]);
+
+    let result = execute(
+        deps.as_mut(),
+        env.clone(),
+        info,
+        ExecuteMsg::LockFromIbc {
+            intent_id: "intent_celestia_123".to_string(),
+            expires_at: env.block.time.seconds() + 3600,
+            user_source_address: "celestia1user123abc".to_string(),
+            source_chain_id: "celestia".to_string(),
+            source_channel: "channel-0".to_string(),
+        },
+    );
+
+    assert!(result.is_ok());
+
+    // Verify escrow was created with cross-chain fields
+    let escrow: EscrowResponse = from_json(
+        query(
+            deps.as_ref(),
+            env,
+            QueryMsg::EscrowByIntent {
+                intent_id: "intent_celestia_123".to_string(),
+            },
+        )
+        .unwrap(),
+    )
+    .unwrap();
+
+    assert_eq!(escrow.owner_chain_id, Some("celestia".to_string()));
+    assert_eq!(escrow.owner_source_address, Some("celestia1user123abc".to_string()));
+    assert_eq!(escrow.source_channel, Some("channel-0".to_string()));
+    assert!(escrow.denom.starts_with("ibc/"));
+}
+
+/// Test LockFromIbc fails without IBC denom
+#[test]
+fn test_lock_from_ibc_requires_ibc_denom() {
+    let (mut deps, env, addrs) = setup_contract();
+
+    // ATTACK: Try to use LockFromIbc with non-IBC funds
+    let info = message_info(&addrs.user, &[Coin::new(1_000_000u128, "uatom")]);
+
+    let result = execute(
+        deps.as_mut(),
+        env.clone(),
+        info,
+        ExecuteMsg::LockFromIbc {
+            intent_id: "intent_attack_123".to_string(),
+            expires_at: env.block.time.seconds() + 3600,
+            user_source_address: "celestia1attacker".to_string(),
+            source_chain_id: "celestia".to_string(),
+            source_channel: "channel-0".to_string(),
+        },
+    );
+
+    assert!(matches!(result.unwrap_err(), ContractError::NotIbcFunds {}));
+}
+
+/// Test LockFromIbc replay protection (same intent_id fails)
+#[test]
+fn test_lock_from_ibc_replay_protection() {
+    let (mut deps, env, addrs) = setup_contract();
+
+    let ibc_denom = "ibc/27394FB092D2ECCD56123C74F36E4C1F926001CEADA9CA97EA622B25F41E5EB2";
+
+    // First lock succeeds
+    let info = message_info(&addrs.user, &[Coin::new(1_000_000u128, ibc_denom)]);
+    execute(
+        deps.as_mut(),
+        env.clone(),
+        info.clone(),
+        ExecuteMsg::LockFromIbc {
+            intent_id: "intent_replay_test".to_string(),
+            expires_at: env.block.time.seconds() + 3600,
+            user_source_address: "celestia1user".to_string(),
+            source_chain_id: "celestia".to_string(),
+            source_channel: "channel-0".to_string(),
+        },
+    )
+    .unwrap();
+
+    // ATTACK: Second lock with same intent_id must fail
+    let info = message_info(&addrs.attacker, &[Coin::new(2_000_000u128, ibc_denom)]);
+    let result = execute(
+        deps.as_mut(),
+        env,
+        info,
+        ExecuteMsg::LockFromIbc {
+            intent_id: "intent_replay_test".to_string(),
+            expires_at: 9999999999,
+            user_source_address: "celestia1attacker".to_string(),
+            source_chain_id: "celestia".to_string(),
+            source_channel: "channel-fake".to_string(),
+        },
+    );
+
+    assert!(matches!(result.unwrap_err(), ContractError::IntentAlreadyEscrowed { .. }));
+}
+
+/// Test cross-chain escrow refund initiates IBC transfer
+#[test]
+fn test_cross_chain_refund_uses_ibc() {
+    let (mut deps, mut env, addrs) = setup_contract();
+
+    let ibc_denom = "ibc/27394FB092D2ECCD56123C74F36E4C1F926001CEADA9CA97EA622B25F41E5EB2";
+    let info = message_info(&addrs.user, &[Coin::new(1_000_000u128, ibc_denom)]);
+
+    // Lock via IBC
+    execute(
+        deps.as_mut(),
+        env.clone(),
+        info,
+        ExecuteMsg::LockFromIbc {
+            intent_id: "intent_refund_test".to_string(),
+            expires_at: env.block.time.seconds() + 3600,
+            user_source_address: "celestia1userrefund".to_string(),
+            source_chain_id: "celestia".to_string(),
+            source_channel: "channel-0".to_string(),
+        },
+    )
+    .unwrap();
+
+    // Fast forward past expiration
+    env.block.time = Timestamp::from_seconds(env.block.time.seconds() + 7200);
+
+    // Admin triggers refund (for cross-chain, admin can also trigger)
+    let info = message_info(&addrs.admin, &[]);
+    let result = execute(
+        deps.as_mut(),
+        env.clone(),
+        info,
+        ExecuteMsg::Refund {
+            escrow_id: "esc_intent_refund_test".to_string(),
+        },
+    );
+
+    assert!(result.is_ok());
+
+    // The response should contain an IBC transfer message
+    let response = result.unwrap();
+    assert_eq!(response.messages.len(), 1);
+
+    // Verify escrow status is now Refunding (waiting for IBC ack)
+    let escrow: EscrowResponse = from_json(
+        query(
+            deps.as_ref(),
+            env,
+            QueryMsg::Escrow {
+                escrow_id: "esc_intent_refund_test".to_string(),
+            },
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(escrow.status, "refunding");
+}
+
+/// Test that duplicate intent_id is rejected for regular Lock too
+#[test]
+fn test_duplicate_intent_id_rejected() {
+    let (mut deps, env, addrs) = setup_contract();
+
+    // First lock with intent_id
+    lock_escrow(&mut deps, &env, &addrs, "escrow-1", 1_000_000);
+
+    // ATTACK: Try to lock with different escrow_id but same intent_id
+    let info = message_info(&addrs.attacker, &[Coin::new(2_000_000u128, "uatom")]);
+    let result = execute(
+        deps.as_mut(),
+        env,
+        info,
+        ExecuteMsg::Lock {
+            escrow_id: "escrow-attacker".to_string(),
+            intent_id: "intent_escrow-1".to_string(), // Same intent_id as first lock
+            expires_at: 9999999999,
+        },
+    );
+
+    assert!(matches!(result.unwrap_err(), ContractError::IntentAlreadyEscrowed { .. }));
 }

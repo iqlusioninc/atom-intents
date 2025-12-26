@@ -859,10 +859,10 @@ Escrow timeout must be longer than IBC timeout + safety buffer:
 
 ### Smart Contracts
 
-- [ ] Update `contracts/escrow` to support `LockFromIbc` message
-- [ ] Add `owner_chain_id` and `source_channel` fields to Escrow struct
-- [ ] Implement IBC refund logic for cross-chain escrows
-- [ ] Add escrow-by-intent index for duplicate prevention
+- [x] Update `contracts/escrow` to support `LockFromIbc` message
+- [x] Add `owner_chain_id` and `source_channel` fields to Escrow struct
+- [x] Implement IBC refund logic for cross-chain escrows
+- [x] Add escrow-by-intent index for duplicate prevention
 
 ### Settlement Crate
 
@@ -875,7 +875,7 @@ Escrow timeout must be longer than IBC timeout + safety buffer:
 
 - [ ] Update solvers to watch for escrow events on Hub
 - [ ] Handle ibc/* denoms in inventory management
-- [ ] Add TIA/USDC pair support
+- [x] Add TIA/USDC pair support (demo simulator)
 
 ### Configuration
 

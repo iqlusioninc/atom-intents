@@ -188,16 +188,45 @@ impl AppState {
     }
 
     pub fn update_stats(&mut self) {
+        // Count intents
+        self.stats.total_intents = self.intents.len() as u64;
         self.stats.pending_intents = self
             .intents
             .values()
             .filter(|i| i.status == IntentStatus::Pending)
             .count() as u64;
 
+        // Count auctions
+        self.stats.total_auctions = self.auctions.len() as u64;
+
+        // Count active solvers
         self.stats.active_solvers = self
             .solvers
             .values()
             .filter(|s| s.status == SolverStatus::Active)
             .count() as u64;
+
+        // Calculate success rate from settlements
+        self.stats.total_settlements = self.settlements.len() as u64;
+        let completed = self
+            .settlements
+            .values()
+            .filter(|s| s.status == SettlementStatus::Completed)
+            .count() as f64;
+        let total_finished = self
+            .settlements
+            .values()
+            .filter(|s| {
+                s.status == SettlementStatus::Completed
+                    || s.status == SettlementStatus::Failed
+                    || s.status == SettlementStatus::Refunded
+            })
+            .count() as f64;
+
+        self.stats.success_rate = if total_finished > 0.0 {
+            completed / total_finished
+        } else {
+            0.0
+        };
     }
 }

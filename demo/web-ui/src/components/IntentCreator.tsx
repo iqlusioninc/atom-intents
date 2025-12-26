@@ -4,7 +4,7 @@ import { ArrowRight, Loader2, Check, Wallet, AlertCircle } from 'lucide-react';
 import * as api from '../services/api';
 import { useStore } from '../hooks/useStore';
 import { useWallet } from '../hooks/useWallet';
-import { TOKENS, CHAINS } from '../types';
+import { TOKENS } from '../types';
 
 export default function IntentCreator() {
   const prices = useStore((state) => state.prices);
