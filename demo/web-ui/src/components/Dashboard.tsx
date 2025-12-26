@@ -16,15 +16,15 @@ function StatCard({
   color: string;
 }) {
   return (
-    <div className="card">
-      <div className="flex items-center gap-4">
-        <div className={`p-3 rounded-lg ${color}`}>
-          <Icon className="w-6 h-6 text-white" />
+    <div className="card !p-3 sm:!p-6">
+      <div className="flex items-center gap-3 sm:gap-4">
+        <div className={`p-2 sm:p-3 rounded-lg ${color} flex-shrink-0`}>
+          <Icon className="w-5 h-5 sm:w-6 sm:h-6 text-white" />
         </div>
-        <div>
-          <p className="text-gray-400 text-sm">{label}</p>
-          <p className="text-2xl font-bold text-white">{value}</p>
-          {subValue && <p className="text-xs text-gray-500">{subValue}</p>}
+        <div className="min-w-0">
+          <p className="text-gray-400 text-xs sm:text-sm">{label}</p>
+          <p className="text-lg sm:text-2xl font-bold text-white truncate">{value}</p>
+          {subValue && <p className="text-xs text-gray-500 truncate">{subValue}</p>}
         </div>
       </div>
     </div>
@@ -53,23 +53,23 @@ function RecentActivity() {
   };
 
   return (
-    <div className="card">
-      <h3 className="text-lg font-semibold text-white mb-4">Recent Activity</h3>
-      <div className="space-y-3">
+    <div className="card !p-3 sm:!p-6">
+      <h3 className="text-base sm:text-lg font-semibold text-white mb-3 sm:mb-4">Recent Activity</h3>
+      <div className="space-y-2 sm:space-y-3">
         {recentIntents.length === 0 ? (
-          <p className="text-gray-500 text-center py-4">No recent activity</p>
+          <p className="text-gray-500 text-center py-4 text-sm">No recent activity</p>
         ) : (
           recentIntents.map((intent) => (
             <div
               key={intent.id}
-              className="flex items-center justify-between p-3 bg-gray-800/50 rounded-lg"
+              className="flex items-center justify-between p-2 sm:p-3 bg-gray-800/50 rounded-lg gap-2"
             >
-              <div className="flex items-center gap-3">
-                <div className="text-2xl">
+              <div className="flex items-center gap-2 sm:gap-3 min-w-0">
+                <div className="text-xl sm:text-2xl flex-shrink-0">
                   {intent.input.denom === 'ATOM' ? '⚛️' : intent.input.denom === 'OSMO' ? '🧪' : '💵'}
                 </div>
-                <div>
-                  <p className="text-white font-medium">
+                <div className="min-w-0">
+                  <p className="text-white font-medium text-sm sm:text-base truncate">
                     {(intent.input.amount / 1_000_000).toFixed(2)} {intent.input.denom} → {intent.output.denom}
                   </p>
                   <p className="text-xs text-gray-400">
@@ -77,7 +77,7 @@ function RecentActivity() {
                   </p>
                 </div>
               </div>
-              <span className={getStatusColor(intent.status)}>{intent.status}</span>
+              <span className={`${getStatusColor(intent.status)} flex-shrink-0 text-[10px] sm:text-xs`}>{intent.status}</span>
             </div>
           ))
         )}
@@ -90,22 +90,22 @@ function PriceTicker() {
   const prices = useStore((state) => Array.from(state.prices.values()));
 
   return (
-    <div className="card">
-      <h3 className="text-lg font-semibold text-white mb-4">Live Prices</h3>
-      <div className="space-y-3">
+    <div className="card !p-3 sm:!p-6">
+      <h3 className="text-base sm:text-lg font-semibold text-white mb-3 sm:mb-4">Live Prices</h3>
+      <div className="space-y-2 sm:space-y-3">
         {prices.map((price) => (
           <div
             key={price.denom}
-            className="flex items-center justify-between p-3 bg-gray-800/50 rounded-lg"
+            className="flex items-center justify-between p-2 sm:p-3 bg-gray-800/50 rounded-lg"
           >
-            <div className="flex items-center gap-3">
-              <span className="text-xl">
+            <div className="flex items-center gap-2 sm:gap-3">
+              <span className="text-lg sm:text-xl">
                 {price.denom === 'ATOM' ? '⚛️' : price.denom === 'OSMO' ? '🧪' : price.denom === 'NTRN' ? '⚡' : '💵'}
               </span>
-              <span className="text-white font-medium">{price.denom}</span>
+              <span className="text-white font-medium text-sm sm:text-base">{price.denom}</span>
             </div>
             <div className="text-right">
-              <p className="text-white font-medium">${price.price_usd.toFixed(4)}</p>
+              <p className="text-white font-medium text-sm sm:text-base">${price.price_usd.toFixed(4)}</p>
               <p
                 className={`text-xs ${
                   price.change_24h >= 0 ? 'text-green-400' : 'text-red-400'
@@ -127,22 +127,22 @@ function ActiveSolvers() {
   const activeSolvers = solvers.filter((s) => s.status === 'active');
 
   return (
-    <div className="card">
-      <h3 className="text-lg font-semibold text-white mb-4">Active Solvers</h3>
-      <div className="space-y-3">
+    <div className="card !p-3 sm:!p-6">
+      <h3 className="text-base sm:text-lg font-semibold text-white mb-3 sm:mb-4">Active Solvers</h3>
+      <div className="space-y-2 sm:space-y-3">
         {activeSolvers.map((solver) => (
           <div
             key={solver.id}
-            className="flex items-center justify-between p-3 bg-gray-800/50 rounded-lg"
+            className="flex items-center justify-between p-2 sm:p-3 bg-gray-800/50 rounded-lg"
           >
-            <div className="flex items-center gap-3">
-              <span className="status-dot-active" />
-              <div>
-                <p className="text-white font-medium">{solver.name}</p>
-                <p className="text-xs text-gray-400 capitalize">{solver.solver_type.replace('_', ' ')}</p>
+            <div className="flex items-center gap-2 sm:gap-3 min-w-0">
+              <span className="status-dot-active flex-shrink-0" />
+              <div className="min-w-0">
+                <p className="text-white font-medium text-sm sm:text-base truncate">{solver.name}</p>
+                <p className="text-xs text-gray-400 capitalize truncate">{solver.solver_type.replace('_', ' ')}</p>
               </div>
             </div>
-            <div className="text-right">
+            <div className="text-right flex-shrink-0">
               <p className="text-white text-sm">{(solver.reputation_score * 100).toFixed(0)}%</p>
               <p className="text-xs text-gray-400">reputation</p>
             </div>
@@ -157,14 +157,14 @@ export default function Dashboard() {
   const stats = useStore((state) => state.stats);
 
   return (
-    <div className="space-y-6 animate-slide-in">
+    <div className="space-y-4 sm:space-y-6 animate-slide-in">
       <div>
-        <h2 className="text-2xl font-bold text-white">Dashboard</h2>
-        <p className="text-gray-400">Real-time overview of the ATOM Intents system</p>
+        <h2 className="text-xl sm:text-2xl font-bold text-white">Dashboard</h2>
+        <p className="text-gray-400 text-sm sm:text-base">Real-time overview of the ATOM Intents system</p>
       </div>
 
       {/* Stats Grid */}
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+      <div className="grid grid-cols-2 sm:grid-cols-2 lg:grid-cols-3 gap-2 sm:gap-4">
         <StatCard
           icon={Activity}
           label="Total Intents"
@@ -206,11 +206,11 @@ export default function Dashboard() {
       </div>
 
       {/* Activity Grid */}
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 sm:gap-6">
         <div className="lg:col-span-2">
           <RecentActivity />
         </div>
-        <div className="space-y-6">
+        <div className="space-y-4 sm:space-y-6">
           <PriceTicker />
           <ActiveSolvers />
         </div>

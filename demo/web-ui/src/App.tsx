@@ -1,4 +1,4 @@
-import { useCallback } from 'react';
+import { useCallback, useState } from 'react';
 import { Routes, Route, Link, useLocation } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import {
@@ -12,6 +12,8 @@ import {
   WifiOff,
   Calculator,
   HelpCircle,
+  Menu,
+  X,
 } from 'lucide-react';
 
 import { useWebSocket } from './hooks/useWebSocket';
@@ -30,6 +32,7 @@ import OnboardingWizard, { useOnboardingWizard } from './components/OnboardingWi
 
 function App() {
   const location = useLocation();
+  const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
   const { isOpen: isWizardOpen, openWizard, closeWizard } = useOnboardingWizard();
   const {
     addIntent,
@@ -140,36 +143,45 @@ function App() {
       {/* Header */}
       <header className="border-b border-gray-800 bg-gray-900/80 backdrop-blur-sm sticky top-0 z-50">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-          <div className="flex items-center justify-between h-16">
-            <div className="flex items-center gap-4">
-              <span className="text-2xl">⚛️</span>
+          <div className="flex items-center justify-between h-14 sm:h-16">
+            {/* Mobile menu button */}
+            <button
+              onClick={() => setIsMobileMenuOpen(!isMobileMenuOpen)}
+              className="lg:hidden p-2 -ml-2 text-gray-400 hover:text-white hover:bg-gray-800 rounded-lg transition-colors"
+              aria-label="Toggle menu"
+            >
+              {isMobileMenuOpen ? <X className="w-6 h-6" /> : <Menu className="w-6 h-6" />}
+            </button>
+
+            <div className="flex items-center gap-2 sm:gap-4">
+              <span className="text-xl sm:text-2xl">⚛️</span>
               <div>
-                <h1 className="text-xl font-bold text-white">ATOM Intents Demo</h1>
-                <p className="text-xs text-gray-400">Intent-Based Liquidity System</p>
+                <h1 className="text-base sm:text-xl font-bold text-white">ATOM Intents</h1>
+                <p className="text-xs text-gray-400 hidden sm:block">Intent-Based Liquidity System</p>
               </div>
             </div>
 
-            <div className="flex items-center gap-4">
+            <div className="flex items-center gap-2 sm:gap-4">
               <button
                 onClick={openWizard}
-                className="flex items-center gap-2 px-3 py-1.5 text-sm text-gray-400 hover:text-white hover:bg-gray-800 rounded-lg transition-colors"
+                className="hidden sm:flex items-center gap-2 px-3 py-1.5 text-sm text-gray-400 hover:text-white hover:bg-gray-800 rounded-lg transition-colors"
                 title="Show guide"
               >
                 <HelpCircle className="w-4 h-4" />
-                <span className="hidden sm:inline">Guide</span>
+                <span className="hidden md:inline">Guide</span>
               </button>
-              <div className={`flex items-center gap-2 px-3 py-1 rounded-full text-sm ${
+              <div className={`hidden sm:flex items-center gap-2 px-2 sm:px-3 py-1 rounded-full text-xs sm:text-sm ${
                 connected ? 'bg-green-900/30 text-green-400' : 'bg-red-900/30 text-red-400'
               }`}>
                 {connected ? (
                   <>
                     <Wifi className="w-4 h-4" />
-                    <span>Live</span>
+                    <span className="hidden sm:inline">Live</span>
                   </>
                 ) : (
                   <>
                     <WifiOff className="w-4 h-4" />
-                    <span>Offline</span>
+                    <span className="hidden sm:inline">Offline</span>
                   </>
                 )}
               </div>
@@ -179,15 +191,46 @@ function App() {
         </div>
       </header>
 
-      <div className="flex">
-        {/* Sidebar */}
-        <nav className="w-64 min-h-[calc(100vh-4rem)] border-r border-gray-800 bg-gray-900/50 p-4">
-          <ul className="space-y-2">
+      <div className="flex relative">
+        {/* Mobile menu overlay */}
+        {isMobileMenuOpen && (
+          <div
+            className="fixed inset-0 bg-black/50 z-30 lg:hidden"
+            onClick={() => setIsMobileMenuOpen(false)}
+          />
+        )}
+
+        {/* Sidebar - hidden on mobile, visible as overlay when menu is open */}
+        <nav
+          className={`
+            fixed lg:relative z-40 lg:z-auto
+            w-64 min-h-[calc(100vh-3.5rem)] sm:min-h-[calc(100vh-4rem)]
+            border-r border-gray-800 bg-gray-900 lg:bg-gray-900/50 p-4
+            transform transition-transform duration-200 ease-in-out
+            ${isMobileMenuOpen ? 'translate-x-0' : '-translate-x-full lg:translate-x-0'}
+          `}
+        >
+          {/* Mobile-only header in sidebar */}
+          <div className="lg:hidden flex items-center justify-between mb-4 pb-4 border-b border-gray-800">
+            <div className="flex items-center gap-2">
+              <span className="text-xl">⚛️</span>
+              <span className="font-semibold text-white">Menu</span>
+            </div>
+            <div className={`flex items-center gap-1 px-2 py-0.5 rounded-full text-xs ${
+              connected ? 'bg-green-900/30 text-green-400' : 'bg-red-900/30 text-red-400'
+            }`}>
+              {connected ? <Wifi className="w-3 h-3" /> : <WifiOff className="w-3 h-3" />}
+              <span>{connected ? 'Live' : 'Offline'}</span>
+            </div>
+          </div>
+
+          <ul className="space-y-1 sm:space-y-2">
             {navItems.map(({ path, icon: Icon, label }) => (
               <li key={path}>
                 <Link
                   to={path}
-                  className={`flex items-center gap-3 px-4 py-2 rounded-lg transition-colors ${
+                  onClick={() => setIsMobileMenuOpen(false)}
+                  className={`flex items-center gap-3 px-3 sm:px-4 py-2.5 sm:py-2 rounded-lg transition-colors ${
                     location.pathname === path
                       ? 'bg-cosmos-600 text-white'
                       : 'text-gray-400 hover:bg-gray-800 hover:text-white'
@@ -199,10 +242,24 @@ function App() {
               </li>
             ))}
           </ul>
+
+          {/* Mobile-only guide button */}
+          <div className="lg:hidden mt-4 pt-4 border-t border-gray-800">
+            <button
+              onClick={() => {
+                openWizard();
+                setIsMobileMenuOpen(false);
+              }}
+              className="flex items-center gap-3 px-3 py-2.5 w-full text-gray-400 hover:bg-gray-800 hover:text-white rounded-lg transition-colors"
+            >
+              <HelpCircle className="w-5 h-5" />
+              <span>Show Guide</span>
+            </button>
+          </div>
         </nav>
 
         {/* Main Content */}
-        <main className="flex-1 p-6">
+        <main className="flex-1 p-3 sm:p-4 lg:p-6 min-w-0">
           <div className="max-w-6xl mx-auto">
             <Routes>
               <Route path="/" element={<Dashboard />} />
