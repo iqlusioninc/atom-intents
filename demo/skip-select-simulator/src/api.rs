@@ -215,6 +215,8 @@ pub async fn generate_demo_intent(
         ("ATOM", "USDC", "cosmoshub-4", "noble-1"),
         ("USDC", "ATOM", "noble-1", "cosmoshub-4"),
         ("NTRN", "ATOM", "neutron-1", "cosmoshub-4"),
+        ("TIA", "USDC", "celestia", "noble-1"),  // Featured: Celestia swap
+        ("TIA", "ATOM", "celestia", "cosmoshub-4"),
     ];
 
     let (input_denom, output_denom, input_chain, output_chain) =
@@ -320,6 +322,33 @@ fn get_scenario(name: &str) -> Option<DemoScenario> {
                 timeout_seconds: Some(60),
             }],
             expected_outcome: "DEX Router fills via Osmosis AMM".to_string(),
+        }),
+        "tia_usdc_swap" => Some(DemoScenario {
+            name: "tia_usdc_swap".to_string(),
+            description: "TIA -> USDC cross-chain swap from Celestia (no smart contracts) via Hub escrow".to_string(),
+            intents: vec![CreateIntentRequest {
+                user_address: "celestia1demo_user".to_string(),
+                input: Asset {
+                    chain_id: "celestia".to_string(),
+                    denom: "TIA".to_string(),
+                    amount: 100_000_000, // 100 TIA
+                },
+                output: OutputSpec {
+                    chain_id: "noble-1".to_string(),
+                    denom: "USDC".to_string(),
+                    min_amount: 500_000_000, // ~$500 USDC (at ~$5/TIA)
+                    max_price: None,
+                },
+                fill_config: None,
+                constraints: Some(ExecutionConstraints {
+                    max_hops: 3,
+                    allowed_venues: vec!["osmosis".to_string()],
+                    excluded_venues: vec![],
+                    max_slippage_bps: 100,
+                }),
+                timeout_seconds: Some(60),
+            }],
+            expected_outcome: "Flow: Celestia -> Hub Escrow (IBC Hooks) -> Solver delivers USDC -> Hub releases TIA. Solver takes relay risk.".to_string(),
         }),
         "intent_matching" => Some(DemoScenario {
             name: "intent_matching".to_string(),

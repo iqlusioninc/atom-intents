@@ -122,6 +122,30 @@ impl AppState {
                 ],
                 connected_at: Some(Utc::now()),
             },
+            // Celestia cross-chain solver (Hub escrow + relay risk)
+            Solver {
+                id: "solver_celestia_bridge".to_string(),
+                name: "Celestia Bridge Solver".to_string(),
+                solver_type: SolverType::Hybrid,
+                status: SolverStatus::Active,
+                reputation_score: 0.94,
+                total_volume: 0,
+                success_rate: 0.97,
+                avg_execution_time_ms: 13000, // ~13s for cross-chain via Hub escrow
+                supported_chains: vec![
+                    "celestia".to_string(),
+                    "cosmoshub-4".to_string(),
+                    "osmosis-1".to_string(),
+                    "noble-1".to_string(),
+                ],
+                supported_denoms: vec![
+                    "TIA".to_string(),
+                    "ATOM".to_string(),
+                    "USDC".to_string(),
+                    "OSMO".to_string(),
+                ],
+                connected_at: Some(Utc::now()),
+            },
         ];
 
         for solver in mock_solvers {

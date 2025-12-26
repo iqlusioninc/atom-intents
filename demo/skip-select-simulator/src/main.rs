@@ -140,6 +140,7 @@ impl Default for Config {
                 ("USDC".to_string(), 1.00),
                 ("NTRN".to_string(), 0.45),
                 ("STRD".to_string(), 1.20),
+                ("TIA".to_string(), 5.25),  // Celestia
             ],
         }
     }
