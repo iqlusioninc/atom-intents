@@ -19,3 +19,4 @@ artifacts/
 # Local configuration
 .env
 .env.local
+/demo/skip-select-simulator/target/
