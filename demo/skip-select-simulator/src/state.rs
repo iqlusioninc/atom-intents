@@ -231,8 +231,7 @@ impl AppState {
     }
 
     pub fn update_stats(&mut self) {
-        // Count intents
-        self.stats.total_intents = self.intents.len() as u64;
+        // Count pending intents (don't overwrite total_intents - it's a running counter)
         self.stats.pending_intents = self
             .intents
             .values()
