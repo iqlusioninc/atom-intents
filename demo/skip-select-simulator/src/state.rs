@@ -41,7 +41,7 @@ impl AppState {
             );
         }
 
-        // Initialize mock solvers
+        // Initialize mock solvers with advantage profiles
         let mut solvers = HashMap::new();
         let mock_solvers = vec![
             Solver {
@@ -65,6 +65,16 @@ impl AppState {
                     "NTRN".to_string(),
                 ],
                 connected_at: Some(Utc::now()),
+                advantage_profile: SolverAdvantageProfile {
+                    preferred_pairs: vec![
+                        ("ATOM".to_string(), "OSMO".to_string()),
+                        ("OSMO".to_string(), "ATOM".to_string()),
+                        ("OSMO".to_string(), "USDC".to_string()),
+                        ("USDC".to_string(), "OSMO".to_string()),
+                    ],
+                    size_preference: SizePreference::Medium, // Good for small-medium orders
+                    chain_specialty: vec!["osmosis-1".to_string()],
+                },
             },
             Solver {
                 id: "solver_intent_matcher".to_string(),
@@ -85,6 +95,11 @@ impl AppState {
                     "USDC".to_string(),
                 ],
                 connected_at: Some(Utc::now()),
+                advantage_profile: SolverAdvantageProfile {
+                    preferred_pairs: vec![], // Any pair when counter-order exists
+                    size_preference: SizePreference::Medium, // Best for medium orders
+                    chain_specialty: vec![], // No chain preference
+                },
             },
             Solver {
                 id: "solver_cex_backstop".to_string(),
@@ -101,6 +116,15 @@ impl AppState {
                     "USDC".to_string(),
                 ],
                 connected_at: Some(Utc::now()),
+                advantage_profile: SolverAdvantageProfile {
+                    preferred_pairs: vec![
+                        ("ATOM".to_string(), "USDC".to_string()),
+                        ("USDC".to_string(), "ATOM".to_string()),
+                        ("USDC".to_string(), "USDT".to_string()),
+                    ],
+                    size_preference: SizePreference::Large, // Deep CEX liquidity for large orders
+                    chain_specialty: vec![], // Chain-agnostic via off-chain
+                },
             },
             Solver {
                 id: "solver_astroport".to_string(),
@@ -121,6 +145,15 @@ impl AppState {
                     "USDC".to_string(),
                 ],
                 connected_at: Some(Utc::now()),
+                advantage_profile: SolverAdvantageProfile {
+                    preferred_pairs: vec![
+                        ("NTRN".to_string(), "ATOM".to_string()),
+                        ("ATOM".to_string(), "NTRN".to_string()),
+                        ("NTRN".to_string(), "USDC".to_string()),
+                    ],
+                    size_preference: SizePreference::Medium,
+                    chain_specialty: vec!["neutron-1".to_string()],
+                },
             },
             // Celestia cross-chain solver (Hub escrow + relay risk)
             Solver {
@@ -145,6 +178,16 @@ impl AppState {
                     "OSMO".to_string(),
                 ],
                 connected_at: Some(Utc::now()),
+                advantage_profile: SolverAdvantageProfile {
+                    preferred_pairs: vec![
+                        ("TIA".to_string(), "USDC".to_string()),
+                        ("TIA".to_string(), "ATOM".to_string()),
+                        ("TIA".to_string(), "OSMO".to_string()),
+                        ("ATOM".to_string(), "TIA".to_string()),
+                    ],
+                    size_preference: SizePreference::Medium,
+                    chain_specialty: vec!["celestia".to_string()],
+                },
             },
         ];
 

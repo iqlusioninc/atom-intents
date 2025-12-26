@@ -158,6 +158,30 @@ async fn run_auction_cycle(state: &AppStateRef) {
     }
 }
 
+/// Find a matching counter-order for Intent Matcher
+/// Two intents match when: A wants X→Y, B wants Y→X, amounts within 20%
+fn find_matching_intent<'a>(intent: &Intent, all_intents: &'a [Intent]) -> Option<&'a Intent> {
+    all_intents.iter().find(|other| {
+        if other.id == intent.id {
+            return false;
+        }
+
+        // Check if denoms are swapped (counter-order)
+        let denoms_match = other.input.denom == intent.output.denom
+            && other.output.denom == intent.input.denom;
+
+        if !denoms_match {
+            return false;
+        }
+
+        // Check if amounts are within 20% of each other
+        let intent_value = intent.input.amount as f64;
+        let other_value = other.input.amount as f64;
+        let ratio = intent_value / other_value;
+        (0.8..=1.25).contains(&ratio)
+    })
+}
+
 /// Collect quotes from mock solvers
 async fn collect_quotes(
     state: &AppStateRef,
@@ -188,8 +212,27 @@ async fn collect_quotes(
                 continue;
             }
 
+            // Special handling for Intent Matcher - only quote if counter-order exists
+            if solver.solver_type == SolverType::IntentMatcher {
+                let matching_intent = find_matching_intent(intent, intents);
+                if matching_intent.is_none() {
+                    continue; // No counter-order, Intent Matcher can't participate
+                }
+
+                // Generate quote with "Direct match" advantage
+                if let Some(mut quote) = generate_solver_quote(solver, intent, &prices, matching_intent) {
+                    quote.advantage_reason = Some("Direct match".to_string());
+                    {
+                        let state = state.read().await;
+                        state.broadcast(WsMessage::QuoteReceived(quote.clone()));
+                    }
+                    quotes.push(quote);
+                }
+                continue;
+            }
+
             // Calculate quote based on solver type
-            let quote = generate_solver_quote(solver, intent, &prices);
+            let quote = generate_solver_quote(solver, intent, &prices, None);
             if let Some(quote) = quote {
                 // Broadcast quote received
                 {
@@ -205,10 +248,91 @@ async fn collect_quotes(
     quotes
 }
 
+/// Calculate advantage score for a solver on a given intent
+/// Returns (total_score, highest_scoring_dimension)
+fn calculate_advantage_score(
+    solver: &Solver,
+    intent: &Intent,
+    order_value_usd: f64,
+) -> (f64, Option<String>) {
+    let profile = &solver.advantage_profile;
+
+    // Pair score (0.0 - 0.4)
+    let pair_score: f64 = if profile.preferred_pairs.iter().any(|(input, output)| {
+        input == &intent.input.denom && output == &intent.output.denom
+    }) {
+        0.4 // Exact match
+    } else if profile.preferred_pairs.iter().any(|(input, _)| {
+        input == &intent.input.denom || input == &intent.output.denom
+    }) {
+        0.2 // Partial match (one side of pair)
+    } else {
+        0.05 // No match - small base score
+    };
+
+    // Size score (0.0 - 0.3)
+    // Thresholds: Small <$500, Medium $500-$5K, Large >$5K
+    let order_size = if order_value_usd < 500.0 {
+        SizePreference::Small
+    } else if order_value_usd < 5000.0 {
+        SizePreference::Medium
+    } else {
+        SizePreference::Large
+    };
+
+    let size_score: f64 = match (&profile.size_preference, &order_size) {
+        (SizePreference::Any, _) => 0.15, // Neutral
+        (pref, actual) if pref == actual => 0.3, // Perfect match
+        (SizePreference::Medium, SizePreference::Small) => 0.2, // Adjacent
+        (SizePreference::Medium, SizePreference::Large) => 0.2, // Adjacent
+        (SizePreference::Small, SizePreference::Medium) => 0.15, // Adjacent
+        (SizePreference::Large, SizePreference::Medium) => 0.15, // Adjacent
+        _ => 0.05, // Mismatch
+    };
+
+    // Chain score (0.0 - 0.3)
+    let is_cross_chain = intent.input.chain_id != intent.output.chain_id;
+    let chain_score: f64 = if profile.chain_specialty.contains(&intent.input.chain_id)
+        || profile.chain_specialty.contains(&intent.output.chain_id)
+    {
+        if is_cross_chain { 0.3 } else { 0.25 }
+    } else if profile.chain_specialty.is_empty() {
+        0.1 // No specialty means chain-agnostic
+    } else {
+        0.05 // Has specialty but not for this chain
+    };
+
+    // Determine highest scoring dimension for the tag
+    let mut dimensions = vec![
+        (pair_score, "Native pair"),
+        (size_score, "Size specialist"),
+    ];
+    if is_cross_chain {
+        dimensions.push((chain_score, "Cross-chain expert"));
+    }
+
+    let highest = dimensions
+        .iter()
+        .max_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal))
+        .map(|(score, reason)| (*score, reason.to_string()));
+
+    let total_score: f64 = (pair_score + size_score + chain_score).min(1.0);
+
+    // Only return a reason if the score is meaningful (>0.5)
+    let reason = if total_score > 0.5 {
+        highest.map(|(_, r)| r)
+    } else {
+        None
+    };
+
+    (total_score, reason)
+}
+
 fn generate_solver_quote(
     solver: &Solver,
     intent: &Intent,
     prices: &std::collections::HashMap<String, PriceFeed>,
+    _matching_intent: Option<&Intent>, // For Intent Matcher counter-order detection
 ) -> Option<SolverQuote> {
     use rand::Rng;
     let mut rng = rand::thread_rng();
@@ -216,13 +340,29 @@ fn generate_solver_quote(
     // Get exchange rate
     let rate = oracle::get_exchange_rate(prices, &intent.input.denom, &intent.output.denom)?;
 
-    // Apply solver-specific spread
-    let spread = match solver.solver_type {
-        SolverType::IntentMatcher => 0.0, // No spread for direct matching
-        SolverType::DexRouter => rng.gen_range(0.1..0.5) / 100.0, // 0.1-0.5%
-        SolverType::CexBackstop => rng.gen_range(0.3..0.8) / 100.0, // 0.3-0.8%
-        SolverType::Hybrid => rng.gen_range(0.15..0.4) / 100.0,
+    // Calculate order value in USD for size-based advantages
+    let input_price = prices.get(&intent.input.denom).map(|p| p.price_usd).unwrap_or(1.0);
+    let order_value_usd = (intent.input.amount as f64 / 1_000_000.0) * input_price;
+
+    // Calculate advantage score
+    let (advantage_score, mut advantage_reason) = calculate_advantage_score(solver, intent, order_value_usd);
+
+    // Apply solver-specific spread, influenced by advantage score
+    // Higher advantage = tighter spread = better price
+    let (spread_min, spread_max) = match solver.solver_type {
+        SolverType::IntentMatcher => (0.0, 0.0), // No spread for direct matching
+        SolverType::DexRouter => (0.001, 0.005), // 0.1-0.5%
+        SolverType::CexBackstop => (0.003, 0.008), // 0.3-0.8%
+        SolverType::Hybrid => (0.0015, 0.004), // 0.15-0.4%
     };
+
+    // Advantage score reduces spread: high score → spread near minimum
+    let spread_range = spread_max - spread_min;
+    let base_spread = spread_max - (advantage_score * spread_range);
+
+    // Add small noise for competition (±0.05%)
+    let noise = rng.gen_range(-0.0005..0.0005);
+    let spread = (base_spread + noise).max(spread_min).min(spread_max);
 
     let effective_rate = rate * (1.0 - spread);
     let output_amount = (intent.input.amount as f64 * effective_rate) as u128;
@@ -234,6 +374,11 @@ fn generate_solver_quote(
 
     // Generate execution plan
     let execution_plan = generate_execution_plan(solver, intent);
+
+    // If no specific advantage but still competitive, use generic reason
+    if advantage_reason.is_none() && advantage_score > 0.3 {
+        advantage_reason = Some("Best execution".to_string());
+    }
 
     Some(SolverQuote {
         id: format!("quote_{}", Uuid::new_v4()),
@@ -248,6 +393,7 @@ fn generate_solver_quote(
         estimated_gas: rng.gen_range(200_000..500_000),
         confidence: solver.reputation_score * rng.gen_range(0.9..1.0),
         submitted_at: Utc::now(),
+        advantage_reason,
     })
 }
 

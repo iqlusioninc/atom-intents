@@ -176,12 +176,14 @@ function ActivityItem({
   type,
   solver,
   details,
-  timestamp
+  timestamp,
+  advantageTag
 }: {
   type: 'quote' | 'win' | 'settlement';
   solver: { name: string; type: SolverType };
   details: string;
   timestamp: string;
+  advantageTag?: string;
 }) {
   const config = solverTypeConfig[solver.type];
   const icons = {
@@ -207,6 +209,11 @@ function ActivityItem({
           <span className="text-white font-medium">{solver.name}</span>
           {' '}{details}
         </p>
+        {advantageTag && type === 'win' && (
+          <span className="inline-block mt-1 px-1.5 py-0.5 text-xs rounded bg-cosmos-900/50 text-cosmos-400 border border-cosmos-700/50">
+            {advantageTag}
+          </span>
+        )}
       </div>
       <div className="flex items-center gap-2">
         {icons[type]}
@@ -230,27 +237,32 @@ export default function SolverDashboard() {
       solver: { name: string; type: SolverType };
       details: string;
       timestamp: string;
+      advantageTag?: string;
     }> = [];
 
-    // Add recent quotes
+    // Add recent quotes (with advantage reason if present)
     recentQuotes.forEach((q: SolverQuote) => {
       items.push({
         type: 'quote',
         solver: { name: q.solver_name, type: q.solver_type },
         details: `submitted quote for ${(q.input_amount / 1_000_000).toFixed(1)} tokens`,
         timestamp: q.submitted_at,
+        advantageTag: q.advantage_reason,
       });
     });
 
-    // Add completed settlements as wins
+    // Add completed settlements as wins - find the winning quote to get advantage reason
     completedSettlements.forEach((s: Settlement) => {
       const solver = solvers.find((sol) => sol.id === s.solver_id);
+      // Find the winning quote from recent quotes to get the advantage reason
+      const winningQuote = recentQuotes.find((q) => q.solver_id === s.solver_id);
       if (solver) {
         items.push({
           type: 'win',
           solver: { name: solver.name, type: solver.solver_type },
           details: `won auction and settled ${(s.input_amount / 1_000_000).toFixed(1)} tokens`,
           timestamp: s.completed_at || s.updated_at,
+          advantageTag: winningQuote?.advantage_reason,
         });
       }
     });

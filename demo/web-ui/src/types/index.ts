@@ -101,6 +101,8 @@ export interface SolverQuote {
   estimated_gas: number;
   confidence: number;
   submitted_at: string;
+  /** Reason this solver had an advantage (if any) */
+  advantage_reason?: string;
 }
 
 export type SolverType =

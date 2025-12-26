@@ -200,6 +200,9 @@ pub struct SolverQuote {
     pub estimated_gas: u64,
     pub confidence: f64,
     pub submitted_at: DateTime<Utc>,
+    /// Reason this solver had an advantage (if any)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub advantage_reason: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -298,6 +301,37 @@ pub struct PriceFeed {
     pub updated_at: DateTime<Utc>,
 }
 
+/// Size preference for solver advantages
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub enum SizePreference {
+    Small,      // < $500
+    Medium,     // $500 - $5K
+    Large,      // > $5K
+    Any,        // No preference
+}
+
+/// Advantage profile for a solver - determines competitive edges
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SolverAdvantageProfile {
+    /// Preferred trading pairs (input_denom, output_denom) - order matters
+    pub preferred_pairs: Vec<(String, String)>,
+    /// Preferred order size range
+    pub size_preference: SizePreference,
+    /// Chain specialties (chain_ids where solver excels)
+    pub chain_specialty: Vec<String>,
+}
+
+impl Default for SolverAdvantageProfile {
+    fn default() -> Self {
+        Self {
+            preferred_pairs: vec![],
+            size_preference: SizePreference::Any,
+            chain_specialty: vec![],
+        }
+    }
+}
+
 /// Solver information
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Solver {
@@ -312,6 +346,9 @@ pub struct Solver {
     pub supported_chains: Vec<String>,
     pub supported_denoms: Vec<String>,
     pub connected_at: Option<DateTime<Utc>>,
+    /// Advantage profile defining competitive edges
+    #[serde(default)]
+    pub advantage_profile: SolverAdvantageProfile,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]

@@ -38,6 +38,42 @@ pub struct IntentResponse {
     pub intent: Intent,
 }
 
+/// Generate a synthetic counter-order to enable Intent Matcher competition
+/// Returns None if we decide not to generate one (85% of the time)
+fn maybe_generate_counter_order(intent: &Intent) -> Option<Intent> {
+    use rand::Rng;
+    let mut rng = rand::thread_rng();
+
+    // 15% chance to generate a counter-order
+    if rng.gen::<f64>() > 0.15 {
+        return None;
+    }
+
+    // Create a counter-order with swapped denoms and similar amount (80-120%)
+    let amount_multiplier = rng.gen_range(0.8..1.2);
+    let counter_amount = (intent.output.min_amount as f64 * amount_multiplier) as u128;
+
+    let req = CreateIntentRequest {
+        user_address: format!("cosmos1synthetic{:08x}", rng.gen::<u32>()),
+        input: Asset {
+            chain_id: intent.output.chain_id.clone(),
+            denom: intent.output.denom.clone(),
+            amount: counter_amount,
+        },
+        output: OutputSpec {
+            chain_id: intent.input.chain_id.clone(),
+            denom: intent.input.denom.clone(),
+            min_amount: (intent.input.amount as f64 * 0.9) as u128, // 10% slippage tolerance
+            max_price: None,
+        },
+        fill_config: Some(FillConfig::default()),
+        constraints: Some(ExecutionConstraints::default()),
+        timeout_seconds: Some(60),
+    };
+
+    Some(Intent::new(req))
+}
+
 pub async fn submit_intent(
     State(state): State<AppStateRef>,
     Json(req): Json<CreateIntentRequest>,
@@ -47,10 +83,20 @@ pub async fn submit_intent(
     let intent = Intent::new(req);
     let intent_clone = intent.clone();
 
+    // Maybe generate a synthetic counter-order to enable Intent Matcher
+    let counter_order = maybe_generate_counter_order(&intent);
+
     {
         let mut state = state.write().await;
         state.add_intent(intent.clone());
         state.broadcast(WsMessage::IntentSubmitted(intent.clone()));
+
+        // Add counter-order if generated (with small delay for realism)
+        if let Some(counter) = counter_order {
+            info!("Generated synthetic counter-order for Intent Matcher");
+            state.add_intent(counter.clone());
+            state.broadcast(WsMessage::IntentSubmitted(counter));
+        }
     }
 
     Ok(Json(IntentResponse {
@@ -251,10 +297,18 @@ pub async fn generate_demo_intent(
     let intent = Intent::new(req);
     let intent_clone = intent.clone();
 
+    // Maybe generate a synthetic counter-order for demo
+    let counter_order = maybe_generate_counter_order(&intent);
+
     {
         let mut state = state.write().await;
         state.add_intent(intent.clone());
         state.broadcast(WsMessage::IntentSubmitted(intent.clone()));
+
+        if let Some(counter) = counter_order {
+            state.add_intent(counter.clone());
+            state.broadcast(WsMessage::IntentSubmitted(counter));
+        }
     }
 
     Json(GenerateDemoIntentResponse {

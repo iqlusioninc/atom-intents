@@ -78,5 +78,6 @@ pub fn generate_test_quote() -> crate::models::SolverQuote {
         estimated_gas: 250_000,
         confidence: 0.95,
         submitted_at: Utc::now(),
+        advantage_reason: None,
     }
 }
