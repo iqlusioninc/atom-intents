@@ -52,7 +52,7 @@ const slides: Slide[] = [
         <p>
           You don't specify the route, the DEX, or the exact price — you just set your minimum acceptable output.
         </p>
-        <div className="grid grid-cols-2 gap-4 mt-4">
+        <div className="grid grid-cols-1 xs:grid-cols-2 gap-3 sm:gap-4 mt-4">
           <div className="p-3 bg-red-900/20 rounded-lg border border-red-700/50">
             <p className="text-red-400 font-medium text-sm">Traditional Trading</p>
             <p className="text-xs text-gray-400 mt-1">You find routes, compare prices, execute transactions</p>
@@ -75,31 +75,31 @@ const slides: Slide[] = [
           When you submit an intent, it enters a <strong className="text-cosmos-400">batch auction</strong> where
           multiple solvers compete to fill your order.
         </p>
-        <div className="relative py-6">
-          <div className="flex items-center justify-between">
-            <div className="text-center">
-              <div className="w-16 h-16 rounded-full bg-cosmos-600 flex items-center justify-center mx-auto mb-2">
-                <span className="text-2xl">👤</span>
+        <div className="relative py-4 sm:py-6">
+          <div className="flex items-center justify-between gap-1 sm:gap-2">
+            <div className="text-center flex-1">
+              <div className="w-12 h-12 sm:w-16 sm:h-16 rounded-full bg-cosmos-600 flex items-center justify-center mx-auto mb-1 sm:mb-2">
+                <span className="text-xl sm:text-2xl">👤</span>
               </div>
-              <p className="text-xs text-gray-400">Your Intent</p>
+              <p className="text-[10px] sm:text-xs text-gray-400">Your Intent</p>
             </div>
-            <div className="flex-1 flex items-center justify-center">
-              <ArrowRightLeft className="w-6 h-6 text-gray-500" />
+            <div className="flex items-center justify-center">
+              <ArrowRightLeft className="w-4 h-4 sm:w-6 sm:h-6 text-gray-500" />
             </div>
-            <div className="text-center">
-              <div className="w-16 h-16 rounded-full bg-yellow-600 flex items-center justify-center mx-auto mb-2">
-                <span className="text-2xl">🏆</span>
+            <div className="text-center flex-1">
+              <div className="w-12 h-12 sm:w-16 sm:h-16 rounded-full bg-yellow-600 flex items-center justify-center mx-auto mb-1 sm:mb-2">
+                <span className="text-xl sm:text-2xl">🏆</span>
               </div>
-              <p className="text-xs text-gray-400">Batch Auction</p>
+              <p className="text-[10px] sm:text-xs text-gray-400">Batch Auction</p>
             </div>
-            <div className="flex-1 flex items-center justify-center">
-              <ArrowRightLeft className="w-6 h-6 text-gray-500" />
+            <div className="flex items-center justify-center">
+              <ArrowRightLeft className="w-4 h-4 sm:w-6 sm:h-6 text-gray-500" />
             </div>
-            <div className="text-center">
-              <div className="w-16 h-16 rounded-full bg-green-600 flex items-center justify-center mx-auto mb-2">
-                <span className="text-2xl">✓</span>
+            <div className="text-center flex-1">
+              <div className="w-12 h-12 sm:w-16 sm:h-16 rounded-full bg-green-600 flex items-center justify-center mx-auto mb-1 sm:mb-2">
+                <span className="text-xl sm:text-2xl">✓</span>
               </div>
-              <p className="text-xs text-gray-400">Best Price Wins</p>
+              <p className="text-[10px] sm:text-xs text-gray-400">Best Price</p>
             </div>
           </div>
         </div>
@@ -174,22 +174,22 @@ const slides: Slide[] = [
         <p>
           This is a live simulation of the ATOM Intents system. Here's what you can do:
         </p>
-        <div className="grid grid-cols-2 gap-3 mt-4">
-          <div className="p-3 bg-gray-800/50 rounded-lg">
-            <p className="text-cosmos-400 font-medium text-sm">Create Intent</p>
-            <p className="text-xs text-gray-400">Submit a swap intent and watch it get filled</p>
+        <div className="grid grid-cols-2 gap-2 sm:gap-3 mt-4">
+          <div className="p-2 sm:p-3 bg-gray-800/50 rounded-lg">
+            <p className="text-cosmos-400 font-medium text-xs sm:text-sm">Create Intent</p>
+            <p className="text-[10px] sm:text-xs text-gray-400">Submit a swap and watch it fill</p>
           </div>
-          <div className="p-3 bg-gray-800/50 rounded-lg">
-            <p className="text-cosmos-400 font-medium text-sm">Watch Auctions</p>
-            <p className="text-xs text-gray-400">See solvers compete in real-time</p>
+          <div className="p-2 sm:p-3 bg-gray-800/50 rounded-lg">
+            <p className="text-cosmos-400 font-medium text-xs sm:text-sm">Watch Auctions</p>
+            <p className="text-[10px] sm:text-xs text-gray-400">See solvers compete live</p>
           </div>
-          <div className="p-3 bg-gray-800/50 rounded-lg">
-            <p className="text-cosmos-400 font-medium text-sm">Track Settlements</p>
-            <p className="text-xs text-gray-400">Follow the escrow and IBC flow</p>
+          <div className="p-2 sm:p-3 bg-gray-800/50 rounded-lg">
+            <p className="text-cosmos-400 font-medium text-xs sm:text-sm">Track Settlements</p>
+            <p className="text-[10px] sm:text-xs text-gray-400">Follow escrow and IBC flow</p>
           </div>
-          <div className="p-3 bg-gray-800/50 rounded-lg">
-            <p className="text-cosmos-400 font-medium text-sm">Run Scenarios</p>
-            <p className="text-xs text-gray-400">Try pre-built demo flows</p>
+          <div className="p-2 sm:p-3 bg-gray-800/50 rounded-lg">
+            <p className="text-cosmos-400 font-medium text-xs sm:text-sm">Run Scenarios</p>
+            <p className="text-[10px] sm:text-xs text-gray-400">Try pre-built demo flows</p>
           </div>
         </div>
         <div className="mt-6 p-4 bg-cosmos-900/30 rounded-lg border border-cosmos-700/50 text-center">
@@ -237,7 +237,7 @@ export default function OnboardingWizard({ isOpen, onClose }: OnboardingWizardPr
   const isLastSlide = currentSlide === slides.length - 1;
 
   return (
-    <div className="fixed inset-0 z-[100] flex items-center justify-center">
+    <div className="fixed inset-0 z-[100] flex items-end sm:items-center justify-center">
       {/* Backdrop */}
       <div
         className="absolute inset-0 bg-black/80 backdrop-blur-sm"
@@ -245,42 +245,44 @@ export default function OnboardingWizard({ isOpen, onClose }: OnboardingWizardPr
       />
 
       {/* Modal */}
-      <div className="relative w-full max-w-2xl mx-4 bg-gray-900 rounded-2xl border border-gray-700 shadow-2xl overflow-hidden">
+      <div className="relative w-full sm:max-w-2xl sm:mx-4 bg-gray-900 rounded-t-2xl sm:rounded-2xl border-t sm:border border-gray-700 shadow-2xl overflow-hidden max-h-[90vh] sm:max-h-[85vh] flex flex-col">
         {/* Close button */}
         <button
           onClick={handleClose}
-          className="absolute top-4 right-4 p-2 text-gray-400 hover:text-white transition-colors z-10"
+          className="absolute top-3 sm:top-4 right-3 sm:right-4 p-2 text-gray-400 hover:text-white transition-colors z-10"
         >
           <X className="w-5 h-5" />
         </button>
 
-        {/* Content */}
-        <div className="p-8">
+        {/* Content - scrollable */}
+        <div className="p-4 sm:p-8 overflow-y-auto flex-1">
           {/* Icon */}
-          <div className="flex justify-center mb-6">
-            {slide.icon}
+          <div className="flex justify-center mb-4 sm:mb-6">
+            <div className="scale-75 sm:scale-100">
+              {slide.icon}
+            </div>
           </div>
 
           {/* Title */}
-          <h2 className="text-2xl font-bold text-white text-center mb-2">
+          <h2 className="text-xl sm:text-2xl font-bold text-white text-center mb-1 sm:mb-2">
             {slide.title}
           </h2>
           {slide.subtitle && (
-            <p className="text-gray-400 text-center mb-6">
+            <p className="text-gray-400 text-center mb-4 sm:mb-6 text-sm sm:text-base">
               {slide.subtitle}
             </p>
           )}
 
           {/* Content */}
-          <div className="text-gray-300 min-h-[250px]">
+          <div className="text-gray-300 text-sm sm:text-base min-h-[180px] sm:min-h-[250px]">
             {slide.content}
           </div>
         </div>
 
-        {/* Footer */}
-        <div className="px-8 pb-6">
+        {/* Footer - fixed at bottom */}
+        <div className="px-4 sm:px-8 pb-4 sm:pb-6 pt-2 border-t border-gray-800 sm:border-0 bg-gray-900 flex-shrink-0">
           {/* Progress dots */}
-          <div className="flex justify-center gap-2 mb-6">
+          <div className="flex justify-center gap-2 mb-4 sm:mb-6">
             {slides.map((_, index) => (
               <button
                 key={index}
@@ -293,23 +295,23 @@ export default function OnboardingWizard({ isOpen, onClose }: OnboardingWizardPr
           </div>
 
           {/* Navigation buttons */}
-          <div className="flex justify-between items-center">
+          <div className="flex justify-between items-center gap-4">
             <button
               onClick={prevSlide}
               disabled={currentSlide === 0}
-              className={`flex items-center gap-2 px-4 py-2 rounded-lg transition-colors ${
+              className={`flex items-center gap-1 sm:gap-2 px-3 sm:px-4 py-2 rounded-lg transition-colors min-h-[44px] ${
                 currentSlide === 0
                   ? 'text-gray-600 cursor-not-allowed'
-                  : 'text-gray-400 hover:text-white hover:bg-gray-800'
+                  : 'text-gray-400 hover:text-white hover:bg-gray-800 active:bg-gray-700'
               }`}
             >
               <ChevronLeft className="w-4 h-4" />
-              Back
+              <span className="hidden xs:inline">Back</span>
             </button>
 
             <button
               onClick={nextSlide}
-              className="flex items-center gap-2 px-6 py-2 bg-cosmos-600 hover:bg-cosmos-500 text-white rounded-lg transition-colors"
+              className="flex items-center gap-1 sm:gap-2 px-4 sm:px-6 py-2 bg-cosmos-600 hover:bg-cosmos-500 active:bg-cosmos-700 text-white rounded-lg transition-colors min-h-[44px]"
             >
               {isLastSlide ? "Let's Go!" : 'Next'}
               {!isLastSlide && <ChevronRight className="w-4 h-4" />}

@@ -81,20 +81,20 @@ export default function IntentCreator() {
   };
 
   return (
-    <div className="space-y-6 animate-slide-in">
+    <div className="space-y-4 sm:space-y-6 animate-slide-in">
       <div>
-        <h2 className="text-2xl font-bold text-white">Create Intent</h2>
-        <p className="text-gray-400">Submit a new trading intent to the system</p>
+        <h2 className="text-xl sm:text-2xl font-bold text-white">Create Intent</h2>
+        <p className="text-gray-400 text-sm sm:text-base">Submit a new trading intent to the system</p>
       </div>
 
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 sm:gap-6">
         {/* Intent Form */}
-        <form onSubmit={handleSubmit} className="card space-y-6">
+        <form onSubmit={handleSubmit} className="card space-y-4 sm:space-y-6">
           <div>
             <label className="block text-sm font-medium text-gray-300 mb-2">
               From (Input)
             </label>
-            <div className="flex gap-3">
+            <div className="flex flex-col xs:flex-row gap-2 sm:gap-3">
               <select
                 value={inputDenom}
                 onChange={(e) => setInputDenom(e.target.value)}
@@ -116,7 +116,7 @@ export default function IntentCreator() {
                 min="0"
               />
             </div>
-            <div className="flex items-center justify-between mt-1">
+            <div className="flex flex-col xs:flex-row xs:items-center xs:justify-between mt-1 gap-0.5">
               <p className="text-xs text-gray-500">
                 ≈ ${inputValueUsd.toFixed(2)} USD @ ${inputPrice.toFixed(4)}/{inputDenom}
               </p>
@@ -146,7 +146,7 @@ export default function IntentCreator() {
             <label className="block text-sm font-medium text-gray-300 mb-2">
               To (Output)
             </label>
-            <div className="flex gap-3">
+            <div className="flex flex-col xs:flex-row gap-2 sm:gap-3">
               <select
                 value={outputDenom}
                 onChange={(e) => setOutputDenom(e.target.value)}
@@ -176,16 +176,16 @@ export default function IntentCreator() {
             <label className="block text-sm font-medium text-gray-300 mb-2">
               Slippage Tolerance
             </label>
-            <div className="flex gap-2">
+            <div className="flex gap-1 sm:gap-2">
               {['0.5', '1', '2', '5'].map((val) => (
                 <button
                   key={val}
                   type="button"
                   onClick={() => setSlippage(val)}
-                  className={`px-4 py-2 rounded-lg transition-colors ${
+                  className={`px-3 sm:px-4 py-2 rounded-lg transition-colors flex-1 text-sm sm:text-base min-h-[44px] ${
                     slippage === val
                       ? 'bg-cosmos-600 text-white'
-                      : 'bg-gray-800 text-gray-400 hover:bg-gray-700'
+                      : 'bg-gray-800 text-gray-400 hover:bg-gray-700 active:bg-gray-600'
                   }`}
                 >
                   {val}%
@@ -239,37 +239,37 @@ export default function IntentCreator() {
         </form>
 
         {/* Intent Preview */}
-        <div className="card space-y-4">
-          <h3 className="text-lg font-semibold text-white">Intent Preview</h3>
+        <div className="card space-y-3 sm:space-y-4">
+          <h3 className="text-base sm:text-lg font-semibold text-white">Intent Preview</h3>
 
-          <div className="space-y-4">
-            <div className="p-4 bg-gray-800/50 rounded-lg">
+          <div className="space-y-3 sm:space-y-4">
+            <div className="p-3 sm:p-4 bg-gray-800/50 rounded-lg">
               <p className="text-sm text-gray-400 mb-2">Trade Summary</p>
-              <div className="flex items-center gap-3">
-                <div className="text-center">
-                  <p className="text-2xl mb-1">{TOKENS[inputDenom]?.logo}</p>
-                  <p className="text-white font-medium">{inputAmount} {inputDenom}</p>
-                  <p className="text-xs text-gray-400">{TOKENS[inputDenom]?.name}</p>
+              <div className="flex items-center gap-2 sm:gap-3 justify-center">
+                <div className="text-center min-w-0 flex-1">
+                  <p className="text-xl sm:text-2xl mb-1">{TOKENS[inputDenom]?.logo}</p>
+                  <p className="text-white font-medium text-sm sm:text-base truncate">{inputAmount} {inputDenom}</p>
+                  <p className="text-xs text-gray-400 truncate">{TOKENS[inputDenom]?.name}</p>
                 </div>
-                <ArrowRight className="w-6 h-6 text-cosmos-400 flex-shrink-0" />
-                <div className="text-center">
-                  <p className="text-2xl mb-1">{TOKENS[outputDenom]?.logo}</p>
-                  <p className="text-white font-medium">{estimatedOutput.toFixed(4)} {outputDenom}</p>
-                  <p className="text-xs text-gray-400">{TOKENS[outputDenom]?.name}</p>
+                <ArrowRight className="w-5 h-5 sm:w-6 sm:h-6 text-cosmos-400 flex-shrink-0" />
+                <div className="text-center min-w-0 flex-1">
+                  <p className="text-xl sm:text-2xl mb-1">{TOKENS[outputDenom]?.logo}</p>
+                  <p className="text-white font-medium text-sm sm:text-base truncate">{estimatedOutput.toFixed(4)} {outputDenom}</p>
+                  <p className="text-xs text-gray-400 truncate">{TOKENS[outputDenom]?.name}</p>
                 </div>
               </div>
             </div>
 
-            <div className="p-4 bg-gray-800/50 rounded-lg space-y-2">
+            <div className="p-3 sm:p-4 bg-gray-800/50 rounded-lg space-y-2">
               <p className="text-sm text-gray-400">Execution Details</p>
-              <div className="grid grid-cols-2 gap-4 text-sm">
+              <div className="grid grid-cols-2 gap-2 sm:gap-4 text-xs sm:text-sm">
                 <div>
                   <p className="text-gray-500">Source Chain</p>
-                  <p className="text-white">{TOKENS[inputDenom]?.chain}</p>
+                  <p className="text-white truncate">{TOKENS[inputDenom]?.chain}</p>
                 </div>
                 <div>
-                  <p className="text-gray-500">Destination Chain</p>
-                  <p className="text-white">{TOKENS[outputDenom]?.chain}</p>
+                  <p className="text-gray-500">Dest Chain</p>
+                  <p className="text-white truncate">{TOKENS[outputDenom]?.chain}</p>
                 </div>
                 <div>
                   <p className="text-gray-500">Max Slippage</p>
@@ -282,9 +282,9 @@ export default function IntentCreator() {
               </div>
             </div>
 
-            <div className="p-4 bg-cosmos-900/30 border border-cosmos-700/50 rounded-lg">
+            <div className="p-3 sm:p-4 bg-cosmos-900/30 border border-cosmos-700/50 rounded-lg">
               <p className="text-sm text-cosmos-300 mb-2">How it works:</p>
-              <ol className="text-sm text-gray-400 space-y-1">
+              <ol className="text-xs sm:text-sm text-gray-400 space-y-1">
                 <li>1. Your intent is broadcast to all solvers</li>
                 <li>2. Solvers compete in a batch auction</li>
                 <li>3. Best price wins, funds are escrowed</li>

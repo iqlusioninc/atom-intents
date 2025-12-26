@@ -21,6 +21,9 @@ export default {
           950: '#1e1854',
         },
       },
+      screens: {
+        'xs': '375px',
+      },
     },
   },
   plugins: [],
