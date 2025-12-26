@@ -216,6 +216,7 @@ export type WsMessage =
 // Demo scenarios
 export const DEMO_SCENARIOS = [
   { id: 'simple_swap', name: 'Simple Swap', description: 'Basic ATOM → OSMO swap via DEX' },
+  { id: 'tia_usdc_swap', name: 'TIA → USDC (Celestia)', description: 'Cross-chain swap from Celestia via Hub escrow' },
   { id: 'intent_matching', name: 'Intent Matching', description: 'Two opposing intents matched directly' },
   { id: 'multi_hop', name: 'Multi-Hop', description: 'Cross-chain settlement via IBC PFM' },
   { id: 'cex_backstop', name: 'CEX Backstop', description: 'Large order using CEX liquidity' },
@@ -229,6 +230,7 @@ export const TOKENS: Record<string, { symbol: string; name: string; chain: strin
   USDC: { symbol: 'USDC', name: 'USD Coin', chain: 'noble-1', logo: '💵' },
   NTRN: { symbol: 'NTRN', name: 'Neutron', chain: 'neutron-1', logo: '⚡' },
   STRD: { symbol: 'STRD', name: 'Stride', chain: 'stride-1', logo: '🏃' },
+  TIA: { symbol: 'TIA', name: 'Celestia', chain: 'celestia', logo: '🟣' },
 };
 
 export const CHAINS = [
@@ -237,4 +239,5 @@ export const CHAINS = [
   { id: 'neutron-1', name: 'Neutron' },
   { id: 'noble-1', name: 'Noble' },
   { id: 'stride-1', name: 'Stride' },
+  { id: 'celestia', name: 'Celestia', hasSmartContracts: false },
 ];

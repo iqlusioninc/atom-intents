@@ -24,6 +24,7 @@ function ScenarioCard({
 }) {
   const iconMap: Record<string, string> = {
     simple_swap: '🔄',
+    tia_usdc_swap: '🟣',
     intent_matching: '🎯',
     multi_hop: '🌐',
     cex_backstop: '🏦',
@@ -131,6 +132,74 @@ export default function DemoScenarios() {
             result={results[scenario.id]}
           />
         ))}
+      </div>
+
+      {/* Featured: TIA → USDC Flow */}
+      <div className="card bg-gradient-to-br from-purple-900/30 to-transparent border-purple-700/50">
+        <div className="flex items-center gap-3 mb-4">
+          <span className="text-2xl">🟣</span>
+          <h3 className="font-semibold text-white">TIA → USDC: Cross-Chain from Celestia</h3>
+          <span className="px-2 py-1 text-xs bg-purple-600/50 rounded-full text-purple-200">Featured</span>
+        </div>
+        <p className="text-gray-400 text-sm mb-4">
+          Celestia has no smart contracts, so the system uses <strong className="text-purple-300">Hub escrow with solver relay risk</strong>.
+        </p>
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+          {/* Phase 1 */}
+          <div className="p-4 bg-gray-800/50 rounded-lg border border-purple-700/30">
+            <div className="flex items-center gap-2 mb-3">
+              <div className="w-6 h-6 rounded-full bg-purple-600 flex items-center justify-center text-xs text-white">1</div>
+              <span className="text-sm font-medium text-white">User → Hub Escrow</span>
+            </div>
+            <div className="space-y-2 text-xs text-gray-400">
+              <div className="flex items-center gap-2">
+                <span className="text-purple-400">Celestia</span>
+                <ArrowRight className="w-3 h-3" />
+                <span className="text-cosmos-400">Hub</span>
+              </div>
+              <p>TIA sent via IBC with wasm hook memo</p>
+              <p className="text-purple-300">Escrow locks atomically on receive</p>
+            </div>
+          </div>
+          {/* Phase 2 */}
+          <div className="p-4 bg-gray-800/50 rounded-lg border border-green-700/30">
+            <div className="flex items-center gap-2 mb-3">
+              <div className="w-6 h-6 rounded-full bg-green-600 flex items-center justify-center text-xs text-white">2</div>
+              <span className="text-sm font-medium text-white">Solver → User</span>
+            </div>
+            <div className="space-y-2 text-xs text-gray-400">
+              <div className="flex items-center gap-2">
+                <span className="text-green-400">Solver</span>
+                <ArrowRight className="w-3 h-3" />
+                <span className="text-green-300">Noble</span>
+              </div>
+              <p>Solver sends USDC to user</p>
+              <p className="text-yellow-300">⚠️ Solver takes relay risk</p>
+            </div>
+          </div>
+          {/* Phase 3 */}
+          <div className="p-4 bg-gray-800/50 rounded-lg border border-cosmos-700/30">
+            <div className="flex items-center gap-2 mb-3">
+              <div className="w-6 h-6 rounded-full bg-cosmos-600 flex items-center justify-center text-xs text-white">3</div>
+              <span className="text-sm font-medium text-white">Hub Adjudicates</span>
+            </div>
+            <div className="space-y-2 text-xs text-gray-400">
+              <div className="flex items-center gap-2">
+                <span className="text-cosmos-400">Hub</span>
+                <ArrowRight className="w-3 h-3" />
+                <span className="text-blue-400">Solver</span>
+              </div>
+              <p>Settlement verifies IBC ack</p>
+              <p className="text-green-300">✓ Releases TIA to solver</p>
+            </div>
+          </div>
+        </div>
+        <div className="mt-4 p-3 bg-purple-900/20 rounded-lg border border-purple-700/30">
+          <p className="text-purple-300 text-xs">
+            <strong>Key insight:</strong> No smart contracts needed on Celestia. Hub escrow protects users.
+            Solvers take relay risk → incentivized to run reliable relayers.
+          </p>
+        </div>
       </div>
 
       {/* Scenario Details */}
