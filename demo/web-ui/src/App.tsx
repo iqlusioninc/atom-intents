@@ -11,6 +11,7 @@ import {
   Wifi,
   WifiOff,
   Calculator,
+  HelpCircle,
 } from 'lucide-react';
 
 import { useWebSocket } from './hooks/useWebSocket';
@@ -25,9 +26,11 @@ import SettlementMonitor from './components/SettlementMonitor';
 import DemoScenarios from './components/DemoScenarios';
 import WalletConnect from './components/WalletConnect';
 import CostCalculator from './components/CostCalculator';
+import OnboardingWizard, { useOnboardingWizard } from './components/OnboardingWizard';
 
 function App() {
   const location = useLocation();
+  const { isOpen: isWizardOpen, openWizard, closeWizard } = useOnboardingWizard();
   const {
     addIntent,
     addAuction,
@@ -147,6 +150,14 @@ function App() {
             </div>
 
             <div className="flex items-center gap-4">
+              <button
+                onClick={openWizard}
+                className="flex items-center gap-2 px-3 py-1.5 text-sm text-gray-400 hover:text-white hover:bg-gray-800 rounded-lg transition-colors"
+                title="Show guide"
+              >
+                <HelpCircle className="w-4 h-4" />
+                <span className="hidden sm:inline">Guide</span>
+              </button>
               <div className={`flex items-center gap-2 px-3 py-1 rounded-full text-sm ${
                 connected ? 'bg-green-900/30 text-green-400' : 'bg-red-900/30 text-red-400'
               }`}>
@@ -205,6 +216,9 @@ function App() {
           </div>
         </main>
       </div>
+
+      {/* Onboarding Wizard */}
+      <OnboardingWizard isOpen={isWizardOpen} onClose={closeWizard} />
     </div>
   );
 }
