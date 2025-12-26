@@ -271,5 +271,56 @@ impl AppState {
         } else {
             0.0
         };
+
+        // Calculate avg execution time from completed settlements
+        let completed_settlements: Vec<_> = self
+            .settlements
+            .values()
+            .filter(|s| s.status == SettlementStatus::Completed && s.completed_at.is_some())
+            .collect();
+
+        if !completed_settlements.is_empty() {
+            let total_exec_time: i64 = completed_settlements
+                .iter()
+                .map(|s| {
+                    let duration = s.completed_at.unwrap() - s.created_at;
+                    duration.num_milliseconds()
+                })
+                .sum();
+            self.stats.avg_execution_time_ms =
+                (total_exec_time / completed_settlements.len() as i64) as u64;
+        }
+
+        // Calculate avg price improvement from completed auctions
+        let completed_auctions: Vec<_> = self
+            .auctions
+            .values()
+            .filter(|a| a.status == AuctionStatus::Completed)
+            .collect();
+
+        if !completed_auctions.is_empty() {
+            let total_improvement: i32 = completed_auctions
+                .iter()
+                .map(|a| a.stats.price_improvement_bps)
+                .sum();
+            self.stats.avg_price_improvement_bps =
+                total_improvement / completed_auctions.len() as i32;
+        }
+
+        // Calculate total volume in USD
+        let total_volume: f64 = completed_settlements
+            .iter()
+            .map(|s| {
+                // Get input denom from the intent
+                if let Some(intent_id) = s.intent_ids.first() {
+                    if let Some(intent) = self.intents.get(intent_id) {
+                        let price = self.prices.get(&intent.input.denom).map(|p| p.price_usd).unwrap_or(1.0);
+                        return (s.input_amount as f64 / 1_000_000.0) * price;
+                    }
+                }
+                0.0
+            })
+            .sum();
+        self.stats.total_volume_usd = total_volume;
     }
 }
