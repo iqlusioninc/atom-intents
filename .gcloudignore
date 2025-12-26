@@ -1,0 +1,48 @@
+# Inherit from .gitignore
+#!include:.gitignore
+
+# Rust build artifacts
+/target/
+**/target/
+**/*.rs.bk
+
+# Node modules
+**/node_modules/
+
+# Git
+.git/
+.gitignore
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Terraform state (contains secrets)
+**/.terraform/
+*.tfstate
+*.tfstate.*
+*.tfplan
+tfplan
+
+# Build artifacts
+*.wasm
+artifacts/
+
+# Local configuration
+.env
+.env.local
+
+# Test artifacts
+coverage/
+
+# Documentation
+docs/
+
+# Contracts (not needed for demo deployment)
+contracts/

@@ -10,11 +10,11 @@ metadata:
     networking.gke.io/v1beta1.FrontendConfig: "atom-intents-frontend"
 spec:
   rules:
-    - host: demo.atom-intents.io
+    - host: atom-intents.com
       http:
         paths:
-          - path: /api/*
-            pathType: ImplementationSpecific
+          - path: /api
+            pathType: Prefix
             backend:
               service:
                 name: skip-select
@@ -27,8 +27,8 @@ spec:
                 name: skip-select
                 port:
                   number: 8080
-          - path: /*
-            pathType: ImplementationSpecific
+          - path: /
+            pathType: Prefix
             backend:
               service:
                 name: web-ui
@@ -43,7 +43,7 @@ metadata:
   namespace: atom-intents
 spec:
   domains:
-    - demo.atom-intents.io
+    - atom-intents.com
 
 ---
 apiVersion: networking.gke.io/v1beta1
@@ -55,34 +55,6 @@ spec:
   redirectToHttps:
     enabled: true
     responseCodeName: MOVED_PERMANENTLY_DEFAULT
-  sslPolicy: atom-intents-ssl-policy
 
----
-apiVersion: compute.cnrm.cloud.google.com/v1beta1
-kind: ComputeSSLPolicy
-metadata:
-  name: atom-intents-ssl-policy
-  namespace: atom-intents
-spec:
-  minTlsVersion: TLS_1_2
-  profile: MODERN
-
----
-apiVersion: compute.cnrm.cloud.google.com/v1beta1
-kind: ComputeBackendConfig
-metadata:
-  name: skip-select-backend-config
-  namespace: atom-intents
-spec:
-  securityPolicy:
-    name: atom-intents-demo-security-policy
-  connectionDraining:
-    drainingTimeoutSec: 30
-  healthCheck:
-    checkIntervalSec: 10
-    timeoutSec: 5
-    healthyThreshold: 2
-    unhealthyThreshold: 3
-    type: HTTP
-    requestPath: /health
-    port: 8080
+# Note: ComputeSSLPolicy and ComputeBackendConfig require Config Connector CRDs
+# which are not installed. These can be enabled in production deployments.

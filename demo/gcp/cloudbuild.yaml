@@ -4,7 +4,7 @@
 substitutions:
   _REGION: us-central1
   _CLUSTER_NAME: atom-intents-demo-gke
-  _REGISTRY: ${_REGION}-docker.pkg.dev/${PROJECT_ID}/atom-intents
+  _REGISTRY: ""  # Override via --substitutions=_REGISTRY=...
 
 options:
   logging: CLOUD_LOGGING_ONLY
@@ -126,10 +126,7 @@ steps:
     waitFor:
       - deploy
 
-images:
-  - ${_REGISTRY}/skip-select-simulator:${SHORT_SHA}
-  - ${_REGISTRY}/skip-select-simulator:latest
-  - ${_REGISTRY}/atom-intents-web-ui:${SHORT_SHA}
-  - ${_REGISTRY}/atom-intents-web-ui:latest
+# Images are pushed explicitly in push steps above
+# images section removed to avoid nested substitution issues
 
 timeout: 1800s
