@@ -35,4 +35,7 @@ pub enum ContractError {
 
     #[error("Migration failed: {reason}")]
     MigrationFailed { reason: String },
+
+    #[error("Insufficient funds: required {required}, provided {provided}")]
+    InsufficientFunds { required: String, provided: String },
 }

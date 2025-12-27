@@ -8,8 +8,8 @@ use crate::handlers::{
     execute_create_settlement, execute_decay_reputation, execute_deregister_solver,
     execute_handle_ibc_ack, execute_handle_timeout, execute_mark_completed, execute_mark_executing,
     execute_mark_failed, execute_mark_solver_locked, execute_mark_user_locked,
-    execute_register_solver, execute_settlement, execute_slash_solver, execute_update_config,
-    execute_update_reputation,
+    execute_register_solver, execute_settlement, execute_settlement_local, execute_slash_solver,
+    execute_update_config, execute_update_reputation,
 };
 use crate::msg::{
     ConfigUpdate, ExecuteMsg, InflightSettlementsResponse, InstantiateMsg, MigrateMsg,
@@ -118,6 +118,9 @@ pub fn execute(
             settlement_id,
             ibc_channel,
         } => execute_settlement(deps, env, info, settlement_id, ibc_channel),
+        ExecuteMsg::ExecuteSettlementLocal { settlement_id } => {
+            execute_settlement_local(deps, env, info, settlement_id)
+        }
         ExecuteMsg::HandleTimeout { settlement_id } => {
             execute_handle_timeout(deps, env, info, settlement_id)
         }
@@ -2674,5 +2677,420 @@ mod tests {
 
         assert_eq!(inflight.count, 1);
         assert_eq!(inflight.settlement_ids[0], "settlement-3");
+    }
+
+    // ==================== SAME-CHAIN (LOCAL) SETTLEMENT TESTS ====================
+
+    #[test]
+    fn test_execute_settlement_local_success() {
+        let (mut deps, env, addrs) = setup_contract();
+        register_solver(&mut deps, &env, &addrs, "solver-1", 2_000_000);
+        create_settlement(&mut deps, &env, &addrs, "settlement-1", "solver-1");
+
+        // Move to SolverLocked state
+        let info = message_info(&addrs.escrow, &[]);
+        execute(
+            deps.as_mut(),
+            env.clone(),
+            info,
+            ExecuteMsg::MarkUserLocked {
+                settlement_id: "settlement-1".to_string(),
+                escrow_id: "escrow-123".to_string(),
+            },
+        )
+        .unwrap();
+
+        let info = message_info(&addrs.solver_operator, &[]);
+        execute(
+            deps.as_mut(),
+            env.clone(),
+            info,
+            ExecuteMsg::MarkSolverLocked {
+                settlement_id: "settlement-1".to_string(),
+            },
+        )
+        .unwrap();
+
+        // Execute local settlement with correct funds
+        let info = message_info(&addrs.solver_operator, &[Coin::new(1_000_000u128, "uusdc")]);
+        let res = execute(
+            deps.as_mut(),
+            env.clone(),
+            info,
+            ExecuteMsg::ExecuteSettlementLocal {
+                settlement_id: "settlement-1".to_string(),
+            },
+        )
+        .unwrap();
+
+        // Verify attributes
+        assert_eq!(res.attributes[0].value, "execute_settlement_local");
+        assert_eq!(res.attributes[2].value, "same_chain");
+
+        // Verify we have 2 messages: bank send to user + release escrow
+        assert_eq!(res.messages.len(), 2);
+
+        // Verify settlement is completed
+        let settlement: SettlementResponse = from_json(
+            query(
+                deps.as_ref(),
+                env,
+                QueryMsg::Settlement {
+                    settlement_id: "settlement-1".to_string(),
+                },
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(settlement.status, "completed");
+    }
+
+    #[test]
+    fn test_execute_settlement_local_insufficient_funds() {
+        let (mut deps, env, addrs) = setup_contract();
+        register_solver(&mut deps, &env, &addrs, "solver-1", 2_000_000);
+        create_settlement(&mut deps, &env, &addrs, "settlement-1", "solver-1");
+
+        // Move to SolverLocked state
+        let info = message_info(&addrs.escrow, &[]);
+        execute(
+            deps.as_mut(),
+            env.clone(),
+            info,
+            ExecuteMsg::MarkUserLocked {
+                settlement_id: "settlement-1".to_string(),
+                escrow_id: "escrow-123".to_string(),
+            },
+        )
+        .unwrap();
+
+        let info = message_info(&addrs.solver_operator, &[]);
+        execute(
+            deps.as_mut(),
+            env.clone(),
+            info,
+            ExecuteMsg::MarkSolverLocked {
+                settlement_id: "settlement-1".to_string(),
+            },
+        )
+        .unwrap();
+
+        // Try to execute local settlement with insufficient funds
+        let info = message_info(&addrs.solver_operator, &[Coin::new(500_000u128, "uusdc")]);
+        let err = execute(
+            deps.as_mut(),
+            env,
+            info,
+            ExecuteMsg::ExecuteSettlementLocal {
+                settlement_id: "settlement-1".to_string(),
+            },
+        )
+        .unwrap_err();
+
+        assert!(matches!(err, ContractError::InsufficientFunds { .. }));
+    }
+
+    #[test]
+    fn test_execute_settlement_local_wrong_denom() {
+        let (mut deps, env, addrs) = setup_contract();
+        register_solver(&mut deps, &env, &addrs, "solver-1", 2_000_000);
+        create_settlement(&mut deps, &env, &addrs, "settlement-1", "solver-1");
+
+        // Move to SolverLocked state
+        let info = message_info(&addrs.escrow, &[]);
+        execute(
+            deps.as_mut(),
+            env.clone(),
+            info,
+            ExecuteMsg::MarkUserLocked {
+                settlement_id: "settlement-1".to_string(),
+                escrow_id: "escrow-123".to_string(),
+            },
+        )
+        .unwrap();
+
+        let info = message_info(&addrs.solver_operator, &[]);
+        execute(
+            deps.as_mut(),
+            env.clone(),
+            info,
+            ExecuteMsg::MarkSolverLocked {
+                settlement_id: "settlement-1".to_string(),
+            },
+        )
+        .unwrap();
+
+        // Try to execute local settlement with wrong denom
+        let info = message_info(&addrs.solver_operator, &[Coin::new(1_000_000u128, "uatom")]);
+        let err = execute(
+            deps.as_mut(),
+            env,
+            info,
+            ExecuteMsg::ExecuteSettlementLocal {
+                settlement_id: "settlement-1".to_string(),
+            },
+        )
+        .unwrap_err();
+
+        assert!(matches!(err, ContractError::InsufficientFunds { .. }));
+    }
+
+    #[test]
+    fn test_execute_settlement_local_wrong_state() {
+        let (mut deps, env, addrs) = setup_contract();
+        register_solver(&mut deps, &env, &addrs, "solver-1", 2_000_000);
+        create_settlement(&mut deps, &env, &addrs, "settlement-1", "solver-1");
+
+        // Try to execute local settlement from Pending state (wrong state)
+        let info = message_info(&addrs.solver_operator, &[Coin::new(1_000_000u128, "uusdc")]);
+        let err = execute(
+            deps.as_mut(),
+            env,
+            info,
+            ExecuteMsg::ExecuteSettlementLocal {
+                settlement_id: "settlement-1".to_string(),
+            },
+        )
+        .unwrap_err();
+
+        assert!(matches!(err, ContractError::InvalidStateTransition { .. }));
+    }
+
+    #[test]
+    fn test_execute_settlement_local_expired() {
+        let (mut deps, mut env, addrs) = setup_contract();
+        register_solver(&mut deps, &env, &addrs, "solver-1", 2_000_000);
+        create_settlement(&mut deps, &env, &addrs, "settlement-1", "solver-1");
+
+        // Move to SolverLocked state
+        let info = message_info(&addrs.escrow, &[]);
+        execute(
+            deps.as_mut(),
+            env.clone(),
+            info,
+            ExecuteMsg::MarkUserLocked {
+                settlement_id: "settlement-1".to_string(),
+                escrow_id: "escrow-123".to_string(),
+            },
+        )
+        .unwrap();
+
+        let info = message_info(&addrs.solver_operator, &[]);
+        execute(
+            deps.as_mut(),
+            env.clone(),
+            info,
+            ExecuteMsg::MarkSolverLocked {
+                settlement_id: "settlement-1".to_string(),
+            },
+        )
+        .unwrap();
+
+        // Fast forward time past expiry
+        env.block.time = Timestamp::from_seconds(env.block.time.seconds() + 7200);
+
+        // Try to execute local settlement after expiry
+        let info = message_info(&addrs.solver_operator, &[Coin::new(1_000_000u128, "uusdc")]);
+        let err = execute(
+            deps.as_mut(),
+            env,
+            info,
+            ExecuteMsg::ExecuteSettlementLocal {
+                settlement_id: "settlement-1".to_string(),
+            },
+        )
+        .unwrap_err();
+
+        assert!(matches!(err, ContractError::SettlementExpired {}));
+    }
+
+    #[test]
+    fn test_execute_settlement_local_unauthorized() {
+        let (mut deps, env, addrs) = setup_contract();
+        register_solver(&mut deps, &env, &addrs, "solver-1", 2_000_000);
+        create_settlement(&mut deps, &env, &addrs, "settlement-1", "solver-1");
+
+        // Move to SolverLocked state
+        let info = message_info(&addrs.escrow, &[]);
+        execute(
+            deps.as_mut(),
+            env.clone(),
+            info,
+            ExecuteMsg::MarkUserLocked {
+                settlement_id: "settlement-1".to_string(),
+                escrow_id: "escrow-123".to_string(),
+            },
+        )
+        .unwrap();
+
+        let info = message_info(&addrs.solver_operator, &[]);
+        execute(
+            deps.as_mut(),
+            env.clone(),
+            info,
+            ExecuteMsg::MarkSolverLocked {
+                settlement_id: "settlement-1".to_string(),
+            },
+        )
+        .unwrap();
+
+        // Try to execute local settlement from unauthorized user
+        let info = message_info(&addrs.random_user, &[Coin::new(1_000_000u128, "uusdc")]);
+        let err = execute(
+            deps.as_mut(),
+            env,
+            info,
+            ExecuteMsg::ExecuteSettlementLocal {
+                settlement_id: "settlement-1".to_string(),
+            },
+        )
+        .unwrap_err();
+
+        assert!(matches!(err, ContractError::Unauthorized {}));
+    }
+
+    #[test]
+    fn test_execute_settlement_local_by_admin() {
+        let (mut deps, env, addrs) = setup_contract();
+        register_solver(&mut deps, &env, &addrs, "solver-1", 2_000_000);
+        create_settlement(&mut deps, &env, &addrs, "settlement-1", "solver-1");
+
+        // Move to SolverLocked state
+        let info = message_info(&addrs.escrow, &[]);
+        execute(
+            deps.as_mut(),
+            env.clone(),
+            info,
+            ExecuteMsg::MarkUserLocked {
+                settlement_id: "settlement-1".to_string(),
+                escrow_id: "escrow-123".to_string(),
+            },
+        )
+        .unwrap();
+
+        let info = message_info(&addrs.solver_operator, &[]);
+        execute(
+            deps.as_mut(),
+            env.clone(),
+            info,
+            ExecuteMsg::MarkSolverLocked {
+                settlement_id: "settlement-1".to_string(),
+            },
+        )
+        .unwrap();
+
+        // Admin can also execute local settlement
+        let info = message_info(&addrs.admin, &[Coin::new(1_000_000u128, "uusdc")]);
+        let res = execute(
+            deps.as_mut(),
+            env.clone(),
+            info,
+            ExecuteMsg::ExecuteSettlementLocal {
+                settlement_id: "settlement-1".to_string(),
+            },
+        )
+        .unwrap();
+
+        assert_eq!(res.attributes[0].value, "execute_settlement_local");
+
+        // Verify settlement is completed
+        let settlement: SettlementResponse = from_json(
+            query(
+                deps.as_ref(),
+                env,
+                QueryMsg::Settlement {
+                    settlement_id: "settlement-1".to_string(),
+                },
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(settlement.status, "completed");
+    }
+
+    #[test]
+    fn test_execute_settlement_local_without_escrow_id_fails() {
+        let (mut deps, env, addrs) = setup_contract();
+        register_solver(&mut deps, &env, &addrs, "solver-1", 2_000_000);
+        create_settlement(&mut deps, &env, &addrs, "settlement-1", "solver-1");
+
+        // Manually set to SolverLocked without escrow_id
+        let mut settlement = SETTLEMENTS.load(&deps.storage, "settlement-1").unwrap();
+        settlement.status = SettlementStatus::SolverLocked;
+        SETTLEMENTS
+            .save(&mut deps.storage, "settlement-1", &settlement)
+            .unwrap();
+
+        // Try to execute local settlement - should fail because escrow_id is None
+        let info = message_info(&addrs.solver_operator, &[Coin::new(1_000_000u128, "uusdc")]);
+        let err = execute(
+            deps.as_mut(),
+            env,
+            info,
+            ExecuteMsg::ExecuteSettlementLocal {
+                settlement_id: "settlement-1".to_string(),
+            },
+        )
+        .unwrap_err();
+
+        assert!(matches!(err, ContractError::InvalidStateTransition { .. }));
+    }
+
+    #[test]
+    fn test_execute_settlement_local_updates_solver_stats() {
+        let (mut deps, env, addrs) = setup_contract();
+        register_solver(&mut deps, &env, &addrs, "solver-1", 2_000_000);
+        create_settlement(&mut deps, &env, &addrs, "settlement-1", "solver-1");
+
+        // Move to SolverLocked state
+        let info = message_info(&addrs.escrow, &[]);
+        execute(
+            deps.as_mut(),
+            env.clone(),
+            info,
+            ExecuteMsg::MarkUserLocked {
+                settlement_id: "settlement-1".to_string(),
+                escrow_id: "escrow-123".to_string(),
+            },
+        )
+        .unwrap();
+
+        let info = message_info(&addrs.solver_operator, &[]);
+        execute(
+            deps.as_mut(),
+            env.clone(),
+            info,
+            ExecuteMsg::MarkSolverLocked {
+                settlement_id: "settlement-1".to_string(),
+            },
+        )
+        .unwrap();
+
+        // Execute local settlement
+        let info = message_info(&addrs.solver_operator, &[Coin::new(1_000_000u128, "uusdc")]);
+        execute(
+            deps.as_mut(),
+            env.clone(),
+            info,
+            ExecuteMsg::ExecuteSettlementLocal {
+                settlement_id: "settlement-1".to_string(),
+            },
+        )
+        .unwrap();
+
+        // Check solver stats were updated
+        let solver: SolverResponse = from_json(
+            query(
+                deps.as_ref(),
+                env,
+                QueryMsg::Solver {
+                    solver_id: "solver-1".to_string(),
+                },
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(solver.total_settlements, 1);
+        assert_eq!(solver.failed_settlements, 0);
     }
 }

@@ -65,11 +65,19 @@ pub enum ExecuteMsg {
         base_slash_bps: Option<u64>,
     },
 
-    /// Execute settlement via IBC transfer
+    /// Execute settlement via IBC transfer (cross-chain)
     ExecuteSettlement {
         settlement_id: String,
         ibc_channel: String,
     },
+
+    /// Execute settlement via direct bank transfer (same-chain)
+    /// This is an atomic operation that:
+    /// 1. Transfers solver output to user (via BankMsg::Send)
+    /// 2. Releases user's escrow to solver
+    /// 3. Marks settlement as completed
+    /// Caller must send the solver_output_amount with this message.
+    ExecuteSettlementLocal { settlement_id: String },
 
     /// Handle IBC timeout - refund user and potentially slash solver
     HandleTimeout { settlement_id: String },

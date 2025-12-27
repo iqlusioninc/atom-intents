@@ -296,69 +296,118 @@ fn execute_release(
 
 ## Same-Chain Settlement Flow
 
-When both user and solver are on the same chain, the current implementation still uses IBC.
+When both user and solver are on the same chain, you have two options:
 
-### Current Behavior
+1. **`ExecuteSettlement`** - Uses IBC (still works, but adds overhead)
+2. **`ExecuteSettlementLocal`** - Uses direct bank transfer (optimized, atomic)
+
+### Optimized Same-Chain Flow (ExecuteSettlementLocal)
+
+**File**: `contracts/settlement/src/handlers.rs:519-619`
 
 ```
-┌─────────┐     ┌────────────┐     ┌─────────────┐     ┌───────────────┐
-│  User   │     │   Escrow   │     │  Settlement │     │  IBC Module   │
-│(Hub)    │     │  (Hub)     │     │   (Hub)     │     │   (Hub)       │
-└────┬────┘     └──────┬─────┘     └──────┬──────┘     └───────┬───────┘
-     │                 │                  │                    │
-     │ Lock funds      │                  │                    │
-     │────────────────►│                  │                    │
-     │                 │                  │                    │
-     │                 │ ExecuteSettlement│                    │
-     │                 │    with IBC      │                    │
-     │                 │─────────────────►│                    │
-     │                 │                  │                    │
-     │                 │                  │ IbcMsg::Transfer   │
-     │                 │                  │ (same chain!)      │
-     │                 │                  │───────────────────►│
-     │                 │                  │                    │
-     │                 │                  │                    │ IBC processes
-     │                 │                  │                    │ locally (~3s)
-     │                 │                  │                    │
-     │                 │                  │◄───────────────────│
-     │                 │                  │    IBC Ack         │
-     │                 │                  │                    │
-     │                 │◄─────────────────│                    │
-     │                 │    Release       │                    │
-     │                 │                  │                    │
+┌─────────┐     ┌────────────┐     ┌─────────────┐
+│  User   │     │   Escrow   │     │  Settlement │
+│(Hub)    │     │  (Hub)     │     │   (Hub)     │
+└────┬────┘     └──────┬─────┘     └──────┬──────┘
+     │                 │                  │
+     │ Lock funds      │                  │
+     │────────────────►│                  │
+     │                 │                  │
+     │                 │    ... state transitions ...
+     │                 │                  │
+     │                 │ ExecuteSettlementLocal
+     │                 │  (with solver funds)
+     │                 │─────────────────►│
+     │                 │                  │
+     │                 │                  │ ATOMIC EXECUTION:
+     │                 │                  │ 1. BankMsg::Send to user
+     │                 │                  │ 2. Release escrow to solver
+     │◄────────────────┼──────────────────│ 3. Mark completed
+     │  Receives funds │                  │
+     │                 │                  │
+     │                 │◄─────────────────│
+     │                 │  Release escrow  │
+     │                 │  to solver       │
+     │                 │                  │
 ```
 
-### Key Insight
-
-The settlement contract (`handlers.rs:442-503`) **always uses `IbcMsg::Transfer`**:
+### How ExecuteSettlementLocal Works
 
 ```rust
-// From execute_settlement - no same-chain optimization
+pub fn execute_settlement_local(
+    deps: DepsMut,
+    env: Env,
+    info: MessageInfo,
+    settlement_id: String,
+) -> Result<Response, ContractError> {
+    // Verify settlement is in SolverLocked state
+    // Verify caller is authorized (admin or solver operator)
+    // Verify caller sent correct funds (solver_output_amount)
+
+    // ATOMIC EXECUTION (all or nothing):
+
+    // 1. Transfer solver output to user via BankMsg::Send
+    let transfer_to_user = BankMsg::Send {
+        to_address: settlement.user.to_string(),
+        amount: vec![Coin {
+            denom: settlement.solver_output_denom.clone(),
+            amount: settlement.solver_output_amount,
+        }],
+    };
+
+    // 2. Release escrow to solver
+    let release_escrow = WasmMsg::Execute {
+        contract_addr: config.escrow_contract.to_string(),
+        msg: to_json_binary(&EscrowExecuteMsg::Release {
+            escrow_id: escrow_id.clone(),
+            recipient: solver.operator.to_string(),
+        })?,
+        funds: vec![],
+    };
+
+    // 3. Mark settlement as completed
+    settlement.status = SettlementStatus::Completed;
+
+    Ok(Response::new()
+        .add_message(transfer_to_user)
+        .add_message(release_escrow)
+        ...)
+}
+```
+
+### Benefits of Same-Chain Optimization
+
+| Aspect | IBC Path | Local Path |
+|--------|----------|------------|
+| **Execution** | Multi-block | Single block |
+| **Latency** | ~3-6 seconds | ~1 block |
+| **Gas Cost** | Higher (IBC overhead) | Lower |
+| **Failure Handling** | Complex (timeout, ack) | Atomic revert |
+| **State Machine** | SolverLocked → Executing → Completed | SolverLocked → Completed |
+
+### When to Use Each Path
+
+| Scenario | Use |
+|----------|-----|
+| User on same chain as settlement | `ExecuteSettlementLocal` |
+| User on different chain | `ExecuteSettlement` (IBC) |
+| Need IBC hooks/PFM on route | `ExecuteSettlement` (IBC) |
+
+### Legacy IBC Path (Still Available)
+
+The original IBC-based path via `ExecuteSettlement` is still available and works for same-chain scenarios (using loopback channels), but adds unnecessary overhead:
+
+```rust
+// Still works, but not optimized for same-chain
 let ibc_transfer = IbcMsg::Transfer {
-    channel_id: ibc_channel.clone(),  // Still requires a channel
+    channel_id: ibc_channel.clone(),
     to_address: settlement.user.to_string(),
     amount: Coin { ... },
     timeout: IbcTimeout::with_timestamp(env.block.time.plus_seconds(600)),
     memo: Some(format!("ATOM Intent Settlement {}", settlement_id)),
 };
 ```
-
-### Same-Chain IBC Behavior
-
-On the same chain, IBC transfers:
-- Still require a valid channel (loopback or self-referential)
-- Process faster (~3 seconds vs ~6+ seconds cross-chain)
-- Still provide acknowledgement for verification
-
-### Gap: No Direct Bank Transfer Path
-
-The current implementation does **not** have a dedicated same-chain path that would use `BankMsg::Send` directly. This is a potential optimization opportunity.
-
-A same-chain optimization could:
-1. Detect when `source_chain == dest_chain`
-2. Use `BankMsg::Send` directly instead of IBC
-3. Skip the IBC acknowledgement flow entirely
-4. Release escrow immediately after the bank send
 
 ---
 
@@ -559,6 +608,6 @@ If escrow expires before settlement completes:
 
 ### Current Limitations
 
-1. **Same-chain uses IBC**: No direct `BankMsg::Send` optimization
+1. ~~**Same-chain uses IBC**: No direct `BankMsg::Send` optimization~~ ✅ **RESOLVED**: `ExecuteSettlementLocal` now provides direct bank transfer for same-chain
 2. **Admin-triggered acks**: IBC acks require admin to relay (could be automated)
 3. **Single timeout value**: 600 seconds for all transfers (could be dynamic)
