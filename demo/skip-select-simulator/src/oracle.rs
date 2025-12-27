@@ -34,6 +34,24 @@ fn get_coingecko_id(symbol: &str) -> Option<&'static str> {
         "NTRN" => Some("neutron-3"),
         "STRD" => Some("stride"),
         "TIA" => Some("celestia"),
+        // LST tokens - try to get from CoinGecko but fallback to base token
+        "STATOM" => Some("stride-staked-atom"),
+        "STOSMO" => Some("stride-staked-osmo"),
+        "STTIA" => Some("stride-staked-tia"),
+        "STKATOM" => Some("pstake-staked-atom"),
+        "QATOM" => Some("quicksilver-staked-atom"),
+        _ => None,
+    }
+}
+
+/// Get the base token and premium multiplier for LST tokens
+fn get_lst_base_token(symbol: &str) -> Option<(&'static str, f64)> {
+    match symbol.to_uppercase().as_str() {
+        "STATOM" => Some(("cosmos", 1.05)),      // ~5% premium for staking yield
+        "STOSMO" => Some(("osmosis", 1.05)),
+        "STTIA" => Some(("celestia", 1.05)),
+        "STKATOM" => Some(("cosmos", 1.03)),     // ~3% premium
+        "QATOM" => Some(("cosmos", 1.03)),
         _ => None,
     }
 }
@@ -87,6 +105,19 @@ async fn update_prices(state: &AppStateRef, client: &Client) {
                         price_feed.updated_at = Utc::now();
 
                         updated_prices.push(price_feed.clone());
+                    } else {
+                        // For LST tokens, derive price from base token with premium
+                        if let Some((base_id, premium)) = get_lst_base_token(&price_feed.denom) {
+                            if let Some(base_price) = cg_prices.get(base_id) {
+                                price_feed.price_usd = base_price.usd * premium;
+                                price_feed.change_24h = base_price.usd_24h_change.unwrap_or(0.0);
+                                price_feed.volume_24h = 0.0; // LST volume not tracked
+                                price_feed.confidence = 0.95; // Slightly lower confidence for derived price
+                                price_feed.updated_at = Utc::now();
+
+                                updated_prices.push(price_feed.clone());
+                            }
+                        }
                     }
                 }
             }

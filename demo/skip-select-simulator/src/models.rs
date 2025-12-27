@@ -18,6 +18,15 @@ pub struct Intent {
     pub expires_at: DateTime<Utc>,
     pub auction_id: Option<String>,
     pub settlement_id: Option<String>,
+    /// Amount of input that has been filled (for partial fills)
+    #[serde(default)]
+    pub filled_amount: u128,
+    /// Remaining amount to be filled
+    #[serde(default)]
+    pub remaining_amount: u128,
+    /// Fill percentage (0-100)
+    #[serde(default)]
+    pub fill_percentage: u8,
 }
 
 impl Intent {
@@ -25,6 +34,7 @@ impl Intent {
         let id = format!("intent_{}", Uuid::new_v4());
         let now = Utc::now();
         let expires_at = now + chrono::Duration::seconds(req.timeout_seconds.unwrap_or(60) as i64);
+        let input_amount = req.input.amount;
 
         Self {
             id,
@@ -38,6 +48,9 @@ impl Intent {
             expires_at,
             auction_id: None,
             settlement_id: None,
+            filled_amount: 0,
+            remaining_amount: input_amount,
+            fill_percentage: 0,
         }
     }
 
@@ -79,7 +92,7 @@ impl Default for FillConfig {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "snake_case")]
 pub enum FillStrategy {
     Eager,
@@ -113,6 +126,7 @@ pub enum IntentStatus {
     Pending,
     InAuction,
     Matched,
+    PartiallyFilled,
     Settling,
     Completed,
     Failed,
@@ -259,6 +273,15 @@ pub struct Settlement {
     pub updated_at: DateTime<Utc>,
     pub completed_at: Option<DateTime<Utc>>,
     pub events: Vec<SettlementEvent>,
+    /// Whether this is a partial fill settlement
+    #[serde(default)]
+    pub is_partial_fill: bool,
+    /// Fill percentage for partial fills (0-100)
+    #[serde(default)]
+    pub fill_percentage: u8,
+    /// Original requested input amount (for calculating partial fill ratio)
+    #[serde(default)]
+    pub original_input_amount: u128,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]

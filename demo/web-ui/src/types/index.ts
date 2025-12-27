@@ -38,12 +38,19 @@ export interface Intent {
   expires_at: string;
   auction_id?: string;
   settlement_id?: string;
+  /** Amount of input that has been filled (for partial fills) */
+  filled_amount?: number;
+  /** Remaining amount to be filled */
+  remaining_amount?: number;
+  /** Fill percentage (0-100) */
+  fill_percentage?: number;
 }
 
 export type IntentStatus =
   | 'pending'
   | 'in_auction'
   | 'matched'
+  | 'partially_filled'
   | 'settling'
   | 'completed'
   | 'failed'
@@ -143,6 +150,12 @@ export interface Settlement {
   updated_at: string;
   completed_at?: string;
   events: SettlementEvent[];
+  /** Whether this is a partial fill settlement */
+  is_partial_fill?: boolean;
+  /** Fill percentage for partial fills (0-100) */
+  fill_percentage?: number;
+  /** Original requested input amount */
+  original_input_amount?: number;
 }
 
 export type SettlementStatus =
@@ -223,17 +236,80 @@ export const DEMO_SCENARIOS = [
   { id: 'multi_hop', name: 'Multi-Hop', description: 'Cross-chain settlement via IBC PFM' },
   { id: 'cex_backstop', name: 'CEX Backstop', description: 'Large order using CEX liquidity' },
   { id: 'auction_competition', name: 'Auction Competition', description: 'Multiple solvers competing' },
+  { id: 'partial_fill', name: 'Partial Fill', description: 'Order accepting 50%+ partial execution' },
+  { id: 'lst_swap', name: 'LST Swap', description: 'Liquid staking token swap: stATOM → ATOM' },
 ] as const;
 
+// Token type for LSM classification
+export type TokenType = 'native' | 'lst' | 'stablecoin';
+
 // Token configuration
-export const TOKENS: Record<string, { symbol: string; name: string; chain: string; logo: string }> = {
-  ATOM: { symbol: 'ATOM', name: 'Cosmos Hub', chain: 'cosmoshub-4', logo: '⚛️' },
-  OSMO: { symbol: 'OSMO', name: 'Osmosis', chain: 'osmosis-1', logo: '🧪' },
-  USDC: { symbol: 'USDC', name: 'USD Coin', chain: 'noble-1', logo: '💵' },
-  NTRN: { symbol: 'NTRN', name: 'Neutron', chain: 'neutron-1', logo: '⚡' },
-  STRD: { symbol: 'STRD', name: 'Stride', chain: 'stride-1', logo: '🏃' },
-  TIA: { symbol: 'TIA', name: 'Celestia', chain: 'celestia', logo: '🟣' },
+export const TOKENS: Record<string, {
+  symbol: string;
+  name: string;
+  chain: string;
+  logo: string;
+  tokenType?: TokenType;
+  description?: string;
+}> = {
+  // Native tokens
+  ATOM: { symbol: 'ATOM', name: 'Cosmos Hub', chain: 'cosmoshub-4', logo: '⚛️', tokenType: 'native' },
+  OSMO: { symbol: 'OSMO', name: 'Osmosis', chain: 'osmosis-1', logo: '🧪', tokenType: 'native' },
+  NTRN: { symbol: 'NTRN', name: 'Neutron', chain: 'neutron-1', logo: '⚡', tokenType: 'native' },
+  STRD: { symbol: 'STRD', name: 'Stride', chain: 'stride-1', logo: '🏃', tokenType: 'native' },
+  TIA: { symbol: 'TIA', name: 'Celestia', chain: 'celestia', logo: '🟣', tokenType: 'native' },
+
+  // Stablecoins
+  USDC: { symbol: 'USDC', name: 'USD Coin', chain: 'noble-1', logo: '💵', tokenType: 'stablecoin' },
+
+  // Liquid Staking Tokens (LSTs) - Fungible tokens from liquid staking providers
+  // These are fungible derivatives representing staked assets across multiple validators
+  stATOM: {
+    symbol: 'stATOM',
+    name: 'Stride Staked ATOM',
+    chain: 'stride-1',
+    logo: '💧',
+    tokenType: 'lst',
+    description: 'Fungible liquid staking token from Stride representing staked ATOM'
+  },
+  stOSMO: {
+    symbol: 'stOSMO',
+    name: 'Stride Staked OSMO',
+    chain: 'stride-1',
+    logo: '💧',
+    tokenType: 'lst',
+    description: 'Fungible liquid staking token from Stride representing staked OSMO'
+  },
+  stTIA: {
+    symbol: 'stTIA',
+    name: 'Stride Staked TIA',
+    chain: 'stride-1',
+    logo: '💧',
+    tokenType: 'lst',
+    description: 'Fungible liquid staking token from Stride representing staked TIA'
+  },
+  stkATOM: {
+    symbol: 'stkATOM',
+    name: 'pSTAKE Staked ATOM',
+    chain: 'persistence-1',
+    logo: '🔒',
+    tokenType: 'lst',
+    description: 'Fungible liquid staking token from pSTAKE representing staked ATOM'
+  },
+  qATOM: {
+    symbol: 'qATOM',
+    name: 'Quicksilver Liquid Staked ATOM',
+    chain: 'quicksilver-2',
+    logo: '⚡',
+    tokenType: 'lst',
+    description: 'Fungible liquid staking token from Quicksilver using LSM shares internally'
+  },
 };
+
+// Note: Native LSM shares (cosmosvaloperxxxx/recordId format) are non-fungible
+// and validator-specific. They are created directly on Cosmos Hub via MsgTokenizeShares.
+// The LSTs above (stATOM, qATOM, etc.) are fungible derivatives that may use LSM
+// shares internally but are abstracted into a single fungible token.
 
 export const CHAINS = [
   { id: 'cosmoshub-4', name: 'Cosmos Hub' },
@@ -242,4 +318,6 @@ export const CHAINS = [
   { id: 'noble-1', name: 'Noble' },
   { id: 'stride-1', name: 'Stride' },
   { id: 'celestia', name: 'Celestia', hasSmartContracts: false },
+  { id: 'persistence-1', name: 'Persistence' },
+  { id: 'quicksilver-2', name: 'Quicksilver' },
 ];
