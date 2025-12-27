@@ -19,6 +19,7 @@ use tracing::{error, info, warn};
 
 use crate::executor::{ExecutionCoordinator, ExecutionError, ExecutionOutcome, SettlementManager};
 use crate::recovery::{RecoveryAction, RecoveryResult, SettlementState};
+use crate::upgrade::{DrainModeManager, InflightPhase, InflightTracker};
 use crate::validator::IntentValidator;
 
 /// Adapter to wrap TwoPhaseSettlement as SettlementManager trait object
@@ -264,6 +265,10 @@ pub struct IntentOrchestrator {
     intent_statuses: Arc<RwLock<HashMap<String, IntentStatus>>>,
     /// Track active settlements
     active_settlements: Arc<RwLock<HashMap<String, SettlementState>>>,
+    /// Track inflight intents for graceful shutdown
+    inflight_tracker: Arc<InflightTracker>,
+    /// Drain mode manager for graceful shutdown
+    drain_manager: Arc<DrainModeManager>,
 }
 
 impl IntentOrchestrator {
@@ -313,6 +318,10 @@ impl IntentOrchestrator {
             timeout_config,
         ));
 
+        // Create inflight tracker and drain manager for graceful shutdown
+        let inflight_tracker = Arc::new(InflightTracker::new());
+        let drain_manager = Arc::new(DrainModeManager::new(inflight_tracker.clone()));
+
         Self {
             matching_engine,
             solution_aggregator,
@@ -321,7 +330,19 @@ impl IntentOrchestrator {
             config,
             intent_statuses: Arc::new(RwLock::new(HashMap::new())),
             active_settlements: Arc::new(RwLock::new(HashMap::new())),
+            inflight_tracker,
+            drain_manager,
         }
+    }
+
+    /// Get the inflight tracker for monitoring
+    pub fn inflight_tracker(&self) -> Arc<InflightTracker> {
+        self.inflight_tracker.clone()
+    }
+
+    /// Get the drain mode manager for graceful shutdown
+    pub fn drain_manager(&self) -> Arc<DrainModeManager> {
+        self.drain_manager.clone()
     }
 
     /// Process a single intent end-to-end
@@ -332,8 +353,35 @@ impl IntentOrchestrator {
         let intent_id = intent.id.clone();
         info!(intent_id = %intent_id, "Processing intent");
 
+        // Check if we're in drain mode
+        if !self.drain_manager.is_accepting().await {
+            warn!(intent_id = %intent_id, "Rejecting intent - system is draining");
+            return Err(OrchestratorError::DrainModeActive);
+        }
+
+        // Generate a settlement ID for tracking
+        let settlement_id = format!("settlement-{}", intent_id);
+
+        // Register with inflight tracker
+        if let Err(e) = self
+            .inflight_tracker
+            .register(&settlement_id, &intent_id, intent.input.amount)
+            .await
+        {
+            warn!(
+                intent_id = %intent_id,
+                error = %e,
+                "Failed to register inflight intent"
+            );
+            return Err(OrchestratorError::DrainModeActive);
+        }
+
         // Update status to matching
         self.update_status(&intent_id, IntentStatus::Matching).await;
+        let _ = self
+            .inflight_tracker
+            .update_phase(&settlement_id, InflightPhase::Matching)
+            .await;
 
         // Get current timestamp
         let current_time = current_timestamp();
@@ -347,7 +395,7 @@ impl IntentOrchestrator {
             Ok(ExecutionOutcome::Completed {
                 matched_amount,
                 solver_fills,
-                settlement_id,
+                settlement_id: exec_settlement_id,
                 ..
             }) => {
                 // Calculate total output and execution price
@@ -365,7 +413,7 @@ impl IntentOrchestrator {
                     output_amount: total_output,
                     execution_price,
                     solver_id: solver_fills.first().map(|f| f.solver_id.clone()),
-                    settlement_id: settlement_id.clone().unwrap_or_else(|| intent_id.clone()),
+                    settlement_id: exec_settlement_id.clone().unwrap_or_else(|| intent_id.clone()),
                     completed_at: current_time,
                 };
 
@@ -376,6 +424,9 @@ impl IntentOrchestrator {
                     },
                 )
                 .await;
+
+                // Mark as complete in inflight tracker
+                let _ = self.inflight_tracker.complete(&settlement_id).await;
 
                 info!(intent_id = %intent_id, "Intent completed successfully");
                 Ok(result)
@@ -397,6 +448,9 @@ impl IntentOrchestrator {
                 )
                 .await;
 
+                // Mark as complete in inflight tracker (failed is still complete)
+                let _ = self.inflight_tracker.complete(&settlement_id).await;
+
                 Err(OrchestratorError::Execution { source: error })
             }
             Err(e) => {
@@ -410,6 +464,9 @@ impl IntentOrchestrator {
                     },
                 )
                 .await;
+
+                // Mark as complete in inflight tracker (error is still complete)
+                let _ = self.inflight_tracker.complete(&settlement_id).await;
 
                 Err(OrchestratorError::Execution { source: e })
             }
@@ -768,6 +825,9 @@ pub enum OrchestratorError {
 
     #[error("settlement not found: {settlement_id}")]
     SettlementNotFound { settlement_id: String },
+
+    #[error("system is in drain mode - not accepting new intents")]
+    DrainModeActive,
 }
 
 fn current_timestamp() -> u64 {

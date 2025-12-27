@@ -135,3 +135,22 @@ pub const SOLVERS: Map<&str, RegisteredSolver> = Map::new("solvers");
 pub const SETTLEMENTS: Map<&str, Settlement> = Map::new("settlements");
 pub const INTENT_SETTLEMENTS: Map<&str, String> = Map::new("intent_settlements");
 pub const REPUTATIONS: Map<&str, SolverReputation> = Map::new("reputations");
+
+// ═══════════════════════════════════════════════════════════════════════════
+// MIGRATION STATE
+// ═══════════════════════════════════════════════════════════════════════════
+
+/// Tracks migration history for the contract
+#[cw_serde]
+pub struct MigrationInfo {
+    /// Previous version before last migration
+    pub previous_version: Option<String>,
+    /// Current version
+    pub current_version: String,
+    /// Timestamp of last migration
+    pub migrated_at: Option<u64>,
+    /// Number of inflight settlements preserved during last migration
+    pub preserved_inflight_count: u64,
+}
+
+pub const MIGRATION_INFO: Item<MigrationInfo> = Item::new("migration_info");
