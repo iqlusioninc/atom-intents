@@ -1,6 +1,10 @@
 # Generated files
-/target/
+**/target/
 **/*.rs.bk
+
+# Terraform
+*.tfplan
+tfplan
 
 # IDE
 .idea/
