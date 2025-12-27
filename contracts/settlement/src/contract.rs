@@ -1,5 +1,6 @@
 use cosmwasm_std::{
-    entry_point, to_json_binary, Binary, Deps, DepsMut, Env, MessageInfo, Response, StdResult,
+    entry_point, to_json_binary, Binary, Deps, DepsMut, Env, MessageInfo, Order, Response,
+    StdResult,
 };
 
 use crate::error::ContractError;
@@ -10,13 +11,18 @@ use crate::handlers::{
     execute_register_solver, execute_settlement, execute_slash_solver, execute_update_config,
     execute_update_reputation,
 };
-use crate::msg::{ExecuteMsg, InstantiateMsg, QueryMsg};
+use crate::msg::{
+    ConfigUpdate, ExecuteMsg, InflightSettlementsResponse, InstantiateMsg, MigrateMsg,
+    MigrationInfoResponse, QueryMsg, StuckSettlementAction,
+};
 use crate::queries::{
     query_config, query_settlement, query_settlement_by_intent, query_settlements_by_solver,
     query_solver, query_solver_reputation, query_solvers, query_solvers_by_reputation,
     query_top_solvers,
 };
-use crate::state::{Config, CONFIG};
+use crate::state::{
+    Config, MigrationInfo, SettlementStatus, CONFIG, MIGRATION_INFO, SETTLEMENTS,
+};
 
 #[entry_point]
 pub fn instantiate(
@@ -159,7 +165,234 @@ pub fn query(deps: Deps, _env: Env, msg: QueryMsg) -> StdResult<Binary> {
         QueryMsg::SolversByReputation { min_score, limit } => {
             to_json_binary(&query_solvers_by_reputation(deps, min_score, limit)?)
         }
+        QueryMsg::MigrationInfo {} => to_json_binary(&query_migration_info(deps)?),
+        QueryMsg::InflightSettlements { start_after, limit } => {
+            to_json_binary(&query_inflight_settlements(deps, start_after, limit)?)
+        }
     }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// MIGRATION ENTRY POINT
+// ═══════════════════════════════════════════════════════════════════════════
+
+/// Contract version for tracking migrations
+pub const CONTRACT_VERSION: &str = env!("CARGO_PKG_VERSION");
+pub const CONTRACT_NAME: &str = "crates.io:atom-intents-settlement";
+
+#[entry_point]
+pub fn migrate(deps: DepsMut, env: Env, msg: MigrateMsg) -> Result<Response, ContractError> {
+    // 1. Get current migration info (if exists)
+    let current_info = MIGRATION_INFO.may_load(deps.storage)?;
+    let previous_version = current_info.map(|i| i.current_version);
+
+    // 2. Count inflight settlements
+    let inflight = get_inflight_settlement_ids(deps.as_ref())?;
+    let inflight_count = inflight.len() as u64;
+
+    // 3. Check if migration is allowed with inflight settlements
+    if inflight_count > 0 {
+        let preserve = msg.config.as_ref().map(|c| c.preserve_inflight).unwrap_or(true);
+        if !preserve {
+            return Err(ContractError::InflightSettlementsExist {
+                count: inflight_count,
+            });
+        }
+    }
+
+    // 4. Handle stuck settlements based on configuration
+    if let Some(ref config) = msg.config {
+        handle_stuck_settlements(deps.storage, &env, &config.stuck_settlement_action, &inflight)?;
+
+        // Extend timeouts if requested
+        if let Some(extend_secs) = config.extend_timeout_secs {
+            extend_inflight_timeouts(deps.storage, extend_secs, &inflight)?;
+        }
+    }
+
+    // 5. Apply new configuration if provided
+    if let Some(ref config) = msg.config {
+        if let Some(ref new_config) = config.new_config {
+            apply_config_update(deps.storage, deps.api, new_config)?;
+        }
+    }
+
+    // 6. Save migration info
+    let migration_info = MigrationInfo {
+        previous_version: previous_version.clone(),
+        current_version: msg.new_version.clone(),
+        migrated_at: Some(env.block.time.seconds()),
+        preserved_inflight_count: inflight_count,
+    };
+    MIGRATION_INFO.save(deps.storage, &migration_info)?;
+
+    // 7. Emit migration event
+    Ok(Response::new()
+        .add_attribute("action", "migrate")
+        .add_attribute(
+            "from_version",
+            previous_version.unwrap_or_else(|| "none".to_string()),
+        )
+        .add_attribute("to_version", msg.new_version)
+        .add_attribute("preserved_inflight", inflight_count.to_string()))
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// MIGRATION HELPER FUNCTIONS
+// ═══════════════════════════════════════════════════════════════════════════
+
+/// Get all settlement IDs that are not in a terminal state
+fn get_inflight_settlement_ids(deps: Deps) -> StdResult<Vec<String>> {
+    let settlements: Vec<_> = SETTLEMENTS
+        .range(deps.storage, None, None, Order::Ascending)
+        .filter_map(|r| {
+            r.ok().and_then(|(id, settlement)| {
+                if !is_terminal_status(&settlement.status) {
+                    Some(id)
+                } else {
+                    None
+                }
+            })
+        })
+        .collect();
+    Ok(settlements)
+}
+
+/// Check if a settlement status is terminal (completed, failed, slashed)
+fn is_terminal_status(status: &SettlementStatus) -> bool {
+    matches!(
+        status,
+        SettlementStatus::Completed | SettlementStatus::Failed { .. } | SettlementStatus::Slashed { .. }
+    )
+}
+
+/// Handle stuck settlements based on the configured action
+fn handle_stuck_settlements(
+    storage: &mut dyn cosmwasm_std::Storage,
+    env: &Env,
+    action: &StuckSettlementAction,
+    inflight_ids: &[String],
+) -> Result<(), ContractError> {
+    let current_time = env.block.time.seconds();
+
+    for id in inflight_ids {
+        if let Some(mut settlement) = SETTLEMENTS.may_load(storage, id)? {
+            // Check if settlement is stuck (past expiry)
+            if settlement.expires_at < current_time {
+                match action {
+                    StuckSettlementAction::Preserve => {
+                        // Do nothing, keep as-is
+                    }
+                    StuckSettlementAction::RefundAndFail => {
+                        settlement.status = SettlementStatus::Failed {
+                            reason: "Marked failed during migration (past expiry)".to_string(),
+                        };
+                        SETTLEMENTS.save(storage, id, &settlement)?;
+                    }
+                    StuckSettlementAction::ExtendTimeout { additional_seconds } => {
+                        settlement.expires_at = current_time + additional_seconds;
+                        SETTLEMENTS.save(storage, id, &settlement)?;
+                    }
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Extend timeouts for all inflight settlements
+fn extend_inflight_timeouts(
+    storage: &mut dyn cosmwasm_std::Storage,
+    extend_secs: u64,
+    inflight_ids: &[String],
+) -> Result<(), ContractError> {
+    for id in inflight_ids {
+        if let Some(mut settlement) = SETTLEMENTS.may_load(storage, id)? {
+            settlement.expires_at += extend_secs;
+            SETTLEMENTS.save(storage, id, &settlement)?;
+        }
+    }
+    Ok(())
+}
+
+/// Apply configuration updates during migration
+fn apply_config_update<A: cosmwasm_std::Api + ?Sized>(
+    storage: &mut dyn cosmwasm_std::Storage,
+    api: &A,
+    update: &ConfigUpdate,
+) -> Result<(), ContractError> {
+    let mut config = CONFIG.load(storage)?;
+
+    if let Some(ref admin) = update.admin {
+        config.admin = api.addr_validate(admin)?;
+    }
+    if let Some(ref escrow) = update.escrow_contract {
+        config.escrow_contract = api.addr_validate(escrow)?;
+    }
+    if let Some(bond) = update.min_solver_bond {
+        config.min_solver_bond = bond;
+    }
+    if let Some(slash_bps) = update.base_slash_bps {
+        config.base_slash_bps = slash_bps;
+    }
+
+    CONFIG.save(storage, &config)?;
+    Ok(())
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// MIGRATION QUERY HANDLERS
+// ═══════════════════════════════════════════════════════════════════════════
+
+/// Query migration information
+fn query_migration_info(deps: Deps) -> StdResult<MigrationInfoResponse> {
+    let info = MIGRATION_INFO.may_load(deps.storage)?;
+
+    match info {
+        Some(info) => Ok(MigrationInfoResponse {
+            previous_version: info.previous_version,
+            current_version: info.current_version,
+            migrated_at: info.migrated_at,
+            preserved_inflight_count: info.preserved_inflight_count,
+        }),
+        None => Ok(MigrationInfoResponse {
+            previous_version: None,
+            current_version: CONTRACT_VERSION.to_string(),
+            migrated_at: None,
+            preserved_inflight_count: 0,
+        }),
+    }
+}
+
+/// Query inflight settlements (not in terminal state)
+fn query_inflight_settlements(
+    deps: Deps,
+    start_after: Option<String>,
+    limit: Option<u32>,
+) -> StdResult<InflightSettlementsResponse> {
+    let limit = limit.unwrap_or(100).min(500) as usize;
+    let start = start_after.as_deref().map(cw_storage_plus::Bound::exclusive);
+
+    let settlement_ids: Vec<String> = SETTLEMENTS
+        .range(deps.storage, start, None, Order::Ascending)
+        .filter_map(|r| {
+            r.ok().and_then(|(id, settlement)| {
+                if !is_terminal_status(&settlement.status) {
+                    Some(id)
+                } else {
+                    None
+                }
+            })
+        })
+        .take(limit)
+        .collect();
+
+    let count = settlement_ids.len() as u64;
+
+    Ok(InflightSettlementsResponse {
+        settlement_ids,
+        count,
+    })
 }
 
 #[cfg(test)]
