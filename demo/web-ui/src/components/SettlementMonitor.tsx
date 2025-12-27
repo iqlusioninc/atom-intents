@@ -82,9 +82,16 @@ function SettlementCard({ settlement }: { settlement: Settlement }) {
     <div className="card">
       <div className="flex items-start justify-between mb-4">
         <div>
-          <h3 className="font-medium text-white">
-            {settlement.id.slice(0, 24)}...
-          </h3>
+          <div className="flex items-center gap-2">
+            <h3 className="font-medium text-white">
+              {settlement.id.slice(0, 24)}...
+            </h3>
+            {settlement.is_partial_fill && (
+              <span className="text-[10px] px-1.5 py-0.5 bg-cosmos-600/50 text-cosmos-300 rounded-full">
+                {settlement.fill_percentage}% fill
+              </span>
+            )}
+          </div>
           <p className="text-xs text-gray-400">
             Created {formatDistanceToNow(new Date(settlement.created_at), { addSuffix: true })}
           </p>

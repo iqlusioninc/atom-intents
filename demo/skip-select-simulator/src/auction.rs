@@ -98,13 +98,64 @@ async fn run_auction_cycle(state: &AppStateRef) {
 
         // Update intents based on result
         if let Some(winning_quote) = &clearing_result.winning_quote {
+            use rand::Rng;
+            let mut rng = rand::thread_rng();
+
             for intent_id in &winning_quote.intent_ids {
                 if let Some(intent) = state.intents.get_mut(intent_id) {
-                    intent.status = IntentStatus::Matched;
+                    // Simulate partial fills for orders that allow it (30% chance)
+                    let is_partial_fill = intent.fill_config.allow_partial
+                        && intent.fill_config.strategy != FillStrategy::AllOrNothing
+                        && rng.gen_bool(0.30);
+
+                    if is_partial_fill {
+                        // Generate a fill percentage between min_fill_percent and 95%
+                        let min_pct = intent.fill_config.min_fill_percent.max(50) as f64;
+                        let fill_pct = rng.gen_range(min_pct..95.0) as u8;
+                        let filled_amount = (intent.input.amount as f64 * (fill_pct as f64 / 100.0)) as u128;
+                        let remaining_amount = intent.input.amount - filled_amount;
+
+                        intent.status = IntentStatus::PartiallyFilled;
+                        intent.filled_amount = filled_amount;
+                        intent.remaining_amount = remaining_amount;
+                        intent.fill_percentage = fill_pct;
+                    } else {
+                        intent.status = IntentStatus::Matched;
+                        intent.filled_amount = intent.input.amount;
+                        intent.remaining_amount = 0;
+                        intent.fill_percentage = 100;
+                    }
                 }
             }
 
+            // Collect partial fill info for settlement creation
+            let (is_partial, fill_pct, original_amount) = {
+                winning_quote.intent_ids.first()
+                    .and_then(|id| state.intents.get(id))
+                    .map(|intent| (
+                        intent.status == IntentStatus::PartiallyFilled,
+                        intent.fill_percentage,
+                        intent.input.amount
+                    ))
+                    .unwrap_or((false, 100, winning_quote.input_amount))
+            };
+
+            // Calculate actual settlement amounts for partial fills
+            let (settlement_input, settlement_output) = if is_partial {
+                let input = (winning_quote.input_amount as f64 * (fill_pct as f64 / 100.0)) as u128;
+                let output = (winning_quote.output_amount as f64 * (fill_pct as f64 / 100.0)) as u128;
+                (input, output)
+            } else {
+                (winning_quote.input_amount, winning_quote.output_amount)
+            };
+
             // Create settlement
+            let settlement_description = if is_partial {
+                format!("Partial fill settlement ({}%) created from auction", fill_pct)
+            } else {
+                "Settlement created from auction".to_string()
+            };
+
             let settlement = Settlement {
                 id: format!("settlement_{}", Uuid::new_v4()),
                 auction_id: auction.id.clone(),
@@ -112,8 +163,8 @@ async fn run_auction_cycle(state: &AppStateRef) {
                 solver_id: winning_quote.solver_id.clone(),
                 status: SettlementStatus::Pending,
                 phase: SettlementPhase::Init,
-                input_amount: winning_quote.input_amount,
-                output_amount: winning_quote.output_amount,
+                input_amount: settlement_input,
+                output_amount: settlement_output,
                 escrow_txid: None,
                 execution_txid: None,
                 ibc_packet_id: None,
@@ -123,12 +174,17 @@ async fn run_auction_cycle(state: &AppStateRef) {
                 events: vec![SettlementEvent {
                     event_type: "created".to_string(),
                     timestamp: Utc::now(),
-                    description: "Settlement created from auction".to_string(),
+                    description: settlement_description,
                     metadata: serde_json::json!({
                         "auction_id": auction.id,
                         "solver_id": winning_quote.solver_id,
+                        "is_partial_fill": is_partial,
+                        "fill_percentage": fill_pct,
                     }),
                 }],
+                is_partial_fill: is_partial,
+                fill_percentage: fill_pct,
+                original_input_amount: original_amount,
             };
 
             for intent_id in &winning_quote.intent_ids {

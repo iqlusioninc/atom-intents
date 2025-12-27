@@ -301,18 +301,39 @@ async fn process_single_settlement(state: &AppStateRef, settlement_id: &str) {
     }
 
     // Get settlement data for broadcast before dropping the mutable borrow
-    let (settlement_clone, phase, status) = {
+    let (settlement_clone, phase, status, is_partial, fill_pct) = {
         let settlement = state.settlements.get(settlement_id).unwrap();
-        (settlement.clone(), settlement.phase.clone(), settlement.status.clone())
+        (
+            settlement.clone(),
+            settlement.phase.clone(),
+            settlement.status.clone(),
+            settlement.is_partial_fill,
+            settlement.fill_percentage,
+        )
     };
 
     // Now update related state based on current phase
     if current_phase == SettlementPhase::IbcInFlight {
         if success {
-            // Update intent status
+            // Update intent status based on whether this was a partial fill
             for intent_id in &intent_ids {
                 if let Some(intent) = state.intents.get_mut(intent_id) {
-                    intent.status = IntentStatus::Completed;
+                    if is_partial {
+                        // For partial fills, the settlement completes the partial portion
+                        // Intent remains as PartiallyFilled with the remaining unfilled portion
+                        // In a real system, the remaining could go back to matching
+                        intent.status = IntentStatus::Completed;
+                        // Update filled_amount to reflect the settled portion
+                        let settled_amount = (intent.input.amount as f64 * (fill_pct as f64 / 100.0)) as u128;
+                        intent.filled_amount = settled_amount;
+                        intent.fill_percentage = fill_pct;
+                        intent.remaining_amount = intent.input.amount - settled_amount;
+                    } else {
+                        intent.status = IntentStatus::Completed;
+                        intent.filled_amount = intent.input.amount;
+                        intent.fill_percentage = 100;
+                        intent.remaining_amount = 0;
+                    }
                 }
             }
 
@@ -325,6 +346,13 @@ async fn process_single_settlement(state: &AppStateRef, settlement_id: &str) {
             state.stats.pending_intents = state.stats.pending_intents.saturating_sub(
                 intent_ids.len() as u64
             );
+
+            if is_partial {
+                info!(
+                    "Settlement {} - partial fill ({}%) completed successfully",
+                    settlement_id, fill_pct
+                );
+            }
         } else {
             // Update intent status for failure
             for intent_id in &intent_ids {
