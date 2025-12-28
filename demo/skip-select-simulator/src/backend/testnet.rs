@@ -815,20 +815,34 @@ impl ExecutionBackend for TestnetBackend {
         &self,
         settlement: &Settlement,
     ) -> Result<SettlementResult, BackendError> {
+        // Use intent data from settlement (with fallbacks for backward compatibility)
+        let input_denom = if settlement.input_denom.is_empty() {
+            "uatom"
+        } else {
+            &settlement.input_denom
+        };
+        let output_denom = if settlement.output_denom.is_empty() {
+            "uosmo"
+        } else {
+            &settlement.output_denom
+        };
+        let user_output_address = if settlement.user_output_address.is_empty() {
+            &settlement.user_address
+        } else {
+            &settlement.user_output_address
+        };
+
         info!(
             settlement_id = %settlement.id,
             solver_id = %settlement.solver_id,
             input_amount = settlement.input_amount,
             output_amount = settlement.output_amount,
+            input_denom = %input_denom,
+            output_denom = %output_denom,
+            user_address = %settlement.user_address,
             simulation_mode = self.simulation_mode,
             "Executing settlement on testnet"
         );
-
-        // Extract denomination info from intent (fallback to defaults)
-        // TODO: Wire this properly from the intent data
-        let input_denom = "uatom";
-        let output_denom = "uosmo";
-        let user_output_address = ""; // Would come from intent
 
         // Phase 1: Create settlement in contract
         let create_msg = self.build_create_settlement_msg(
