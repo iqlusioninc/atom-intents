@@ -1,0 +1,16 @@
+{
+  "chain_id": "pion-1",
+  "rpc_url": "https://neutron-testnet-rpc.polkachu.com:443",
+  "deployer": "neutron1q6u2k563ep39un0p0j0p6ked5653dr0y8yj7l2",
+  "timestamp": "2024-12-28T09:55:00Z",
+  "contracts": {
+    "settlement": {
+      "code_id": 13671,
+      "address": "neutron17c6wr9krx2m4earvyyn8p428tyrpk9dka30axh2drfv3udw7wqgsh4ewfu"
+    },
+    "escrow": {
+      "code_id": 13672,
+      "address": "neutron1vytx7tejzyejjurawm8jltvtq9qrwyu73w2fxmchqgs057d9xrfqm3t4j6"
+    }
+  }
+}

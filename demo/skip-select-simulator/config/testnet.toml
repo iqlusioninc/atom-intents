@@ -4,7 +4,7 @@
 # Update the contract addresses after deploying with ./scripts/deploy-contracts.sh
 
 # Primary chain for settlement
-primary_chain = "theta-testnet-001"
+primary_chain = "provider"
 
 # Settlement timeout in seconds
 settlement_timeout_secs = 600
@@ -12,16 +12,16 @@ settlement_timeout_secs = 600
 # Enable debug logging
 debug = true
 
-# Contract addresses (update after deployment)
+# Contract addresses - Deployed 2024-12-28
 [contracts]
-settlement_address = "cosmos14hj2tavq8fpesdwxxcu44rty3hh90vhujrvcmstl4zr3txmfvw9s4hmalr"
-escrow_address = "cosmos1nc5tatafv6eyq7llkr2gv50ff9e22mnf70qgjlv737ktmt4eswrqvp52rq"
+settlement_address = "cosmos1xwft7w6kcspzufftw6ky4f5e8sykumpuenpm34tkxk4epmya0jdsahgsff"
+escrow_address = "cosmos13jv2umdqvlkfncpd6vf7r2sc0ljdtenmzujlpqqpgagarassqsws86phq9"
 
-# Cosmos Hub Testnet (Theta)
-[chains.theta-testnet-001]
-chain_id = "theta-testnet-001"
-rpc_url = "https://rpc.sentry-01.theta-testnet.polypore.xyz:443"
-grpc_url = "https://grpc.sentry-01.theta-testnet.polypore.xyz:443"
+# Cosmos Hub Provider Testnet (ICS)
+[chains.provider]
+chain_id = "provider"
+rpc_url = "https://cosmos-testnet-rpc.polkachu.com:443"
+grpc_url = "https://cosmos-testnet-grpc.polkachu.com:443"
 gas_price = "0.025"
 fee_denom = "uatom"
 account_prefix = "cosmos"
@@ -44,8 +44,8 @@ max_retries = 3
 # Neutron Testnet (Pion)
 [chains.pion-1]
 chain_id = "pion-1"
-rpc_url = "https://rpc-palvus.pion-1.ntrn.tech:443"
-grpc_url = "https://grpc-palvus.pion-1.ntrn.tech:443"
+rpc_url = "https://neutron-testnet-rpc.polkachu.com:443"
+grpc_url = "https://neutron-testnet-grpc.polkachu.com:443"
 gas_price = "0.025"
 fee_denom = "untrn"
 account_prefix = "neutron"

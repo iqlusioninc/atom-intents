@@ -267,7 +267,6 @@ dependencies = [
 name = "atom-intents-escrow"
 version = "0.1.0"
 dependencies = [
- "atom-intents-types",
  "cosmwasm-schema",
  "cosmwasm-std",
  "cw-storage-plus",
@@ -383,7 +382,6 @@ dependencies = [
 name = "atom-intents-settlement-contract"
 version = "0.1.0"
 dependencies = [
- "atom-intents-types",
  "cosmwasm-schema",
  "cosmwasm-std",
  "cw-storage-plus",
@@ -419,6 +417,7 @@ version = "0.1.0"
 dependencies = [
  "cosmwasm-schema",
  "cosmwasm-std",
+ "getrandom 0.2.16",
  "hex",
  "k256",
  "rust_decimal",

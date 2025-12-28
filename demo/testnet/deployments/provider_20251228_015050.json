@@ -1,0 +1,16 @@
+{
+  "chain_id": "provider",
+  "rpc_url": "https://cosmos-testnet-rpc.polkachu.com:443",
+  "deployer": "cosmos1q6u2k563ep39un0p0j0p6ked5653dr0yrmmu9d",
+  "timestamp": "2024-12-28T09:45:00Z",
+  "contracts": {
+    "settlement": {
+      "code_id": 168,
+      "address": "cosmos1xwft7w6kcspzufftw6ky4f5e8sykumpuenpm34tkxk4epmya0jdsahgsff"
+    },
+    "escrow": {
+      "code_id": 169,
+      "address": "cosmos13jv2umdqvlkfncpd6vf7r2sc0ljdtenmzujlpqqpgagarassqsws86phq9"
+    }
+  }
+}
