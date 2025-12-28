@@ -2,6 +2,7 @@ version: '3.8'
 
 services:
   # Skip Select Simulator (Coordination Layer)
+  # Running in TESTNET mode with real smart contracts
   skip-select:
     build:
       context: ../skip-select-simulator
@@ -11,7 +12,6 @@ services:
     environment:
       - SKIP_SELECT_PORT=8080
       - AUCTION_INTERVAL_MS=500
-      - MOCK_LATENCY_MS=100
       - ENABLE_ANALYTICS=true
       - RUST_LOG=info,skip_select_simulator=debug
     healthcheck:
