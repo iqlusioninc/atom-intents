@@ -52,6 +52,8 @@ This document specifies an intent-based trading system for Cosmos Hub that achie
 
 ## Part IV: Solver Layer
 8. [Solver Framework](#8-solver-framework)
+   - 8.1 [Solver Interface](#81-solver-interface)
+   - 8.2 [Solver Registration and Bond Locking](#82-solver-registration-and-bond-locking)
 9. [DEX Routing Solver](#9-dex-routing-solver)
 10. [CEX Backstop Solver](#10-cex-backstop-solver)
 11. [Solution Aggregation](#11-solution-aggregation)
@@ -773,6 +775,117 @@ pub enum ExecutionPlan {
     CrossEcosystem { bridge: String, target: String },
 }
 ```
+
+## 8.2 Solver Registration and Bond Locking
+
+Solvers must lock funds (bonds) when registering with the system. This section clarifies the purpose of fund locking and how it differs from quote validation.
+
+### Why Solvers Lock Funds
+
+The bond is **NOT** primarily about preventing solvers from submitting quotes they can't fill. Instead, it serves these critical purposes:
+
+| Purpose | Description |
+|---------|-------------|
+| **Post-commitment accountability** | Once a solver wins an auction and commits, they MUST follow through. The bond ensures consequences for abandonment. |
+| **Asymmetric IBC failure protection** | Prevents solvers from losing output if IBC times out before receiving user input. |
+| **Griefing prevention** | Without bonds, malicious solvers could win auctions, never execute, and face no consequences. |
+| **Trust minimization** | Replaces trust with economic incentives—no oracle or reputation system needed. |
+
+### Quote Phase vs. Commitment Phase
+
+```
+┌─────────────────────────────────────────────────────────────────────────────────┐
+│  QUOTE PHASE (off-chain, no funds at risk)                                      │
+│  ─────────────────────────────────────────                                      │
+│  • Solver provides quotes/bids in auction                                       │
+│  • Solver can withdraw/update quotes freely                                     │
+│  • No bond is at risk yet                                                       │
+│  • Bad quotes simply don't win auctions—market competition handles this         │
+└─────────────────────────────────────────────────────────────────────────────────┘
+                                    │
+                                    ▼
+┌─────────────────────────────────────────────────────────────────────────────────┐
+│  COMMITMENT PHASE (on-chain, bond now at risk)                                  │
+│  ─────────────────────────────────────────────                                  │
+│  • Solver wins auction and commits to fill                                      │
+│  • User locks input in escrow                                                   │
+│  • Solver's bond is now at stake for this settlement                            │
+│  • Failure to complete = slashing                                               │
+└─────────────────────────────────────────────────────────────────────────────────┘
+                                    │
+                                    ▼
+┌─────────────────────────────────────────────────────────────────────────────────┐
+│  EXECUTION PHASE (IBC transfer in flight)                                       │
+│  ─────────────────────────────────────────                                      │
+│  • Solver sends output to user via IBC                                          │
+│  • If solver fails to deliver → SLASHED                                         │
+│  • If IBC times out → bond protects against asymmetric loss                     │
+│  • On success → user input released to solver                                   │
+└─────────────────────────────────────────────────────────────────────────────────┘
+```
+
+### The Asymmetric IBC Failure Problem
+
+This is the **primary reason** for solver bonding:
+
+```
+SOLVER EXPOSURE TIMELINE (without bonding)
+══════════════════════════════════════════
+
+T+0s     Solver commits output (104,000 USDC)
+         ┌────────────────────────────────────────────────────────────────┐
+         │                      EXPOSURE WINDOW                           │
+         │                                                                │
+         │  Solver has sent output but hasn't received input yet          │
+         │                                                                │
+         │  RISK: If user's IBC transfer times out:                       │
+         │    • Solver loses output (already delivered to user)           │
+         │    • User keeps their input (IBC timeout refunds them)         │
+         │    • Result: One-way asset loss for solver                     │
+         │                                                                │
+         └────────────────────────────────────────────────────────────────┘
+T+???    Input confirmed, exposure ends
+```
+
+**The bond creates symmetric risk**: If a solver fails, they face slashing, making it unprofitable to commit to settlements they can't complete.
+
+### What Prevents Bad Quotes?
+
+Bad quotes are handled through different mechanisms—NOT bonding:
+
+| Mechanism | How It Works |
+|-----------|--------------|
+| **Competition** | Solvers compete in auctions—bad quotes simply lose to better ones |
+| **Quote validity windows** | Quotes expire quickly (3 seconds for CEX quotes) limiting stale quote risk |
+| **Reputation** | Solvers with consistent failures can be deregistered |
+| **No commitment until win** | Solvers only commit resources after winning an auction |
+
+### Bond Configuration
+
+```rust
+pub struct SolverConfig {
+    /// Minimum bond required to register as a solver
+    pub min_solver_bond: Uint128,       // e.g., 100 ATOM
+
+    /// Base slash percentage for failed settlements
+    pub base_slash_bps: u64,            // e.g., 200 = 2%
+
+    /// Minimum slash amount (prevents dust attacks)
+    pub min_slash_amount: Uint128,      // e.g., 10 ATOM
+
+    /// Multiplier for repeat offenders
+    pub repeat_slash_multiplier: Decimal, // e.g., 2.0x after 3 failures
+}
+```
+
+### Summary
+
+| Aspect | Bond's Role |
+|--------|-------------|
+| **Quote quality** | ❌ Not the bond's job—competition handles this |
+| **Post-commitment execution** | ✅ Primary purpose—ensures follow-through |
+| **IBC failure protection** | ✅ Primary purpose—prevents asymmetric losses |
+| **System trust model** | ✅ Replaces trust with economics |
 
 ---
 
