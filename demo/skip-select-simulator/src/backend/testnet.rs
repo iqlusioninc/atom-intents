@@ -8,12 +8,16 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use async_trait::async_trait;
+use cosmos_sdk_proto::cosmos::tx::v1beta1::TxRaw;
+use cosmos_sdk_proto::traits::Message;
 use serde_json::json;
 use tokio::sync::{broadcast, RwLock};
 use tracing::{debug, error, info, warn};
 use uuid::Uuid;
 
 use super::config::TestnetConfig;
+use super::tx_builder::{AccountInfo, TxBuilder};
+use super::wallet::{load_wallet_from_env, CosmosWallet};
 use super::{
     build_explorer_url, BackendError, BackendEvent, BackendMode, ContractAddresses,
     EscrowLockResult, ExecutionBackend, SettlementResult,
@@ -118,6 +122,249 @@ impl SimpleChainClient {
 
         Ok(!catching_up)
     }
+
+    /// Get account info (account_number and sequence) for signing
+    pub async fn get_account_info(&self, address: &str) -> Result<AccountInfo, BackendError> {
+        // Use REST endpoint for account info
+        let rpc_base = self.rpc_url.trim_end_matches('/');
+        // Convert RPC port to REST port (typically 26657 -> 1317)
+        let rest_url = rpc_base
+            .replace(":26657", ":1317")
+            .replace(":26667", ":1327");
+
+        let url = format!("{}/cosmos/auth/v1beta1/accounts/{}", rest_url, address);
+
+        debug!(url = %url, address = %address, "Querying account info");
+
+        let response = self
+            .client
+            .get(&url)
+            .timeout(self.timeout)
+            .send()
+            .await
+            .map_err(|e| BackendError::ConnectionFailed(format!("Account query failed: {}", e)))?;
+
+        if !response.status().is_success() {
+            let status = response.status();
+            let body = response.text().await.unwrap_or_default();
+
+            // Check if account doesn't exist (new account)
+            if status.as_u16() == 404 || body.contains("not found") {
+                debug!(address = %address, "Account not found, returning default (0, 0)");
+                return Ok(AccountInfo {
+                    account_number: 0,
+                    sequence: 0,
+                });
+            }
+
+            return Err(BackendError::ConnectionFailed(format!(
+                "Account query failed with status {}: {}",
+                status, body
+            )));
+        }
+
+        let json: serde_json::Value = response.json().await.map_err(|e| {
+            BackendError::ConnectionFailed(format!("Failed to parse account response: {}", e))
+        })?;
+
+        // Handle different account types (BaseAccount, ModuleAccount, etc.)
+        let account = &json["account"];
+
+        // Try to get from base_account first (for ModuleAccount, etc.)
+        let base_account = account.get("base_account").unwrap_or(account);
+
+        let account_number = base_account["account_number"]
+            .as_str()
+            .and_then(|s| s.parse::<u64>().ok())
+            .unwrap_or(0);
+
+        let sequence = base_account["sequence"]
+            .as_str()
+            .and_then(|s| s.parse::<u64>().ok())
+            .unwrap_or(0);
+
+        debug!(
+            address = %address,
+            account_number = account_number,
+            sequence = sequence,
+            "Got account info"
+        );
+
+        Ok(AccountInfo {
+            account_number,
+            sequence,
+        })
+    }
+
+    /// Broadcast a signed transaction
+    pub async fn broadcast_tx(&self, tx: &TxRaw) -> Result<BroadcastResult, BackendError> {
+        let tx_bytes = tx.encode_to_vec();
+        let tx_b64 = base64::Engine::encode(
+            &base64::engine::general_purpose::STANDARD,
+            &tx_bytes,
+        );
+
+        // Use broadcast_tx_sync for faster response, then poll for confirmation
+        let url = format!("{}/broadcast_tx_sync", self.rpc_url);
+
+        let body = json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "broadcast_tx_sync",
+            "params": {
+                "tx": tx_b64
+            }
+        });
+
+        debug!(url = %url, "Broadcasting transaction");
+
+        let response = self
+            .client
+            .post(&url)
+            .json(&body)
+            .timeout(self.timeout)
+            .send()
+            .await
+            .map_err(|e| BackendError::TransactionFailed(format!("Broadcast failed: {}", e)))?;
+
+        let json: serde_json::Value = response.json().await.map_err(|e| {
+            BackendError::TransactionFailed(format!("Failed to parse broadcast response: {}", e))
+        })?;
+
+        // Check for RPC-level error
+        if let Some(error) = json.get("error") {
+            return Err(BackendError::TransactionFailed(format!(
+                "RPC error: {}",
+                error
+            )));
+        }
+
+        let result = &json["result"];
+
+        // Check for transaction-level error (CheckTx failure)
+        let code = result["code"].as_u64().unwrap_or(0);
+        if code != 0 {
+            let log = result["log"].as_str().unwrap_or("Unknown error");
+            return Err(BackendError::TransactionFailed(format!(
+                "Transaction rejected (code {}): {}",
+                code, log
+            )));
+        }
+
+        let tx_hash = result["hash"]
+            .as_str()
+            .ok_or_else(|| BackendError::TransactionFailed("No tx hash in response".to_string()))?
+            .to_string();
+
+        info!(
+            tx_hash = %tx_hash,
+            chain_id = %self.chain_id,
+            "Transaction broadcast successful"
+        );
+
+        Ok(BroadcastResult {
+            tx_hash,
+            code: 0,
+        })
+    }
+
+    /// Wait for a transaction to be included in a block
+    pub async fn wait_for_tx(
+        &self,
+        tx_hash: &str,
+        max_attempts: u32,
+        poll_interval_ms: u64,
+    ) -> Result<TxResult, BackendError> {
+        let url = format!("{}/tx?hash=0x{}", self.rpc_url, tx_hash);
+
+        for attempt in 1..=max_attempts {
+            debug!(
+                tx_hash = %tx_hash,
+                attempt = attempt,
+                max_attempts = max_attempts,
+                "Polling for transaction"
+            );
+
+            let response = self
+                .client
+                .get(&url)
+                .timeout(self.timeout)
+                .send()
+                .await;
+
+            match response {
+                Ok(resp) => {
+                    let json: serde_json::Value = resp.json().await.map_err(|e| {
+                        BackendError::TransactionFailed(format!("Failed to parse tx response: {}", e))
+                    })?;
+
+                    // Check if tx was found
+                    if let Some(result) = json.get("result") {
+                        let height = result["height"]
+                            .as_str()
+                            .and_then(|s| s.parse::<u64>().ok())
+                            .unwrap_or(0);
+
+                        let tx_result = &result["tx_result"];
+                        let code = tx_result["code"].as_u64().unwrap_or(0);
+
+                        if code != 0 {
+                            let log = tx_result["log"].as_str().unwrap_or("Unknown error");
+                            return Err(BackendError::TransactionFailed(format!(
+                                "Transaction failed (code {}): {}",
+                                code, log
+                            )));
+                        }
+
+                        info!(
+                            tx_hash = %tx_hash,
+                            height = height,
+                            "Transaction confirmed"
+                        );
+
+                        return Ok(TxResult {
+                            tx_hash: tx_hash.to_string(),
+                            height,
+                            code: 0,
+                        });
+                    }
+                }
+                Err(e) => {
+                    debug!(
+                        tx_hash = %tx_hash,
+                        attempt = attempt,
+                        error = %e,
+                        "Failed to query transaction, retrying"
+                    );
+                }
+            }
+
+            // Wait before next poll
+            if attempt < max_attempts {
+                tokio::time::sleep(Duration::from_millis(poll_interval_ms)).await;
+            }
+        }
+
+        Err(BackendError::Timeout(format!(
+            "Transaction {} not confirmed after {} attempts",
+            tx_hash, max_attempts
+        )))
+    }
+}
+
+/// Result of broadcasting a transaction
+#[derive(Debug, Clone)]
+pub struct BroadcastResult {
+    pub tx_hash: String,
+    pub code: u64,
+}
+
+/// Result of a confirmed transaction
+#[derive(Debug, Clone)]
+pub struct TxResult {
+    pub tx_hash: String,
+    pub height: u64,
+    pub code: u64,
 }
 
 /// Testnet execution backend
@@ -126,17 +373,28 @@ pub struct TestnetBackend {
     config: TestnetConfig,
     /// Chain clients by chain_id
     chain_clients: HashMap<String, Arc<SimpleChainClient>>,
+    /// Wallet for signing transactions (loaded from env)
+    wallet: Option<CosmosWallet>,
     /// Escrow tracking (escrow_id -> settlement_id)
     escrow_map: Arc<RwLock<HashMap<String, String>>>,
+    /// Cached account sequence to avoid race conditions
+    account_sequence: Arc<RwLock<u64>>,
     /// Event broadcaster
     event_tx: broadcast::Sender<BackendEvent>,
     /// Whether we've verified connectivity
     connected: Arc<RwLock<bool>>,
+    /// Whether to use simulation mode (no real broadcasts)
+    simulation_mode: bool,
 }
 
 impl TestnetBackend {
     /// Create a new testnet backend from configuration
     pub async fn new(config: TestnetConfig) -> Result<Self, BackendError> {
+        Self::new_with_options(config, false).await
+    }
+
+    /// Create a testnet backend with simulation mode option
+    pub async fn new_with_options(config: TestnetConfig, simulation_mode: bool) -> Result<Self, BackendError> {
         let (event_tx, _) = broadcast::channel(256);
 
         let mut chain_clients = HashMap::new();
@@ -151,16 +409,68 @@ impl TestnetBackend {
             chain_clients.insert(chain_id.clone(), Arc::new(client));
         }
 
+        // Try to load wallet from environment
+        let wallet = match load_wallet_from_env(&config.primary_chain) {
+            Ok(w) => {
+                let addr = w.address().unwrap_or_default();
+                info!(
+                    chain_id = %config.primary_chain,
+                    address = %addr,
+                    "Loaded wallet for testnet transactions"
+                );
+                Some(w)
+            }
+            Err(e) => {
+                if simulation_mode {
+                    warn!(
+                        error = %e,
+                        "No wallet configured, running in simulation mode"
+                    );
+                    None
+                } else {
+                    // In non-simulation mode, we need a wallet
+                    warn!(
+                        error = %e,
+                        "No wallet configured. Set COSMOS_PRIVATE_KEY or chain-specific key. Falling back to simulation mode."
+                    );
+                    None
+                }
+            }
+        };
+
+        // Determine if we should use simulation mode
+        let use_simulation = simulation_mode || wallet.is_none();
+
         let backend = Self {
             config,
             chain_clients,
+            wallet,
             escrow_map: Arc::new(RwLock::new(HashMap::new())),
+            account_sequence: Arc::new(RwLock::new(0)),
             event_tx,
             connected: Arc::new(RwLock::new(false)),
+            simulation_mode: use_simulation,
         };
 
         // Verify connectivity
         backend.verify_connectivity().await?;
+
+        // If we have a wallet, fetch initial sequence
+        if let Some(ref wallet) = backend.wallet {
+            if let Ok(addr) = wallet.address() {
+                if let Ok(client) = backend.primary_client() {
+                    if let Ok(info) = client.get_account_info(&addr).await {
+                        *backend.account_sequence.write().await = info.sequence;
+                        info!(
+                            address = %addr,
+                            account_number = info.account_number,
+                            sequence = info.sequence,
+                            "Initialized account sequence"
+                        );
+                    }
+                }
+            }
+        }
 
         Ok(backend)
     }
@@ -292,8 +602,63 @@ impl TestnetBackend {
         let _ = self.event_tx.send(event);
     }
 
+    /// Execute a contract call, either simulated or real
+    async fn execute_contract_call(
+        &self,
+        contract: &str,
+        msg: &serde_json::Value,
+        funds: Vec<(u128, &str)>,
+        msg_type: &str,
+    ) -> Result<(String, u64), BackendError> {
+        if self.simulation_mode {
+            return self.simulate_tx_broadcast(msg_type).await;
+        }
+
+        // Real transaction execution
+        let wallet = self.wallet.as_ref().ok_or_else(|| {
+            BackendError::ConfigError("No wallet configured for real transactions".to_string())
+        })?;
+
+        let client = self.primary_client()?;
+        let sender = wallet.address().map_err(|e| {
+            BackendError::Internal(format!("Failed to get wallet address: {}", e))
+        })?;
+
+        // Get account info (use cached sequence for performance)
+        let account_info = client.get_account_info(&sender).await?;
+
+        // Build the transaction
+        let memo = format!("atom-intents demo: {}", msg_type);
+        let tx_builder = TxBuilder::new(&self.config.primary_chain)
+            .with_memo(&memo);
+
+        let execute_msg = tx_builder
+            .build_execute_msg(&sender, contract, msg, funds)
+            .map_err(|e| BackendError::ContractCallFailed(format!("Failed to build message: {}", e)))?;
+
+        let tx = tx_builder
+            .build_and_sign(wallet, &account_info, execute_msg)
+            .map_err(|e| BackendError::TransactionFailed(format!("Failed to sign transaction: {}", e)))?;
+
+        // Broadcast the transaction
+        let broadcast_result = client.broadcast_tx(&tx).await?;
+
+        // Update cached sequence
+        {
+            let mut seq = self.account_sequence.write().await;
+            *seq = account_info.sequence + 1;
+        }
+
+        // Wait for confirmation
+        let tx_result = client
+            .wait_for_tx(&broadcast_result.tx_hash, 30, 1000)
+            .await?;
+
+        Ok((tx_result.tx_hash, tx_result.height))
+    }
+
     /// Simulate a successful transaction for demo purposes
-    /// In production, this would actually broadcast and wait for confirmation
+    /// Used when no wallet is configured or in simulation mode
     async fn simulate_tx_broadcast(&self, msg_type: &str) -> Result<(String, u64), BackendError> {
         // Get current height
         let client = self.primary_client()?;
@@ -310,13 +675,24 @@ impl TestnetBackend {
             msg_type = %msg_type,
             tx_hash = %tx_hash,
             height = height,
-            "Simulated transaction broadcast (demo mode)"
+            simulation_mode = true,
+            "Simulated transaction broadcast (no wallet configured)"
         );
 
         // Small delay to simulate block time
         tokio::time::sleep(Duration::from_millis(500)).await;
 
         Ok((tx_hash, height + 1))
+    }
+
+    /// Check if running in simulation mode
+    pub fn is_simulation_mode(&self) -> bool {
+        self.simulation_mode
+    }
+
+    /// Get the wallet address (if configured)
+    pub fn wallet_address(&self) -> Option<String> {
+        self.wallet.as_ref().and_then(|w| w.address().ok())
     }
 }
 
@@ -346,15 +722,22 @@ impl ExecutionBackend for TestnetBackend {
             user = %user,
             amount = amount,
             denom = %denom,
+            simulation_mode = self.simulation_mode,
             "Locking escrow on testnet"
         );
 
         // Build the lock message
-        let _msg = self.build_lock_msg(user, timeout_secs);
+        let msg = self.build_lock_msg(user, timeout_secs);
 
-        // In production: broadcast transaction to chain
-        // For demo: simulate the broadcast
-        let (tx_hash, block_height) = self.simulate_tx_broadcast("escrow_lock").await?;
+        // Execute contract call (real or simulated)
+        let (tx_hash, block_height) = self
+            .execute_contract_call(
+                &self.config.contracts.escrow_address,
+                &msg,
+                vec![(amount, denom)],
+                "escrow_lock",
+            )
+            .await?;
 
         // Track the escrow
         {
@@ -389,14 +772,20 @@ impl ExecutionBackend for TestnetBackend {
         info!(
             escrow_id = %escrow_id,
             recipient = %recipient,
+            simulation_mode = self.simulation_mode,
             "Releasing escrow on testnet"
         );
 
-        let _msg = self.build_release_msg(escrow_id, recipient);
+        let msg = self.build_release_msg(escrow_id, recipient);
 
-        // In production: broadcast transaction
-        // For demo: simulate
-        let (tx_hash, _block_height) = self.simulate_tx_broadcast("escrow_release").await?;
+        let (tx_hash, _block_height) = self
+            .execute_contract_call(
+                &self.config.contracts.escrow_address,
+                &msg,
+                vec![],
+                "escrow_release",
+            )
+            .await?;
 
         Ok(Some(tx_hash))
     }
@@ -404,14 +793,20 @@ impl ExecutionBackend for TestnetBackend {
     async fn refund_escrow(&self, escrow_id: &str) -> Result<Option<String>, BackendError> {
         info!(
             escrow_id = %escrow_id,
+            simulation_mode = self.simulation_mode,
             "Refunding escrow on testnet"
         );
 
-        let _msg = self.build_refund_msg(escrow_id);
+        let msg = self.build_refund_msg(escrow_id);
 
-        // In production: broadcast transaction
-        // For demo: simulate
-        let (tx_hash, _block_height) = self.simulate_tx_broadcast("escrow_refund").await?;
+        let (tx_hash, _block_height) = self
+            .execute_contract_call(
+                &self.config.contracts.escrow_address,
+                &msg,
+                vec![],
+                "escrow_refund",
+            )
+            .await?;
 
         Ok(Some(tx_hash))
     }
@@ -425,23 +820,37 @@ impl ExecutionBackend for TestnetBackend {
             solver_id = %settlement.solver_id,
             input_amount = settlement.input_amount,
             output_amount = settlement.output_amount,
+            simulation_mode = self.simulation_mode,
             "Executing settlement on testnet"
         );
 
+        // Extract denomination info from intent (fallback to defaults)
+        // TODO: Wire this properly from the intent data
+        let input_denom = "uatom";
+        let output_denom = "uosmo";
+        let user_output_address = ""; // Would come from intent
+
         // Phase 1: Create settlement in contract
-        let _create_msg = self.build_create_settlement_msg(
+        let create_msg = self.build_create_settlement_msg(
             &settlement.id,
             settlement.intent_ids.first().map(|s| s.as_str()).unwrap_or(""),
             &settlement.solver_id,
-            "", // Would be from intent
+            user_output_address,
             settlement.input_amount,
-            "uatom", // Would be from intent
+            input_denom,
             settlement.output_amount,
-            "uosmo", // Would be from intent
+            output_denom,
             self.config.settlement_timeout_secs,
         );
 
-        let (tx_hash, block_height) = self.simulate_tx_broadcast("create_settlement").await?;
+        let (tx_hash, block_height) = self
+            .execute_contract_call(
+                &self.config.contracts.settlement_address,
+                &create_msg,
+                vec![],
+                "create_settlement",
+            )
+            .await?;
 
         // Emit solver committed event
         self.emit(BackendEvent::SolverCommitted {
@@ -450,10 +859,24 @@ impl ExecutionBackend for TestnetBackend {
             tx_hash: Some(tx_hash.clone()),
         });
 
-        // Phase 2: Simulate IBC transfer
+        // Phase 2: IBC transfer
+        // Note: Real IBC transfers require relayer infrastructure
+        // For now, we simulate this step even in real mode
         tokio::time::sleep(Duration::from_millis(500)).await;
 
-        let (ibc_tx_hash, _) = self.simulate_tx_broadcast("ibc_transfer").await?;
+        let ibc_tx_hash = if self.simulation_mode {
+            let (hash, _) = self.simulate_tx_broadcast("ibc_transfer").await?;
+            hash
+        } else {
+            // In real mode, we would initiate an actual IBC transfer here
+            // For now, still simulate but log that this needs implementation
+            warn!(
+                settlement_id = %settlement.id,
+                "IBC transfer requires relayer - simulating for now"
+            );
+            let (hash, _) = self.simulate_tx_broadcast("ibc_transfer").await?;
+            hash
+        };
 
         self.emit(BackendEvent::IbcTransferStarted {
             settlement_id: settlement.id.clone(),
@@ -485,6 +908,7 @@ impl ExecutionBackend for TestnetBackend {
                 settlement_id = %settlement.id,
                 tx_hash = %tx_hash,
                 explorer_url = ?explorer_url,
+                simulation_mode = self.simulation_mode,
                 "Settlement completed on testnet"
             );
 
@@ -592,13 +1016,37 @@ mod tests {
         let backend = TestnetBackend {
             config,
             chain_clients: HashMap::new(),
+            wallet: None,
             escrow_map: Arc::new(RwLock::new(HashMap::new())),
+            account_sequence: Arc::new(RwLock::new(0)),
             event_tx,
             connected: Arc::new(RwLock::new(false)),
+            simulation_mode: true,
         };
 
         let msg = backend.build_lock_msg("cosmos1user...", 600);
         assert!(msg["lock"]["owner"].as_str().is_some());
         assert!(msg["lock"]["timeout"].as_u64().is_some());
+    }
+
+    #[test]
+    fn test_wallet_address() {
+        let config = TestnetConfig::localnet_default();
+        let (event_tx, _) = broadcast::channel(256);
+
+        let backend = TestnetBackend {
+            config,
+            chain_clients: HashMap::new(),
+            wallet: None,
+            escrow_map: Arc::new(RwLock::new(HashMap::new())),
+            account_sequence: Arc::new(RwLock::new(0)),
+            event_tx,
+            connected: Arc::new(RwLock::new(false)),
+            simulation_mode: true,
+        };
+
+        // No wallet configured
+        assert!(backend.wallet_address().is_none());
+        assert!(backend.is_simulation_mode());
     }
 }

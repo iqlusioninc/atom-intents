@@ -39,6 +39,13 @@ rand = "0.8"
 uuid = { version = "1.6", features = ["v4", "serde"] }
 hex = "0.4"
 base64 = "0.21"
+k256 = { version = "0.13", features = ["ecdsa", "sha256"] }
+bech32 = "0.11"
+ripemd = "0.1"
+
+# Cosmos SDK protobuf types
+prost = "0.12"
+cosmos-sdk-proto = { version = "0.21", features = ["cosmwasm"] }
 
 # Logging and tracing
 tracing = "0.1"
