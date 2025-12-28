@@ -23,6 +23,8 @@ artifacts/
 # Local configuration
 .env
 .env.local
+wallet.key
+*.key
 
 # Node.js
 **/node_modules/

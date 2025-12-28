@@ -45,7 +45,8 @@ ripemd = "0.1"
 
 # Cosmos SDK protobuf types
 prost = "0.12"
-cosmos-sdk-proto = { version = "0.21", features = ["cosmwasm"] }
+cosmos-sdk-proto = { version = "0.21", features = ["cosmwasm", "grpc"] }
+tonic = { version = "0.11", features = ["tls", "tls-roots"] }
 
 # Logging and tracing
 tracing = "0.1"

@@ -4,6 +4,7 @@
 //! allowing the demo to switch between simulated and real testnet modes.
 
 pub mod config;
+pub mod grpc_client;
 pub mod simulated;
 pub mod testnet;
 pub mod tx_builder;
