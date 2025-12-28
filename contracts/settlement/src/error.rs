@@ -29,4 +29,13 @@ pub enum ContractError {
 
     #[error("Settlement expired")]
     SettlementExpired {},
+
+    #[error("Inflight settlements exist: {count} settlements must complete before migration")]
+    InflightSettlementsExist { count: u64 },
+
+    #[error("Migration failed: {reason}")]
+    MigrationFailed { reason: String },
+
+    #[error("Insufficient funds: required {required}, provided {provided}")]
+    InsufficientFunds { required: String, provided: String },
 }

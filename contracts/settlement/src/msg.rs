@@ -65,11 +65,19 @@ pub enum ExecuteMsg {
         base_slash_bps: Option<u64>,
     },
 
-    /// Execute settlement via IBC transfer
+    /// Execute settlement via IBC transfer (cross-chain)
     ExecuteSettlement {
         settlement_id: String,
         ibc_channel: String,
     },
+
+    /// Execute settlement via direct bank transfer (same-chain)
+    /// This is an atomic operation that:
+    /// 1. Transfers solver output to user (via BankMsg::Send)
+    /// 2. Releases user's escrow to solver
+    /// 3. Marks settlement as completed
+    /// Caller must send the solver_output_amount with this message.
+    ExecuteSettlementLocal { settlement_id: String },
 
     /// Handle IBC timeout - refund user and potentially slash solver
     HandleTimeout { settlement_id: String },
@@ -126,6 +134,17 @@ pub enum QueryMsg {
 
     #[returns(SolversByReputationResponse)]
     SolversByReputation { min_score: u64, limit: u32 },
+
+    /// Query migration info
+    #[returns(MigrationInfoResponse)]
+    MigrationInfo {},
+
+    /// Query inflight (non-terminal) settlements
+    #[returns(InflightSettlementsResponse)]
+    InflightSettlements {
+        start_after: Option<String>,
+        limit: Option<u32>,
+    },
 }
 
 #[cw_serde]
@@ -194,4 +213,78 @@ pub struct TopSolversResponse {
 #[cw_serde]
 pub struct SolversByReputationResponse {
     pub solvers: Vec<SolverReputationResponse>,
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// MIGRATION MESSAGES - For zero-downtime upgrades
+// ═══════════════════════════════════════════════════════════════════════════
+
+/// Message for contract migration
+#[cw_serde]
+pub struct MigrateMsg {
+    /// New protocol version
+    pub new_version: String,
+
+    /// Migration configuration
+    pub config: Option<MigrationConfig>,
+}
+
+/// Configuration for how to handle migration
+#[cw_serde]
+pub struct MigrationConfig {
+    /// Preserve inflight settlements during migration (default: true)
+    pub preserve_inflight: bool,
+
+    /// Action for stuck settlements that have exceeded timeout
+    pub stuck_settlement_action: StuckSettlementAction,
+
+    /// New configuration values (optional)
+    pub new_config: Option<ConfigUpdate>,
+
+    /// Extend inflight settlement timeouts by this many seconds
+    pub extend_timeout_secs: Option<u64>,
+}
+
+/// How to handle settlements that are stuck (past timeout)
+#[cw_serde]
+pub enum StuckSettlementAction {
+    /// Keep as-is, process after migration
+    Preserve,
+
+    /// Refund users, mark as failed
+    RefundAndFail,
+
+    /// Extend timeout to allow completion
+    ExtendTimeout { additional_seconds: u64 },
+}
+
+/// Configuration updates to apply during migration
+#[cw_serde]
+pub struct ConfigUpdate {
+    pub admin: Option<String>,
+    pub escrow_contract: Option<String>,
+    pub min_solver_bond: Option<Uint128>,
+    pub base_slash_bps: Option<u64>,
+}
+
+/// Response from migration info query
+#[cw_serde]
+pub struct MigrationInfoResponse {
+    /// Contract version before migration
+    pub previous_version: Option<String>,
+    /// Current contract version
+    pub current_version: String,
+    /// When migration occurred
+    pub migrated_at: Option<u64>,
+    /// Number of inflight settlements preserved
+    pub preserved_inflight_count: u64,
+}
+
+/// Response for inflight settlements query
+#[cw_serde]
+pub struct InflightSettlementsResponse {
+    /// List of settlement IDs that are not in terminal state
+    pub settlement_ids: Vec<String>,
+    /// Total count
+    pub count: u64,
 }

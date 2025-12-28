@@ -502,6 +502,122 @@ pub fn execute_settlement(
         .add_attribute("denom", settlement.solver_output_denom))
 }
 
+/// Execute a same-chain settlement via direct bank transfer.
+///
+/// This is an atomic operation that:
+/// 1. Transfers solver output to user (via BankMsg::Send)
+/// 2. Releases user's escrow to solver
+/// 3. Marks settlement as completed
+///
+/// The caller must send the solver_output_amount with this message.
+///
+/// Benefits over IBC-based settlement for same-chain:
+/// - Atomic execution (no IBC acknowledgement needed)
+/// - Faster execution (~1 block vs multiple blocks for IBC)
+/// - Lower gas costs (no IBC packet overhead)
+/// - Simpler failure handling (atomic revert on any failure)
+pub fn execute_settlement_local(
+    deps: DepsMut,
+    env: Env,
+    info: MessageInfo,
+    settlement_id: String,
+) -> Result<Response, ContractError> {
+    let config = CONFIG.load(deps.storage)?;
+    let mut settlement = SETTLEMENTS
+        .load(deps.storage, &settlement_id)
+        .map_err(|_| ContractError::SettlementNotFound {
+            id: settlement_id.clone(),
+        })?;
+
+    // Only admin or the solver's operator can call this
+    let solver = SOLVERS.load(deps.storage, &settlement.solver_id)?;
+    if info.sender != config.admin && info.sender != solver.operator {
+        return Err(ContractError::Unauthorized {});
+    }
+
+    // Verify settlement is in correct state (SolverLocked means both parties ready)
+    match &settlement.status {
+        SettlementStatus::SolverLocked => {}
+        _ => {
+            return Err(ContractError::InvalidStateTransition {
+                from: format!("{:?}", settlement.status),
+                to: "Completed (local)".to_string(),
+            });
+        }
+    }
+
+    // Check not expired
+    if env.block.time.seconds() > settlement.expires_at {
+        return Err(ContractError::SettlementExpired {});
+    }
+
+    // Verify the caller sent the correct funds (solver output)
+    let sent_amount: Uint128 = info
+        .funds
+        .iter()
+        .filter(|c| c.denom == settlement.solver_output_denom)
+        .map(|c| c.amount)
+        .sum();
+
+    if sent_amount < settlement.solver_output_amount {
+        return Err(ContractError::InsufficientFunds {
+            required: settlement.solver_output_amount.to_string(),
+            provided: sent_amount.to_string(),
+        });
+    }
+
+    // Get escrow_id
+    let escrow_id =
+        settlement
+            .escrow_id
+            .clone()
+            .ok_or_else(|| ContractError::InvalidStateTransition {
+                from: "SolverLocked".to_string(),
+                to: "No escrow_id found".to_string(),
+            })?;
+
+    // Update solver stats
+    let mut solver = SOLVERS.load(deps.storage, &settlement.solver_id)?;
+    solver.total_settlements += 1;
+    SOLVERS.save(deps.storage, &settlement.solver_id, &solver)?;
+
+    // Mark settlement as completed (atomic - no Executing state needed)
+    settlement.status = SettlementStatus::Completed;
+    SETTLEMENTS.save(deps.storage, &settlement_id, &settlement)?;
+
+    // 1. Transfer solver output to user via BankMsg::Send
+    let transfer_to_user = BankMsg::Send {
+        to_address: settlement.user.to_string(),
+        amount: vec![Coin {
+            denom: settlement.solver_output_denom.clone(),
+            amount: settlement.solver_output_amount,
+        }],
+    };
+
+    // 2. Release escrow to solver
+    let release_escrow = WasmMsg::Execute {
+        contract_addr: config.escrow_contract.to_string(),
+        msg: to_json_binary(&EscrowExecuteMsg::Release {
+            escrow_id: escrow_id.clone(),
+            recipient: solver.operator.to_string(),
+        })?,
+        funds: vec![],
+    };
+
+    Ok(Response::new()
+        .add_message(transfer_to_user)
+        .add_message(release_escrow)
+        .add_attribute("action", "execute_settlement_local")
+        .add_attribute("settlement_id", settlement_id)
+        .add_attribute("settlement_type", "same_chain")
+        .add_attribute("user", settlement.user.to_string())
+        .add_attribute("user_receives_amount", settlement.solver_output_amount.to_string())
+        .add_attribute("user_receives_denom", settlement.solver_output_denom)
+        .add_attribute("escrow_id", escrow_id)
+        .add_attribute("solver_receives_amount", settlement.user_input_amount.to_string())
+        .add_attribute("solver_receives_denom", settlement.user_input_denom))
+}
+
 pub fn execute_handle_timeout(
     deps: DepsMut,
     _env: Env,

@@ -1,5 +1,6 @@
 use cosmwasm_std::{
-    entry_point, to_json_binary, Binary, Deps, DepsMut, Env, MessageInfo, Response, StdResult,
+    entry_point, to_json_binary, Binary, Deps, DepsMut, Env, MessageInfo, Order, Response,
+    StdResult,
 };
 
 use crate::error::ContractError;
@@ -7,16 +8,21 @@ use crate::handlers::{
     execute_create_settlement, execute_decay_reputation, execute_deregister_solver,
     execute_handle_ibc_ack, execute_handle_timeout, execute_mark_completed, execute_mark_executing,
     execute_mark_failed, execute_mark_solver_locked, execute_mark_user_locked,
-    execute_register_solver, execute_settlement, execute_slash_solver, execute_update_config,
-    execute_update_reputation,
+    execute_register_solver, execute_settlement, execute_settlement_local, execute_slash_solver,
+    execute_update_config, execute_update_reputation,
 };
-use crate::msg::{ExecuteMsg, InstantiateMsg, QueryMsg};
+use crate::msg::{
+    ConfigUpdate, ExecuteMsg, InflightSettlementsResponse, InstantiateMsg, MigrateMsg,
+    MigrationInfoResponse, QueryMsg, StuckSettlementAction,
+};
 use crate::queries::{
     query_config, query_settlement, query_settlement_by_intent, query_settlements_by_solver,
     query_solver, query_solver_reputation, query_solvers, query_solvers_by_reputation,
     query_top_solvers,
 };
-use crate::state::{Config, CONFIG};
+use crate::state::{
+    Config, MigrationInfo, SettlementStatus, CONFIG, MIGRATION_INFO, SETTLEMENTS,
+};
 
 #[entry_point]
 pub fn instantiate(
@@ -112,6 +118,9 @@ pub fn execute(
             settlement_id,
             ibc_channel,
         } => execute_settlement(deps, env, info, settlement_id, ibc_channel),
+        ExecuteMsg::ExecuteSettlementLocal { settlement_id } => {
+            execute_settlement_local(deps, env, info, settlement_id)
+        }
         ExecuteMsg::HandleTimeout { settlement_id } => {
             execute_handle_timeout(deps, env, info, settlement_id)
         }
@@ -159,7 +168,234 @@ pub fn query(deps: Deps, _env: Env, msg: QueryMsg) -> StdResult<Binary> {
         QueryMsg::SolversByReputation { min_score, limit } => {
             to_json_binary(&query_solvers_by_reputation(deps, min_score, limit)?)
         }
+        QueryMsg::MigrationInfo {} => to_json_binary(&query_migration_info(deps)?),
+        QueryMsg::InflightSettlements { start_after, limit } => {
+            to_json_binary(&query_inflight_settlements(deps, start_after, limit)?)
+        }
     }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// MIGRATION ENTRY POINT
+// ═══════════════════════════════════════════════════════════════════════════
+
+/// Contract version for tracking migrations
+pub const CONTRACT_VERSION: &str = env!("CARGO_PKG_VERSION");
+pub const CONTRACT_NAME: &str = "crates.io:atom-intents-settlement";
+
+#[entry_point]
+pub fn migrate(deps: DepsMut, env: Env, msg: MigrateMsg) -> Result<Response, ContractError> {
+    // 1. Get current migration info (if exists)
+    let current_info = MIGRATION_INFO.may_load(deps.storage)?;
+    let previous_version = current_info.map(|i| i.current_version);
+
+    // 2. Count inflight settlements
+    let inflight = get_inflight_settlement_ids(deps.as_ref())?;
+    let inflight_count = inflight.len() as u64;
+
+    // 3. Check if migration is allowed with inflight settlements
+    if inflight_count > 0 {
+        let preserve = msg.config.as_ref().map(|c| c.preserve_inflight).unwrap_or(true);
+        if !preserve {
+            return Err(ContractError::InflightSettlementsExist {
+                count: inflight_count,
+            });
+        }
+    }
+
+    // 4. Handle stuck settlements based on configuration
+    if let Some(ref config) = msg.config {
+        handle_stuck_settlements(deps.storage, &env, &config.stuck_settlement_action, &inflight)?;
+
+        // Extend timeouts if requested
+        if let Some(extend_secs) = config.extend_timeout_secs {
+            extend_inflight_timeouts(deps.storage, extend_secs, &inflight)?;
+        }
+    }
+
+    // 5. Apply new configuration if provided
+    if let Some(ref config) = msg.config {
+        if let Some(ref new_config) = config.new_config {
+            apply_config_update(deps.storage, deps.api, new_config)?;
+        }
+    }
+
+    // 6. Save migration info
+    let migration_info = MigrationInfo {
+        previous_version: previous_version.clone(),
+        current_version: msg.new_version.clone(),
+        migrated_at: Some(env.block.time.seconds()),
+        preserved_inflight_count: inflight_count,
+    };
+    MIGRATION_INFO.save(deps.storage, &migration_info)?;
+
+    // 7. Emit migration event
+    Ok(Response::new()
+        .add_attribute("action", "migrate")
+        .add_attribute(
+            "from_version",
+            previous_version.unwrap_or_else(|| "none".to_string()),
+        )
+        .add_attribute("to_version", msg.new_version)
+        .add_attribute("preserved_inflight", inflight_count.to_string()))
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// MIGRATION HELPER FUNCTIONS
+// ═══════════════════════════════════════════════════════════════════════════
+
+/// Get all settlement IDs that are not in a terminal state
+fn get_inflight_settlement_ids(deps: Deps) -> StdResult<Vec<String>> {
+    let settlements: Vec<_> = SETTLEMENTS
+        .range(deps.storage, None, None, Order::Ascending)
+        .filter_map(|r| {
+            r.ok().and_then(|(id, settlement)| {
+                if !is_terminal_status(&settlement.status) {
+                    Some(id)
+                } else {
+                    None
+                }
+            })
+        })
+        .collect();
+    Ok(settlements)
+}
+
+/// Check if a settlement status is terminal (completed, failed, slashed)
+fn is_terminal_status(status: &SettlementStatus) -> bool {
+    matches!(
+        status,
+        SettlementStatus::Completed | SettlementStatus::Failed { .. } | SettlementStatus::Slashed { .. }
+    )
+}
+
+/// Handle stuck settlements based on the configured action
+fn handle_stuck_settlements(
+    storage: &mut dyn cosmwasm_std::Storage,
+    env: &Env,
+    action: &StuckSettlementAction,
+    inflight_ids: &[String],
+) -> Result<(), ContractError> {
+    let current_time = env.block.time.seconds();
+
+    for id in inflight_ids {
+        if let Some(mut settlement) = SETTLEMENTS.may_load(storage, id)? {
+            // Check if settlement is stuck (past expiry)
+            if settlement.expires_at < current_time {
+                match action {
+                    StuckSettlementAction::Preserve => {
+                        // Do nothing, keep as-is
+                    }
+                    StuckSettlementAction::RefundAndFail => {
+                        settlement.status = SettlementStatus::Failed {
+                            reason: "Marked failed during migration (past expiry)".to_string(),
+                        };
+                        SETTLEMENTS.save(storage, id, &settlement)?;
+                    }
+                    StuckSettlementAction::ExtendTimeout { additional_seconds } => {
+                        settlement.expires_at = current_time + additional_seconds;
+                        SETTLEMENTS.save(storage, id, &settlement)?;
+                    }
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Extend timeouts for all inflight settlements
+fn extend_inflight_timeouts(
+    storage: &mut dyn cosmwasm_std::Storage,
+    extend_secs: u64,
+    inflight_ids: &[String],
+) -> Result<(), ContractError> {
+    for id in inflight_ids {
+        if let Some(mut settlement) = SETTLEMENTS.may_load(storage, id)? {
+            settlement.expires_at += extend_secs;
+            SETTLEMENTS.save(storage, id, &settlement)?;
+        }
+    }
+    Ok(())
+}
+
+/// Apply configuration updates during migration
+fn apply_config_update<A: cosmwasm_std::Api + ?Sized>(
+    storage: &mut dyn cosmwasm_std::Storage,
+    api: &A,
+    update: &ConfigUpdate,
+) -> Result<(), ContractError> {
+    let mut config = CONFIG.load(storage)?;
+
+    if let Some(ref admin) = update.admin {
+        config.admin = api.addr_validate(admin)?;
+    }
+    if let Some(ref escrow) = update.escrow_contract {
+        config.escrow_contract = api.addr_validate(escrow)?;
+    }
+    if let Some(bond) = update.min_solver_bond {
+        config.min_solver_bond = bond;
+    }
+    if let Some(slash_bps) = update.base_slash_bps {
+        config.base_slash_bps = slash_bps;
+    }
+
+    CONFIG.save(storage, &config)?;
+    Ok(())
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// MIGRATION QUERY HANDLERS
+// ═══════════════════════════════════════════════════════════════════════════
+
+/// Query migration information
+fn query_migration_info(deps: Deps) -> StdResult<MigrationInfoResponse> {
+    let info = MIGRATION_INFO.may_load(deps.storage)?;
+
+    match info {
+        Some(info) => Ok(MigrationInfoResponse {
+            previous_version: info.previous_version,
+            current_version: info.current_version,
+            migrated_at: info.migrated_at,
+            preserved_inflight_count: info.preserved_inflight_count,
+        }),
+        None => Ok(MigrationInfoResponse {
+            previous_version: None,
+            current_version: CONTRACT_VERSION.to_string(),
+            migrated_at: None,
+            preserved_inflight_count: 0,
+        }),
+    }
+}
+
+/// Query inflight settlements (not in terminal state)
+fn query_inflight_settlements(
+    deps: Deps,
+    start_after: Option<String>,
+    limit: Option<u32>,
+) -> StdResult<InflightSettlementsResponse> {
+    let limit = limit.unwrap_or(100).min(500) as usize;
+    let start = start_after.as_deref().map(cw_storage_plus::Bound::exclusive);
+
+    let settlement_ids: Vec<String> = SETTLEMENTS
+        .range(deps.storage, start, None, Order::Ascending)
+        .filter_map(|r| {
+            r.ok().and_then(|(id, settlement)| {
+                if !is_terminal_status(&settlement.status) {
+                    Some(id)
+                } else {
+                    None
+                }
+            })
+        })
+        .take(limit)
+        .collect();
+
+    let count = settlement_ids.len() as u64;
+
+    Ok(InflightSettlementsResponse {
+        settlement_ids,
+        count,
+    })
 }
 
 #[cfg(test)]
@@ -169,8 +405,8 @@ mod tests {
     use cosmwasm_std::{from_json, Addr, Coin, Timestamp, Uint128};
 
     use crate::msg::{
-        ConfigResponse, SettlementResponse, SolverReputationResponse, SolverResponse,
-        SolversResponse, TopSolversResponse,
+        ConfigResponse, MigrationConfig, SettlementResponse, SolverReputationResponse,
+        SolverResponse, SolversResponse, TopSolversResponse,
     };
     use crate::state::{SolverReputation, SettlementStatus, REPUTATIONS, SETTLEMENTS, SOLVERS};
 
@@ -1994,5 +2230,867 @@ mod tests {
 
         // Assert that it was rejected
         assert!(matches!(err, ContractError::Unauthorized {}));
+    }
+
+    // ==================== MIGRATION TESTS ====================
+
+    #[test]
+    fn test_migrate_basic() {
+        let (mut deps, env, _addrs) = setup_contract();
+
+        // Migrate to new version
+        let msg = MigrateMsg {
+            new_version: "2.0.0".to_string(),
+            config: None,
+        };
+
+        let res = migrate(deps.as_mut(), env.clone(), msg).unwrap();
+
+        // Verify attributes
+        assert_eq!(res.attributes[0].value, "migrate");
+        assert_eq!(res.attributes[1].value, "none"); // no previous version
+        assert_eq!(res.attributes[2].value, "2.0.0");
+        assert_eq!(res.attributes[3].value, "0"); // no inflight
+
+        // Query migration info
+        let info: MigrationInfoResponse = from_json(
+            query(deps.as_ref(), env, QueryMsg::MigrationInfo {}).unwrap(),
+        )
+        .unwrap();
+
+        assert_eq!(info.current_version, "2.0.0");
+        assert!(info.previous_version.is_none());
+        assert!(info.migrated_at.is_some());
+        assert_eq!(info.preserved_inflight_count, 0);
+    }
+
+    #[test]
+    fn test_migrate_preserves_inflight_settlements() {
+        let (mut deps, env, addrs) = setup_contract();
+        register_solver(&mut deps, &env, &addrs, "solver-1", 2_000_000);
+
+        // Create some settlements in different states
+        create_settlement(&mut deps, &env, &addrs, "settlement-1", "solver-1");
+        create_settlement(&mut deps, &env, &addrs, "settlement-2", "solver-1");
+
+        // Move one to executing
+        let info = message_info(&addrs.escrow, &[]);
+        execute(
+            deps.as_mut(),
+            env.clone(),
+            info,
+            ExecuteMsg::MarkUserLocked {
+                settlement_id: "settlement-1".to_string(),
+                escrow_id: "escrow-1".to_string(),
+            },
+        )
+        .unwrap();
+
+        // Query inflight before migration
+        let inflight: InflightSettlementsResponse = from_json(
+            query(
+                deps.as_ref(),
+                env.clone(),
+                QueryMsg::InflightSettlements {
+                    start_after: None,
+                    limit: None,
+                },
+            )
+            .unwrap(),
+        )
+        .unwrap();
+
+        assert_eq!(inflight.count, 2);
+
+        // Migrate with preserve_inflight = true (default)
+        let msg = MigrateMsg {
+            new_version: "2.0.0".to_string(),
+            config: Some(MigrationConfig {
+                preserve_inflight: true,
+                stuck_settlement_action: StuckSettlementAction::Preserve,
+                new_config: None,
+                extend_timeout_secs: None,
+            }),
+        };
+
+        let res = migrate(deps.as_mut(), env.clone(), msg).unwrap();
+
+        // Should preserve both inflight settlements
+        assert_eq!(res.attributes[3].value, "2");
+
+        // Verify settlements still exist
+        let s1: SettlementResponse = from_json(
+            query(
+                deps.as_ref(),
+                env.clone(),
+                QueryMsg::Settlement {
+                    settlement_id: "settlement-1".to_string(),
+                },
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(s1.status, "user_locked");
+
+        let s2: SettlementResponse = from_json(
+            query(
+                deps.as_ref(),
+                env,
+                QueryMsg::Settlement {
+                    settlement_id: "settlement-2".to_string(),
+                },
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(s2.status, "pending");
+    }
+
+    #[test]
+    fn test_migrate_fails_with_inflight_if_not_preserved() {
+        let (mut deps, env, addrs) = setup_contract();
+        register_solver(&mut deps, &env, &addrs, "solver-1", 2_000_000);
+        create_settlement(&mut deps, &env, &addrs, "settlement-1", "solver-1");
+
+        // Try to migrate without preserving inflight
+        let msg = MigrateMsg {
+            new_version: "2.0.0".to_string(),
+            config: Some(MigrationConfig {
+                preserve_inflight: false,
+                stuck_settlement_action: StuckSettlementAction::Preserve,
+                new_config: None,
+                extend_timeout_secs: None,
+            }),
+        };
+
+        let err = migrate(deps.as_mut(), env, msg).unwrap_err();
+        assert!(matches!(err, ContractError::InflightSettlementsExist { count: 1 }));
+    }
+
+    #[test]
+    fn test_migrate_extends_timeouts() {
+        let (mut deps, env, addrs) = setup_contract();
+        register_solver(&mut deps, &env, &addrs, "solver-1", 2_000_000);
+        create_settlement(&mut deps, &env, &addrs, "settlement-1", "solver-1");
+
+        // Get original expiry
+        let original: SettlementResponse = from_json(
+            query(
+                deps.as_ref(),
+                env.clone(),
+                QueryMsg::Settlement {
+                    settlement_id: "settlement-1".to_string(),
+                },
+            )
+            .unwrap(),
+        )
+        .unwrap();
+
+        // Migrate with timeout extension
+        let msg = MigrateMsg {
+            new_version: "2.0.0".to_string(),
+            config: Some(MigrationConfig {
+                preserve_inflight: true,
+                stuck_settlement_action: StuckSettlementAction::Preserve,
+                new_config: None,
+                extend_timeout_secs: Some(7200), // 2 hours
+            }),
+        };
+
+        migrate(deps.as_mut(), env.clone(), msg).unwrap();
+
+        // Verify timeout was extended
+        let updated: SettlementResponse = from_json(
+            query(
+                deps.as_ref(),
+                env,
+                QueryMsg::Settlement {
+                    settlement_id: "settlement-1".to_string(),
+                },
+            )
+            .unwrap(),
+        )
+        .unwrap();
+
+        assert_eq!(updated.expires_at, original.expires_at + 7200);
+    }
+
+    #[test]
+    fn test_migrate_handles_stuck_settlements() {
+        let (mut deps, mut env, addrs) = setup_contract();
+        register_solver(&mut deps, &env, &addrs, "solver-1", 2_000_000);
+        create_settlement(&mut deps, &env, &addrs, "settlement-1", "solver-1");
+
+        // Fast forward past expiry
+        env.block.time = Timestamp::from_seconds(env.block.time.seconds() + 7200);
+
+        // Migrate with RefundAndFail for stuck settlements
+        let msg = MigrateMsg {
+            new_version: "2.0.0".to_string(),
+            config: Some(MigrationConfig {
+                preserve_inflight: true,
+                stuck_settlement_action: StuckSettlementAction::RefundAndFail,
+                new_config: None,
+                extend_timeout_secs: None,
+            }),
+        };
+
+        migrate(deps.as_mut(), env.clone(), msg).unwrap();
+
+        // Verify settlement was marked as failed
+        let updated: SettlementResponse = from_json(
+            query(
+                deps.as_ref(),
+                env,
+                QueryMsg::Settlement {
+                    settlement_id: "settlement-1".to_string(),
+                },
+            )
+            .unwrap(),
+        )
+        .unwrap();
+
+        assert!(updated.status.starts_with("failed:"));
+    }
+
+    #[test]
+    fn test_migrate_updates_config() {
+        let (mut deps, env, addrs) = setup_contract();
+
+        // Migrate with new config
+        let msg = MigrateMsg {
+            new_version: "2.0.0".to_string(),
+            config: Some(MigrationConfig {
+                preserve_inflight: true,
+                stuck_settlement_action: StuckSettlementAction::Preserve,
+                new_config: Some(ConfigUpdate {
+                    admin: Some(addrs.new_admin.to_string()),
+                    escrow_contract: None,
+                    min_solver_bond: Some(Uint128::new(5_000_000)),
+                    base_slash_bps: Some(500),
+                }),
+                extend_timeout_secs: None,
+            }),
+        };
+
+        migrate(deps.as_mut(), env.clone(), msg).unwrap();
+
+        // Verify config was updated
+        let config: ConfigResponse =
+            from_json(query(deps.as_ref(), env, QueryMsg::Config {}).unwrap()).unwrap();
+
+        assert_eq!(config.admin, addrs.new_admin.to_string());
+        assert_eq!(config.min_solver_bond, Uint128::new(5_000_000));
+        assert_eq!(config.base_slash_bps, 500);
+    }
+
+    #[test]
+    fn test_migrate_tracks_version_history() {
+        let (mut deps, mut env, _addrs) = setup_contract();
+
+        // First migration
+        let msg1 = MigrateMsg {
+            new_version: "2.0.0".to_string(),
+            config: None,
+        };
+        migrate(deps.as_mut(), env.clone(), msg1).unwrap();
+
+        // Advance time
+        env.block.time = Timestamp::from_seconds(env.block.time.seconds() + 86400);
+
+        // Second migration
+        let msg2 = MigrateMsg {
+            new_version: "3.0.0".to_string(),
+            config: None,
+        };
+        migrate(deps.as_mut(), env.clone(), msg2).unwrap();
+
+        // Query migration info
+        let info: MigrationInfoResponse = from_json(
+            query(deps.as_ref(), env, QueryMsg::MigrationInfo {}).unwrap(),
+        )
+        .unwrap();
+
+        assert_eq!(info.current_version, "3.0.0");
+        assert_eq!(info.previous_version, Some("2.0.0".to_string()));
+    }
+
+    #[test]
+    fn test_query_inflight_settlements_pagination() {
+        let (mut deps, env, addrs) = setup_contract();
+        register_solver(&mut deps, &env, &addrs, "solver-1", 2_000_000);
+
+        // Create multiple settlements
+        for i in 0..5 {
+            let info = message_info(&addrs.solver_operator, &[]);
+            execute(
+                deps.as_mut(),
+                env.clone(),
+                info,
+                ExecuteMsg::CreateSettlement {
+                    settlement_id: format!("settlement-{}", i),
+                    intent_id: format!("intent-{}", i),
+                    solver_id: "solver-1".to_string(),
+                    user: addrs.user.to_string(),
+                    user_input_amount: Uint128::new(100_000),
+                    user_input_denom: "uatom".to_string(),
+                    solver_output_amount: Uint128::new(1_000_000),
+                    solver_output_denom: "uusdc".to_string(),
+                    expires_at: env.block.time.seconds() + 3600,
+                },
+            )
+            .unwrap();
+        }
+
+        // Query first page
+        let page1: InflightSettlementsResponse = from_json(
+            query(
+                deps.as_ref(),
+                env.clone(),
+                QueryMsg::InflightSettlements {
+                    start_after: None,
+                    limit: Some(2),
+                },
+            )
+            .unwrap(),
+        )
+        .unwrap();
+
+        assert_eq!(page1.count, 2);
+
+        // Query second page
+        let last_id = page1.settlement_ids.last().unwrap().clone();
+        let page2: InflightSettlementsResponse = from_json(
+            query(
+                deps.as_ref(),
+                env.clone(),
+                QueryMsg::InflightSettlements {
+                    start_after: Some(last_id),
+                    limit: Some(2),
+                },
+            )
+            .unwrap(),
+        )
+        .unwrap();
+
+        assert_eq!(page2.count, 2);
+
+        // Query all
+        let all: InflightSettlementsResponse = from_json(
+            query(
+                deps.as_ref(),
+                env,
+                QueryMsg::InflightSettlements {
+                    start_after: None,
+                    limit: None,
+                },
+            )
+            .unwrap(),
+        )
+        .unwrap();
+
+        assert_eq!(all.count, 5);
+    }
+
+    #[test]
+    fn test_query_inflight_excludes_terminal_states() {
+        let (mut deps, env, addrs) = setup_contract();
+        register_solver(&mut deps, &env, &addrs, "solver-1", 2_000_000);
+
+        // Create settlements
+        create_settlement(&mut deps, &env, &addrs, "settlement-1", "solver-1");
+        create_settlement(&mut deps, &env, &addrs, "settlement-2", "solver-1");
+        create_settlement(&mut deps, &env, &addrs, "settlement-3", "solver-1");
+
+        // Complete one
+        let info = message_info(&addrs.escrow, &[]);
+        execute(
+            deps.as_mut(),
+            env.clone(),
+            info,
+            ExecuteMsg::MarkUserLocked {
+                settlement_id: "settlement-1".to_string(),
+                escrow_id: "escrow-1".to_string(),
+            },
+        )
+        .unwrap();
+
+        let info = message_info(&addrs.solver_operator, &[]);
+        execute(
+            deps.as_mut(),
+            env.clone(),
+            info,
+            ExecuteMsg::MarkSolverLocked {
+                settlement_id: "settlement-1".to_string(),
+            },
+        )
+        .unwrap();
+
+        let info = message_info(&addrs.admin, &[]);
+        execute(
+            deps.as_mut(),
+            env.clone(),
+            info,
+            ExecuteMsg::MarkExecuting {
+                settlement_id: "settlement-1".to_string(),
+            },
+        )
+        .unwrap();
+
+        let info = message_info(&addrs.admin, &[]);
+        execute(
+            deps.as_mut(),
+            env.clone(),
+            info,
+            ExecuteMsg::MarkCompleted {
+                settlement_id: "settlement-1".to_string(),
+            },
+        )
+        .unwrap();
+
+        // Fail another
+        let info = message_info(&addrs.admin, &[]);
+        execute(
+            deps.as_mut(),
+            env.clone(),
+            info,
+            ExecuteMsg::MarkFailed {
+                settlement_id: "settlement-2".to_string(),
+                reason: "test failure".to_string(),
+            },
+        )
+        .unwrap();
+
+        // Query inflight - should only return settlement-3
+        let inflight: InflightSettlementsResponse = from_json(
+            query(
+                deps.as_ref(),
+                env,
+                QueryMsg::InflightSettlements {
+                    start_after: None,
+                    limit: None,
+                },
+            )
+            .unwrap(),
+        )
+        .unwrap();
+
+        assert_eq!(inflight.count, 1);
+        assert_eq!(inflight.settlement_ids[0], "settlement-3");
+    }
+
+    // ==================== SAME-CHAIN (LOCAL) SETTLEMENT TESTS ====================
+
+    #[test]
+    fn test_execute_settlement_local_success() {
+        let (mut deps, env, addrs) = setup_contract();
+        register_solver(&mut deps, &env, &addrs, "solver-1", 2_000_000);
+        create_settlement(&mut deps, &env, &addrs, "settlement-1", "solver-1");
+
+        // Move to SolverLocked state
+        let info = message_info(&addrs.escrow, &[]);
+        execute(
+            deps.as_mut(),
+            env.clone(),
+            info,
+            ExecuteMsg::MarkUserLocked {
+                settlement_id: "settlement-1".to_string(),
+                escrow_id: "escrow-123".to_string(),
+            },
+        )
+        .unwrap();
+
+        let info = message_info(&addrs.solver_operator, &[]);
+        execute(
+            deps.as_mut(),
+            env.clone(),
+            info,
+            ExecuteMsg::MarkSolverLocked {
+                settlement_id: "settlement-1".to_string(),
+            },
+        )
+        .unwrap();
+
+        // Execute local settlement with correct funds
+        let info = message_info(&addrs.solver_operator, &[Coin::new(1_000_000u128, "uusdc")]);
+        let res = execute(
+            deps.as_mut(),
+            env.clone(),
+            info,
+            ExecuteMsg::ExecuteSettlementLocal {
+                settlement_id: "settlement-1".to_string(),
+            },
+        )
+        .unwrap();
+
+        // Verify attributes
+        assert_eq!(res.attributes[0].value, "execute_settlement_local");
+        assert_eq!(res.attributes[2].value, "same_chain");
+
+        // Verify we have 2 messages: bank send to user + release escrow
+        assert_eq!(res.messages.len(), 2);
+
+        // Verify settlement is completed
+        let settlement: SettlementResponse = from_json(
+            query(
+                deps.as_ref(),
+                env,
+                QueryMsg::Settlement {
+                    settlement_id: "settlement-1".to_string(),
+                },
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(settlement.status, "completed");
+    }
+
+    #[test]
+    fn test_execute_settlement_local_insufficient_funds() {
+        let (mut deps, env, addrs) = setup_contract();
+        register_solver(&mut deps, &env, &addrs, "solver-1", 2_000_000);
+        create_settlement(&mut deps, &env, &addrs, "settlement-1", "solver-1");
+
+        // Move to SolverLocked state
+        let info = message_info(&addrs.escrow, &[]);
+        execute(
+            deps.as_mut(),
+            env.clone(),
+            info,
+            ExecuteMsg::MarkUserLocked {
+                settlement_id: "settlement-1".to_string(),
+                escrow_id: "escrow-123".to_string(),
+            },
+        )
+        .unwrap();
+
+        let info = message_info(&addrs.solver_operator, &[]);
+        execute(
+            deps.as_mut(),
+            env.clone(),
+            info,
+            ExecuteMsg::MarkSolverLocked {
+                settlement_id: "settlement-1".to_string(),
+            },
+        )
+        .unwrap();
+
+        // Try to execute local settlement with insufficient funds
+        let info = message_info(&addrs.solver_operator, &[Coin::new(500_000u128, "uusdc")]);
+        let err = execute(
+            deps.as_mut(),
+            env,
+            info,
+            ExecuteMsg::ExecuteSettlementLocal {
+                settlement_id: "settlement-1".to_string(),
+            },
+        )
+        .unwrap_err();
+
+        assert!(matches!(err, ContractError::InsufficientFunds { .. }));
+    }
+
+    #[test]
+    fn test_execute_settlement_local_wrong_denom() {
+        let (mut deps, env, addrs) = setup_contract();
+        register_solver(&mut deps, &env, &addrs, "solver-1", 2_000_000);
+        create_settlement(&mut deps, &env, &addrs, "settlement-1", "solver-1");
+
+        // Move to SolverLocked state
+        let info = message_info(&addrs.escrow, &[]);
+        execute(
+            deps.as_mut(),
+            env.clone(),
+            info,
+            ExecuteMsg::MarkUserLocked {
+                settlement_id: "settlement-1".to_string(),
+                escrow_id: "escrow-123".to_string(),
+            },
+        )
+        .unwrap();
+
+        let info = message_info(&addrs.solver_operator, &[]);
+        execute(
+            deps.as_mut(),
+            env.clone(),
+            info,
+            ExecuteMsg::MarkSolverLocked {
+                settlement_id: "settlement-1".to_string(),
+            },
+        )
+        .unwrap();
+
+        // Try to execute local settlement with wrong denom
+        let info = message_info(&addrs.solver_operator, &[Coin::new(1_000_000u128, "uatom")]);
+        let err = execute(
+            deps.as_mut(),
+            env,
+            info,
+            ExecuteMsg::ExecuteSettlementLocal {
+                settlement_id: "settlement-1".to_string(),
+            },
+        )
+        .unwrap_err();
+
+        assert!(matches!(err, ContractError::InsufficientFunds { .. }));
+    }
+
+    #[test]
+    fn test_execute_settlement_local_wrong_state() {
+        let (mut deps, env, addrs) = setup_contract();
+        register_solver(&mut deps, &env, &addrs, "solver-1", 2_000_000);
+        create_settlement(&mut deps, &env, &addrs, "settlement-1", "solver-1");
+
+        // Try to execute local settlement from Pending state (wrong state)
+        let info = message_info(&addrs.solver_operator, &[Coin::new(1_000_000u128, "uusdc")]);
+        let err = execute(
+            deps.as_mut(),
+            env,
+            info,
+            ExecuteMsg::ExecuteSettlementLocal {
+                settlement_id: "settlement-1".to_string(),
+            },
+        )
+        .unwrap_err();
+
+        assert!(matches!(err, ContractError::InvalidStateTransition { .. }));
+    }
+
+    #[test]
+    fn test_execute_settlement_local_expired() {
+        let (mut deps, mut env, addrs) = setup_contract();
+        register_solver(&mut deps, &env, &addrs, "solver-1", 2_000_000);
+        create_settlement(&mut deps, &env, &addrs, "settlement-1", "solver-1");
+
+        // Move to SolverLocked state
+        let info = message_info(&addrs.escrow, &[]);
+        execute(
+            deps.as_mut(),
+            env.clone(),
+            info,
+            ExecuteMsg::MarkUserLocked {
+                settlement_id: "settlement-1".to_string(),
+                escrow_id: "escrow-123".to_string(),
+            },
+        )
+        .unwrap();
+
+        let info = message_info(&addrs.solver_operator, &[]);
+        execute(
+            deps.as_mut(),
+            env.clone(),
+            info,
+            ExecuteMsg::MarkSolverLocked {
+                settlement_id: "settlement-1".to_string(),
+            },
+        )
+        .unwrap();
+
+        // Fast forward time past expiry
+        env.block.time = Timestamp::from_seconds(env.block.time.seconds() + 7200);
+
+        // Try to execute local settlement after expiry
+        let info = message_info(&addrs.solver_operator, &[Coin::new(1_000_000u128, "uusdc")]);
+        let err = execute(
+            deps.as_mut(),
+            env,
+            info,
+            ExecuteMsg::ExecuteSettlementLocal {
+                settlement_id: "settlement-1".to_string(),
+            },
+        )
+        .unwrap_err();
+
+        assert!(matches!(err, ContractError::SettlementExpired {}));
+    }
+
+    #[test]
+    fn test_execute_settlement_local_unauthorized() {
+        let (mut deps, env, addrs) = setup_contract();
+        register_solver(&mut deps, &env, &addrs, "solver-1", 2_000_000);
+        create_settlement(&mut deps, &env, &addrs, "settlement-1", "solver-1");
+
+        // Move to SolverLocked state
+        let info = message_info(&addrs.escrow, &[]);
+        execute(
+            deps.as_mut(),
+            env.clone(),
+            info,
+            ExecuteMsg::MarkUserLocked {
+                settlement_id: "settlement-1".to_string(),
+                escrow_id: "escrow-123".to_string(),
+            },
+        )
+        .unwrap();
+
+        let info = message_info(&addrs.solver_operator, &[]);
+        execute(
+            deps.as_mut(),
+            env.clone(),
+            info,
+            ExecuteMsg::MarkSolverLocked {
+                settlement_id: "settlement-1".to_string(),
+            },
+        )
+        .unwrap();
+
+        // Try to execute local settlement from unauthorized user
+        let info = message_info(&addrs.random_user, &[Coin::new(1_000_000u128, "uusdc")]);
+        let err = execute(
+            deps.as_mut(),
+            env,
+            info,
+            ExecuteMsg::ExecuteSettlementLocal {
+                settlement_id: "settlement-1".to_string(),
+            },
+        )
+        .unwrap_err();
+
+        assert!(matches!(err, ContractError::Unauthorized {}));
+    }
+
+    #[test]
+    fn test_execute_settlement_local_by_admin() {
+        let (mut deps, env, addrs) = setup_contract();
+        register_solver(&mut deps, &env, &addrs, "solver-1", 2_000_000);
+        create_settlement(&mut deps, &env, &addrs, "settlement-1", "solver-1");
+
+        // Move to SolverLocked state
+        let info = message_info(&addrs.escrow, &[]);
+        execute(
+            deps.as_mut(),
+            env.clone(),
+            info,
+            ExecuteMsg::MarkUserLocked {
+                settlement_id: "settlement-1".to_string(),
+                escrow_id: "escrow-123".to_string(),
+            },
+        )
+        .unwrap();
+
+        let info = message_info(&addrs.solver_operator, &[]);
+        execute(
+            deps.as_mut(),
+            env.clone(),
+            info,
+            ExecuteMsg::MarkSolverLocked {
+                settlement_id: "settlement-1".to_string(),
+            },
+        )
+        .unwrap();
+
+        // Admin can also execute local settlement
+        let info = message_info(&addrs.admin, &[Coin::new(1_000_000u128, "uusdc")]);
+        let res = execute(
+            deps.as_mut(),
+            env.clone(),
+            info,
+            ExecuteMsg::ExecuteSettlementLocal {
+                settlement_id: "settlement-1".to_string(),
+            },
+        )
+        .unwrap();
+
+        assert_eq!(res.attributes[0].value, "execute_settlement_local");
+
+        // Verify settlement is completed
+        let settlement: SettlementResponse = from_json(
+            query(
+                deps.as_ref(),
+                env,
+                QueryMsg::Settlement {
+                    settlement_id: "settlement-1".to_string(),
+                },
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(settlement.status, "completed");
+    }
+
+    #[test]
+    fn test_execute_settlement_local_without_escrow_id_fails() {
+        let (mut deps, env, addrs) = setup_contract();
+        register_solver(&mut deps, &env, &addrs, "solver-1", 2_000_000);
+        create_settlement(&mut deps, &env, &addrs, "settlement-1", "solver-1");
+
+        // Manually set to SolverLocked without escrow_id
+        let mut settlement = SETTLEMENTS.load(&deps.storage, "settlement-1").unwrap();
+        settlement.status = SettlementStatus::SolverLocked;
+        SETTLEMENTS
+            .save(&mut deps.storage, "settlement-1", &settlement)
+            .unwrap();
+
+        // Try to execute local settlement - should fail because escrow_id is None
+        let info = message_info(&addrs.solver_operator, &[Coin::new(1_000_000u128, "uusdc")]);
+        let err = execute(
+            deps.as_mut(),
+            env,
+            info,
+            ExecuteMsg::ExecuteSettlementLocal {
+                settlement_id: "settlement-1".to_string(),
+            },
+        )
+        .unwrap_err();
+
+        assert!(matches!(err, ContractError::InvalidStateTransition { .. }));
+    }
+
+    #[test]
+    fn test_execute_settlement_local_updates_solver_stats() {
+        let (mut deps, env, addrs) = setup_contract();
+        register_solver(&mut deps, &env, &addrs, "solver-1", 2_000_000);
+        create_settlement(&mut deps, &env, &addrs, "settlement-1", "solver-1");
+
+        // Move to SolverLocked state
+        let info = message_info(&addrs.escrow, &[]);
+        execute(
+            deps.as_mut(),
+            env.clone(),
+            info,
+            ExecuteMsg::MarkUserLocked {
+                settlement_id: "settlement-1".to_string(),
+                escrow_id: "escrow-123".to_string(),
+            },
+        )
+        .unwrap();
+
+        let info = message_info(&addrs.solver_operator, &[]);
+        execute(
+            deps.as_mut(),
+            env.clone(),
+            info,
+            ExecuteMsg::MarkSolverLocked {
+                settlement_id: "settlement-1".to_string(),
+            },
+        )
+        .unwrap();
+
+        // Execute local settlement
+        let info = message_info(&addrs.solver_operator, &[Coin::new(1_000_000u128, "uusdc")]);
+        execute(
+            deps.as_mut(),
+            env.clone(),
+            info,
+            ExecuteMsg::ExecuteSettlementLocal {
+                settlement_id: "settlement-1".to_string(),
+            },
+        )
+        .unwrap();
+
+        // Check solver stats were updated
+        let solver: SolverResponse = from_json(
+            query(
+                deps.as_ref(),
+                env,
+                QueryMsg::Solver {
+                    solver_id: "solver-1".to_string(),
+                },
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(solver.total_settlements, 1);
+        assert_eq!(solver.failed_settlements, 0);
     }
 }

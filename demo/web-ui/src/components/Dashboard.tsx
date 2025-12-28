@@ -1,6 +1,8 @@
 import { Activity, TrendingUp, Clock, CheckCircle, Users, DollarSign } from 'lucide-react';
 import { useStore } from '../hooks/useStore';
 import { formatDistanceToNow } from 'date-fns';
+import { TOKENS } from '../types';
+import type { Intent } from '../types';
 
 function StatCard({
   icon: Icon,
@@ -31,6 +33,38 @@ function StatCard({
   );
 }
 
+function PartialFillProgress({ intent }: { intent: Intent }) {
+  const fillPct = intent.fill_percentage ?? 0;
+  const isPartiallyFilled = intent.status === 'partially_filled' || (fillPct > 0 && fillPct < 100);
+
+  if (!isPartiallyFilled && fillPct !== 100) return null;
+
+  return (
+    <div className="mt-1">
+      <div className="flex items-center justify-between text-xs mb-1">
+        <span className="text-gray-400">Fill progress</span>
+        <span className={fillPct === 100 ? 'text-green-400' : 'text-cosmos-400'}>
+          {fillPct}%
+        </span>
+      </div>
+      <div className="w-full bg-gray-700 rounded-full h-1.5">
+        <div
+          className={`h-1.5 rounded-full transition-all duration-500 ${
+            fillPct === 100 ? 'bg-green-500' : 'bg-cosmos-500'
+          }`}
+          style={{ width: `${fillPct}%` }}
+        />
+      </div>
+      {intent.filled_amount !== undefined && intent.remaining_amount !== undefined && (
+        <div className="flex justify-between text-[10px] text-gray-500 mt-0.5">
+          <span>Filled: {(intent.filled_amount / 1_000_000).toFixed(2)}</span>
+          <span>Remaining: {(intent.remaining_amount / 1_000_000).toFixed(2)}</span>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function RecentActivity() {
   const intents = useStore((state) => Array.from(state.intents.values()));
   const recentIntents = intents
@@ -41,6 +75,8 @@ function RecentActivity() {
     switch (status) {
       case 'completed':
         return 'badge-success';
+      case 'partially_filled':
+        return 'bg-cosmos-600/50 text-cosmos-300';
       case 'pending':
       case 'in_auction':
         return 'badge-warning';
@@ -50,6 +86,21 @@ function RecentActivity() {
       default:
         return 'badge-info';
     }
+  };
+
+  const getStatusLabel = (status: string, fillPct?: number) => {
+    if (status === 'partially_filled') {
+      return `${fillPct ?? 0}% filled`;
+    }
+    if (status === 'completed' && fillPct !== undefined && fillPct < 100) {
+      return `completed (${fillPct}%)`;
+    }
+    return status.replace('_', ' ');
+  };
+
+  const getTokenEmoji = (denom: string) => {
+    const token = TOKENS[denom];
+    return token?.logo ?? '🔷';
   };
 
   return (
@@ -62,22 +113,27 @@ function RecentActivity() {
           recentIntents.map((intent) => (
             <div
               key={intent.id}
-              className="flex items-center justify-between p-2 sm:p-3 bg-gray-800/50 rounded-lg gap-2"
+              className="p-2 sm:p-3 bg-gray-800/50 rounded-lg"
             >
-              <div className="flex items-center gap-2 sm:gap-3 min-w-0">
-                <div className="text-xl sm:text-2xl flex-shrink-0">
-                  {intent.input.denom === 'ATOM' ? '⚛️' : intent.input.denom === 'OSMO' ? '🧪' : '💵'}
+              <div className="flex items-center justify-between gap-2">
+                <div className="flex items-center gap-2 sm:gap-3 min-w-0">
+                  <div className="text-xl sm:text-2xl flex-shrink-0">
+                    {getTokenEmoji(intent.input.denom)}
+                  </div>
+                  <div className="min-w-0">
+                    <p className="text-white font-medium text-sm sm:text-base truncate">
+                      {(intent.input.amount / 1_000_000).toFixed(2)} {intent.input.denom} → {intent.output.denom}
+                    </p>
+                    <p className="text-xs text-gray-400">
+                      {formatDistanceToNow(new Date(intent.created_at), { addSuffix: true })}
+                    </p>
+                  </div>
                 </div>
-                <div className="min-w-0">
-                  <p className="text-white font-medium text-sm sm:text-base truncate">
-                    {(intent.input.amount / 1_000_000).toFixed(2)} {intent.input.denom} → {intent.output.denom}
-                  </p>
-                  <p className="text-xs text-gray-400">
-                    {formatDistanceToNow(new Date(intent.created_at), { addSuffix: true })}
-                  </p>
-                </div>
+                <span className={`${getStatusColor(intent.status)} flex-shrink-0 text-[10px] sm:text-xs px-2 py-0.5 rounded-full`}>
+                  {getStatusLabel(intent.status, intent.fill_percentage)}
+                </span>
               </div>
-              <span className={`${getStatusColor(intent.status)} flex-shrink-0 text-[10px] sm:text-xs`}>{intent.status}</span>
+              <PartialFillProgress intent={intent} />
             </div>
           ))
         )}

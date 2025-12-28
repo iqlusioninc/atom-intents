@@ -102,12 +102,26 @@ steps:
       - -f
       - demo/gcp/k8s/ingress.yaml
       - -f
-      - demo/gcp/k8s/monitoring.yaml
+      - demo/gcp/k8s/monitoring-base.yaml
     env:
       - CLOUDSDK_COMPUTE_REGION=${_REGION}
       - CLOUDSDK_CONTAINER_CLUSTER=${_CLUSTER_NAME}
     waitFor:
       - update-manifests
+
+  # Step 7b: Apply Prometheus CRDs (optional - continues on failure)
+  - id: deploy-prometheus-monitoring
+    name: gcr.io/cloud-builders/kubectl
+    entrypoint: bash
+    args:
+      - -c
+      - |
+        kubectl apply -f demo/gcp/k8s/monitoring-prometheus.yaml 2>/dev/null || echo "Prometheus CRDs not installed - skipping ServiceMonitor and PrometheusRule"
+    env:
+      - CLOUDSDK_COMPUTE_REGION=${_REGION}
+      - CLOUDSDK_CONTAINER_CLUSTER=${_CLUSTER_NAME}
+    waitFor:
+      - deploy
 
   # Step 8: Wait for rollout
   - id: verify-deployment
@@ -124,7 +138,7 @@ steps:
       - CLOUDSDK_COMPUTE_REGION=${_REGION}
       - CLOUDSDK_CONTAINER_CLUSTER=${_CLUSTER_NAME}
     waitFor:
-      - deploy
+      - deploy-prometheus-monitoring
 
 # Images are pushed explicitly in push steps above
 # images section removed to avoid nested substitution issues

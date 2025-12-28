@@ -1,6 +1,10 @@
 # Generated files
-/target/
+**/target/
 **/*.rs.bk
+
+# Terraform
+*.tfplan
+tfplan
 
 # IDE
 .idea/
@@ -19,4 +23,7 @@ artifacts/
 # Local configuration
 .env
 .env.local
-/demo/skip-select-simulator/target/
+
+# Node.js
+**/node_modules/
+**/dist/

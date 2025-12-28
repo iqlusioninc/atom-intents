@@ -623,6 +623,58 @@ fn get_scenario(name: &str) -> Option<DemoScenario> {
             ],
             expected_outcome: "Batch auction with uniform clearing price".to_string(),
         }),
+        "partial_fill" => Some(DemoScenario {
+            name: "partial_fill".to_string(),
+            description: "Partial fill order accepting minimum 50% execution".to_string(),
+            intents: vec![CreateIntentRequest {
+                user_address: "cosmos1demo_partial".to_string(),
+                input: Asset {
+                    chain_id: "cosmoshub-4".to_string(),
+                    denom: "ATOM".to_string(),
+                    amount: 100_000_000, // 100 ATOM
+                },
+                output: OutputSpec {
+                    chain_id: "osmosis-1".to_string(),
+                    denom: "OSMO".to_string(),
+                    min_amount: 1_400_000_000, // ~1400 OSMO
+                    max_price: None,
+                },
+                fill_config: Some(FillConfig {
+                    allow_partial: true,
+                    min_fill_percent: 50,  // Accept 50%+ fills
+                    strategy: FillStrategy::Eager,
+                }),
+                constraints: None,
+                timeout_seconds: Some(120),
+            }],
+            expected_outcome: "Order may partially fill (50-100%) based on available liquidity".to_string(),
+        }),
+        "lst_swap" => Some(DemoScenario {
+            name: "lst_swap".to_string(),
+            description: "Liquid staking token swap: stATOM to ATOM".to_string(),
+            intents: vec![CreateIntentRequest {
+                user_address: "cosmos1demo_lst".to_string(),
+                input: Asset {
+                    chain_id: "stride-1".to_string(),
+                    denom: "stATOM".to_string(),
+                    amount: 50_000_000, // 50 stATOM
+                },
+                output: OutputSpec {
+                    chain_id: "cosmoshub-4".to_string(),
+                    denom: "ATOM".to_string(),
+                    min_amount: 52_000_000, // ~52 ATOM (stATOM trades at premium)
+                    max_price: None,
+                },
+                fill_config: Some(FillConfig {
+                    allow_partial: true,
+                    min_fill_percent: 80,
+                    strategy: FillStrategy::Eager,
+                }),
+                constraints: None,
+                timeout_seconds: Some(60),
+            }],
+            expected_outcome: "LST Specialist solver provides best rate for stATOM → ATOM".to_string(),
+        }),
         _ => None,
     }
 }

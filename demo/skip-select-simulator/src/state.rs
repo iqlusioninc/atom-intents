@@ -193,6 +193,7 @@ impl AppState {
                     "ATOM".to_string(),
                     "USDC".to_string(),
                     "OSMO".to_string(),
+                    "stTIA".to_string(),
                 ],
                 connected_at: Some(Utc::now()),
                 advantage_profile: SolverAdvantageProfile {
@@ -201,9 +202,58 @@ impl AppState {
                         ("TIA".to_string(), "ATOM".to_string()),
                         ("TIA".to_string(), "OSMO".to_string()),
                         ("ATOM".to_string(), "TIA".to_string()),
+                        ("stTIA".to_string(), "TIA".to_string()),
                     ],
                     size_preference: SizePreference::Medium,
                     chain_specialty: vec!["celestia".to_string()],
+                },
+            },
+            // Liquid Staking Derivatives Solver (Stride, pSTAKE, Quicksilver)
+            Solver {
+                id: "solver_lst_specialist".to_string(),
+                name: "LST Specialist".to_string(),
+                solver_type: SolverType::Hybrid,
+                status: SolverStatus::Active,
+                reputation_score: 0.93,
+                total_volume: 0,
+                success_rate: 0.98,
+                avg_execution_time_ms: 3000,
+                supported_chains: vec![
+                    "stride-1".to_string(),
+                    "cosmoshub-4".to_string(),
+                    "osmosis-1".to_string(),
+                    "persistence-1".to_string(),
+                    "quicksilver-2".to_string(),
+                ],
+                supported_denoms: vec![
+                    "ATOM".to_string(),
+                    "OSMO".to_string(),
+                    "TIA".to_string(),
+                    "STRD".to_string(),
+                    "stATOM".to_string(),
+                    "stOSMO".to_string(),
+                    "stTIA".to_string(),
+                    "stkATOM".to_string(),
+                    "qATOM".to_string(),
+                ],
+                connected_at: Some(Utc::now()),
+                advantage_profile: SolverAdvantageProfile {
+                    preferred_pairs: vec![
+                        // LST <-> Base token pairs
+                        ("stATOM".to_string(), "ATOM".to_string()),
+                        ("ATOM".to_string(), "stATOM".to_string()),
+                        ("stOSMO".to_string(), "OSMO".to_string()),
+                        ("OSMO".to_string(), "stOSMO".to_string()),
+                        ("stTIA".to_string(), "TIA".to_string()),
+                        ("TIA".to_string(), "stTIA".to_string()),
+                        ("stkATOM".to_string(), "ATOM".to_string()),
+                        ("qATOM".to_string(), "ATOM".to_string()),
+                        // LST to stablecoin
+                        ("stATOM".to_string(), "USDC".to_string()),
+                        ("stkATOM".to_string(), "USDC".to_string()),
+                    ],
+                    size_preference: SizePreference::Any,
+                    chain_specialty: vec!["stride-1".to_string(), "persistence-1".to_string(), "quicksilver-2".to_string()],
                 },
             },
         ];
@@ -265,8 +315,7 @@ impl AppState {
     }
 
     pub fn update_stats(&mut self) {
-        // Count intents
-        self.stats.total_intents = self.intents.len() as u64;
+        // Count pending intents (don't overwrite total_intents - it's a running counter)
         self.stats.pending_intents = self
             .intents
             .values()

@@ -1,10 +1,12 @@
 import { useState } from 'react';
 import { useMutation } from '@tanstack/react-query';
-import { ArrowRight, Loader2, Check, Wallet, AlertCircle } from 'lucide-react';
+import { ArrowRight, Loader2, Check, Wallet, AlertCircle, Settings, ChevronDown, ChevronUp } from 'lucide-react';
 import * as api from '../services/api';
 import { useStore } from '../hooks/useStore';
 import { useWallet } from '../hooks/useWallet';
 import { TOKENS } from '../types';
+
+type FillStrategy = 'eager' | 'all_or_nothing' | 'time_based' | 'price_based';
 
 export default function IntentCreator() {
   const prices = useStore((state) => state.prices);
@@ -16,6 +18,12 @@ export default function IntentCreator() {
   const [inputAmount, setInputAmount] = useState('10');
   const [slippage, setSlippage] = useState('1');
   const [success, setSuccess] = useState(false);
+
+  // Partial fill configuration
+  const [showAdvanced, setShowAdvanced] = useState(false);
+  const [allowPartial, setAllowPartial] = useState(true);
+  const [minFillPercent, setMinFillPercent] = useState(80);
+  const [fillStrategy, setFillStrategy] = useState<FillStrategy>('eager');
 
   const inputPrice = prices.get(inputDenom)?.price_usd ?? 0;
   const outputPrice = prices.get(outputDenom)?.price_usd ?? 0;
@@ -66,9 +74,9 @@ export default function IntentCreator() {
         min_amount: Math.floor(minOutput * 1_000_000),
       },
       fill_config: {
-        allow_partial: true,
-        min_fill_percent: 80,
-        strategy: 'eager',
+        allow_partial: allowPartial,
+        min_fill_percent: minFillPercent,
+        strategy: fillStrategy,
       },
       constraints: {
         max_hops: 3,
@@ -197,6 +205,89 @@ export default function IntentCreator() {
             </p>
           </div>
 
+          {/* Advanced Settings - Partial Fill Configuration */}
+          <div className="border-t border-gray-700 pt-4">
+            <button
+              type="button"
+              onClick={() => setShowAdvanced(!showAdvanced)}
+              className="flex items-center gap-2 text-sm text-gray-400 hover:text-white transition-colors w-full"
+            >
+              <Settings className="w-4 h-4" />
+              <span>Advanced Settings</span>
+              {showAdvanced ? <ChevronUp className="w-4 h-4 ml-auto" /> : <ChevronDown className="w-4 h-4 ml-auto" />}
+            </button>
+
+            {showAdvanced && (
+              <div className="mt-4 space-y-4 p-4 bg-gray-800/50 rounded-lg">
+                {/* Partial Fill Toggle */}
+                <div className="flex items-center justify-between">
+                  <div>
+                    <label className="text-sm font-medium text-gray-300">Allow Partial Fills</label>
+                    <p className="text-xs text-gray-500">Accept orders that only partially fill your intent</p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setAllowPartial(!allowPartial)}
+                    className={`relative w-12 h-6 rounded-full transition-colors ${
+                      allowPartial ? 'bg-cosmos-600' : 'bg-gray-600'
+                    }`}
+                  >
+                    <span
+                      className={`absolute top-1 w-4 h-4 bg-white rounded-full transition-transform ${
+                        allowPartial ? 'left-7' : 'left-1'
+                      }`}
+                    />
+                  </button>
+                </div>
+
+                {/* Min Fill Percentage (only show if partial fills enabled) */}
+                {allowPartial && (
+                  <div>
+                    <div className="flex items-center justify-between mb-2">
+                      <label className="text-sm font-medium text-gray-300">Minimum Fill %</label>
+                      <span className="text-sm text-cosmos-400 font-medium">{minFillPercent}%</span>
+                    </div>
+                    <input
+                      type="range"
+                      min="10"
+                      max="100"
+                      value={minFillPercent}
+                      onChange={(e) => setMinFillPercent(parseInt(e.target.value))}
+                      className="w-full h-2 bg-gray-700 rounded-lg appearance-none cursor-pointer accent-cosmos-500"
+                    />
+                    <div className="flex justify-between text-xs text-gray-500 mt-1">
+                      <span>10%</span>
+                      <span>50%</span>
+                      <span>100%</span>
+                    </div>
+                  </div>
+                )}
+
+                {/* Fill Strategy */}
+                <div>
+                  <label className="block text-sm font-medium text-gray-300 mb-2">Fill Strategy</label>
+                  <select
+                    value={fillStrategy}
+                    onChange={(e) => setFillStrategy(e.target.value as FillStrategy)}
+                    className="select w-full"
+                    disabled={!allowPartial && fillStrategy !== 'all_or_nothing'}
+                  >
+                    <option value="eager">Eager - Accept any fill meeting price</option>
+                    <option value="all_or_nothing">All or Nothing - 100% fill required</option>
+                    <option value="time_based">Time-based - Wait for better fills</option>
+                    <option value="price_based">Price-based - Optimize for best price</option>
+                  </select>
+                  <p className="text-xs text-gray-500 mt-1">
+                    {fillStrategy === 'eager' && 'Accept fills as soon as they meet your minimum requirements'}
+                    {fillStrategy === 'all_or_nothing' && 'Only accept if entire order can be filled (no partial fills)'}
+                    {fillStrategy === 'time_based' && 'Wait for aggregation window to find more fills'}
+                    {fillStrategy === 'price_based' && 'Wait for optimal price across multiple solvers'}
+                  </p>
+                </div>
+              </div>
+            )}
+          </div>
+
           {!connected ? (
             <div className="p-4 bg-yellow-900/20 border border-yellow-700/50 rounded-lg">
               <div className="flex items-center gap-3">
@@ -278,6 +369,27 @@ export default function IntentCreator() {
                 <div>
                   <p className="text-gray-500">Timeout</p>
                   <p className="text-white">60 seconds</p>
+                </div>
+              </div>
+            </div>
+
+            {/* Partial Fill Settings Preview */}
+            <div className="p-3 sm:p-4 bg-gray-800/50 rounded-lg space-y-2">
+              <p className="text-sm text-gray-400">Fill Settings</p>
+              <div className="grid grid-cols-2 gap-2 sm:gap-4 text-xs sm:text-sm">
+                <div>
+                  <p className="text-gray-500">Partial Fills</p>
+                  <p className={allowPartial ? 'text-green-400' : 'text-yellow-400'}>
+                    {allowPartial ? 'Enabled' : 'Disabled'}
+                  </p>
+                </div>
+                <div>
+                  <p className="text-gray-500">Min Fill</p>
+                  <p className="text-white">{allowPartial ? `${minFillPercent}%` : '100%'}</p>
+                </div>
+                <div className="col-span-2">
+                  <p className="text-gray-500">Strategy</p>
+                  <p className="text-white capitalize">{fillStrategy.replace('_', ' ')}</p>
                 </div>
               </div>
             </div>

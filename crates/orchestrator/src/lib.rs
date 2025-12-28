@@ -1,6 +1,7 @@
 pub mod executor;
 pub mod orchestrator;
 pub mod recovery;
+pub mod upgrade;
 pub mod validator;
 
 #[cfg(test)]
@@ -18,5 +19,9 @@ pub use orchestrator::{
 pub use recovery::{
     RecoveryAction, RecoveryError, RecoveryManager, RecoveryResult, RecoveryStats, SettlementPhase,
     SettlementState,
+};
+pub use upgrade::{
+    DrainError, DrainMode, DrainModeManager, DrainResult, DrainStatus, GracefulShutdown,
+    InflightError, InflightIntent, InflightPhase, InflightTracker, ShutdownResult,
 };
 pub use validator::{IntentValidator, ValidationError};

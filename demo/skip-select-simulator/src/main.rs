@@ -258,6 +258,12 @@ impl Default for Config {
                 ("NTRN".to_string(), 0.45),
                 ("STRD".to_string(), 1.20),
                 ("TIA".to_string(), 5.25),  // Celestia
+                // Liquid Staking Tokens (priced as base token + staking yield premium)
+                ("stATOM".to_string(), 10.00),   // Stride stATOM (~5% premium over ATOM)
+                ("stOSMO".to_string(), 0.68),    // Stride stOSMO
+                ("stTIA".to_string(), 5.50),     // Stride stTIA
+                ("stkATOM".to_string(), 9.80),   // pSTAKE stkATOM
+                ("qATOM".to_string(), 9.75),     // Quicksilver qATOM
             ],
         }
     }

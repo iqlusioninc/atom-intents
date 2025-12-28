@@ -7,7 +7,7 @@ metadata:
     app.kubernetes.io/name: skip-select-simulator
     app.kubernetes.io/component: backend
 spec:
-  replicas: 2
+  replicas: 1  # Single replica required - in-memory state doesn't sync between pods
   selector:
     matchLabels:
       app.kubernetes.io/name: skip-select-simulator
