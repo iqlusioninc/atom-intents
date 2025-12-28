@@ -128,17 +128,34 @@ async fn run_auction_cycle(state: &AppStateRef) {
                 }
             }
 
-            // Collect partial fill info for settlement creation
-            let (is_partial, fill_pct, original_amount) = {
+            // Collect partial fill info and intent data for settlement creation
+            let (is_partial, fill_pct, original_amount, intent_data) = {
                 winning_quote.intent_ids.first()
                     .and_then(|id| state.intents.get(id))
                     .map(|intent| (
                         intent.status == IntentStatus::PartiallyFilled,
                         intent.fill_percentage,
-                        intent.input.amount
+                        intent.input.amount,
+                        Some((
+                            intent.user_address.clone(),
+                            intent.input.chain_id.clone(),
+                            intent.input.denom.clone(),
+                            intent.output.chain_id.clone(),
+                            intent.output.denom.clone(),
+                        ))
                     ))
-                    .unwrap_or((false, 100, winning_quote.input_amount))
+                    .unwrap_or((false, 100, winning_quote.input_amount, None))
             };
+
+            // Extract intent fields with defaults
+            let (user_address, input_chain, input_denom, output_chain, output_denom) =
+                intent_data.unwrap_or_else(|| (
+                    String::new(),
+                    String::new(),
+                    "uatom".to_string(),
+                    String::new(),
+                    "uosmo".to_string(),
+                ));
 
             // Calculate actual settlement amounts for partial fills
             let (settlement_input, settlement_output) = if is_partial {
@@ -185,6 +202,13 @@ async fn run_auction_cycle(state: &AppStateRef) {
                 is_partial_fill: is_partial,
                 fill_percentage: fill_pct,
                 original_input_amount: original_amount,
+                // Intent-derived fields for settlement execution
+                user_address: user_address.clone(),
+                user_output_address: user_address, // Same address for now, could differ for cross-chain
+                input_chain_id: input_chain,
+                input_denom,
+                output_chain_id: output_chain,
+                output_denom,
             };
 
             for intent_id in &winning_quote.intent_ids {

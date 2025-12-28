@@ -3,6 +3,8 @@
 //! Simulates the settlement flow including:
 //! - Local escrow (for Hub-native users)
 //! - Cross-chain escrow via IBC Hooks (for chains like Celestia without smart contracts)
+//!
+//! Supports both simulated and testnet execution modes.
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -10,9 +12,10 @@ use std::time::Duration;
 use chrono::Utc;
 use rand::Rng;
 use tokio::sync::RwLock;
-use tracing::{debug, info};
+use tracing::{debug, info, warn};
 use uuid::Uuid;
 
+use crate::backend::{BackendMode, ExecutionBackend};
 use crate::models::*;
 use crate::state::AppState;
 
@@ -21,13 +24,195 @@ type AppStateRef = Arc<RwLock<AppState>>;
 /// Chains that don't have smart contracts and require Hub escrow via IBC Hooks
 const NON_WASM_CHAINS: &[&str] = &["celestia", "noble-1"];
 
-/// Run the settlement processor loop
+/// Run the settlement processor loop (legacy, uses simulated mode)
 pub async fn run_settlement_processor(state: AppStateRef) {
     let mut interval = tokio::time::interval(Duration::from_millis(500));
 
     loop {
         interval.tick().await;
         process_settlements(&state).await;
+    }
+}
+
+/// Run the settlement processor with a specific backend
+pub async fn run_settlement_processor_with_backend(
+    state: AppStateRef,
+    backend: Arc<dyn ExecutionBackend>,
+) {
+    let mut interval = tokio::time::interval(Duration::from_millis(500));
+
+    // Subscribe to backend events for testnet mode
+    let mut event_rx = backend.subscribe();
+
+    loop {
+        tokio::select! {
+            _ = interval.tick() => {
+                // Process settlements based on mode
+                match backend.mode() {
+                    BackendMode::Simulated => {
+                        process_settlements(&state).await;
+                    }
+                    BackendMode::Testnet { .. } | BackendMode::Localnet { .. } => {
+                        process_settlements_with_backend(&state, &backend).await;
+                    }
+                }
+            }
+            Ok(event) = event_rx.recv() => {
+                // Handle backend events (testnet transaction confirmations, etc.)
+                handle_backend_event(&state, event).await;
+            }
+        }
+    }
+}
+
+/// Handle events from the execution backend
+async fn handle_backend_event(state: &AppStateRef, event: crate::backend::BackendEvent) {
+    use crate::backend::BackendEvent;
+
+    let mut state = state.write().await;
+
+    match event {
+        BackendEvent::EscrowLocked { settlement_id, tx_hash, block_height, amount, denom, .. } => {
+            if let Some(settlement) = state.settlements.get_mut(&settlement_id) {
+                settlement.events.push(SettlementEvent {
+                    event_type: "escrow_locked".to_string(),
+                    timestamp: Utc::now(),
+                    description: format!("Escrow locked: {} {}", amount, denom),
+                    metadata: serde_json::json!({
+                        "tx_hash": tx_hash,
+                        "block_height": block_height,
+                        "amount": amount,
+                        "denom": denom,
+                    }),
+                });
+            }
+        }
+        BackendEvent::SolverCommitted { settlement_id, solver_id, tx_hash } => {
+            if let Some(settlement) = state.settlements.get_mut(&settlement_id) {
+                settlement.phase = SettlementPhase::SolverCommitted;
+                settlement.events.push(SettlementEvent {
+                    event_type: "solver_committed".to_string(),
+                    timestamp: Utc::now(),
+                    description: format!("Solver {} committed", solver_id),
+                    metadata: serde_json::json!({
+                        "solver_id": solver_id,
+                        "tx_hash": tx_hash,
+                    }),
+                });
+            }
+        }
+        BackendEvent::IbcTransferStarted { settlement_id, packet_sequence, tx_hash } => {
+            if let Some(settlement) = state.settlements.get_mut(&settlement_id) {
+                settlement.phase = SettlementPhase::IbcInFlight;
+                settlement.status = SettlementStatus::Executing;
+                settlement.ibc_packet_id = packet_sequence.map(|s| format!("seq_{}", s));
+                settlement.events.push(SettlementEvent {
+                    event_type: "ibc_initiated".to_string(),
+                    timestamp: Utc::now(),
+                    description: "IBC transfer initiated".to_string(),
+                    metadata: serde_json::json!({
+                        "packet_sequence": packet_sequence,
+                        "tx_hash": tx_hash,
+                    }),
+                });
+            }
+        }
+        BackendEvent::SettlementComplete { settlement_id, tx_hash, output_delivered } => {
+            let settlement_clone = if let Some(settlement) = state.settlements.get_mut(&settlement_id) {
+                settlement.phase = SettlementPhase::Finalized;
+                settlement.status = SettlementStatus::Completed;
+                settlement.completed_at = Some(Utc::now());
+                settlement.execution_txid = tx_hash.clone();
+                settlement.events.push(SettlementEvent {
+                    event_type: "completed".to_string(),
+                    timestamp: Utc::now(),
+                    description: "Settlement completed successfully".to_string(),
+                    metadata: serde_json::json!({
+                        "tx_hash": tx_hash,
+                        "output_delivered": output_delivered,
+                    }),
+                });
+                Some(settlement.clone())
+            } else {
+                None
+            };
+
+            // Update stats and broadcast after releasing settlement borrow
+            state.update_stats();
+            if let Some(settlement) = settlement_clone {
+                state.broadcast(WsMessage::SettlementUpdate(settlement));
+            }
+        }
+        BackendEvent::SettlementFailed { settlement_id, reason, recoverable } => {
+            let settlement_clone = if let Some(settlement) = state.settlements.get_mut(&settlement_id) {
+                settlement.status = if recoverable {
+                    SettlementStatus::Failed
+                } else {
+                    SettlementStatus::Refunded
+                };
+                settlement.events.push(SettlementEvent {
+                    event_type: "failed".to_string(),
+                    timestamp: Utc::now(),
+                    description: format!("Settlement failed: {}", reason),
+                    metadata: serde_json::json!({
+                        "reason": reason,
+                        "recoverable": recoverable,
+                    }),
+                });
+                Some(settlement.clone())
+            } else {
+                None
+            };
+
+            // Update stats and broadcast after releasing settlement borrow
+            state.update_stats();
+            if let Some(settlement) = settlement_clone {
+                state.broadcast(WsMessage::SettlementUpdate(settlement));
+            }
+        }
+        _ => {
+            // Handle other events
+            debug!("Received backend event: {:?}", event);
+        }
+    }
+}
+
+/// Process settlements using the execution backend
+async fn process_settlements_with_backend(
+    state: &AppStateRef,
+    backend: &Arc<dyn ExecutionBackend>,
+) {
+    // Get settlements that need processing
+    let pending_settlements: Vec<Settlement> = {
+        let state = state.read().await;
+        state
+            .settlements
+            .values()
+            .filter(|s| s.status != SettlementStatus::Completed && s.status != SettlementStatus::Failed)
+            .filter(|s| s.phase == SettlementPhase::Init)
+            .cloned()
+            .collect()
+    };
+
+    for settlement in pending_settlements {
+        // Execute settlement through backend
+        match backend.execute_settlement(&settlement).await {
+            Ok(result) => {
+                info!(
+                    settlement_id = %settlement.id,
+                    status = ?result.status,
+                    tx_hash = ?result.tx_hash,
+                    "Settlement executed via backend"
+                );
+            }
+            Err(e) => {
+                warn!(
+                    settlement_id = %settlement.id,
+                    error = %e,
+                    "Settlement execution failed"
+                );
+            }
+        }
     }
 }
 

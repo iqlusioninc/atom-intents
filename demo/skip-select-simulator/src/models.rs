@@ -282,6 +282,26 @@ pub struct Settlement {
     /// Original requested input amount (for calculating partial fill ratio)
     #[serde(default)]
     pub original_input_amount: u128,
+
+    // Intent-derived fields for settlement execution
+    /// User's address on the input chain
+    #[serde(default)]
+    pub user_address: String,
+    /// User's address on the output chain (for cross-chain settlements)
+    #[serde(default)]
+    pub user_output_address: String,
+    /// Input chain ID
+    #[serde(default)]
+    pub input_chain_id: String,
+    /// Input denomination
+    #[serde(default)]
+    pub input_denom: String,
+    /// Output chain ID
+    #[serde(default)]
+    pub output_chain_id: String,
+    /// Output denomination
+    #[serde(default)]
+    pub output_denom: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]

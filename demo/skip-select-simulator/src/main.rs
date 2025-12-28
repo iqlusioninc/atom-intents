@@ -2,9 +2,15 @@
 //!
 //! A simplified version of the Skip Select coordination layer for the ATOM Intents demo.
 //! Provides REST API, WebSocket, and batch auction functionality.
+//!
+//! Supports three execution modes:
+//! - `simulated` (default): Pure in-memory simulation, no blockchain
+//! - `testnet`: Connected to real Cosmos testnets
+//! - `localnet`: Connected to local docker chains
 
 mod api;
 mod auction;
+mod backend;
 mod models;
 mod oracle;
 mod settlement;
@@ -18,15 +24,44 @@ use axum::{
     routing::{get, post},
     Router,
 };
+use clap::Parser;
 use tokio::sync::RwLock;
 use tower_http::{
     cors::{Any, CorsLayer},
     trace::TraceLayer,
 };
-use tracing::info;
+use tracing::{error, info, warn};
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
+use crate::backend::{BackendMode, ExecutionBackend};
+use crate::backend::simulated::SimulatedBackend;
+use crate::backend::testnet::TestnetBackend;
 use crate::state::AppState;
+
+/// Skip Select Simulator CLI
+#[derive(Parser, Debug)]
+#[command(author, version, about, long_about = None)]
+struct Args {
+    /// Execution mode: simulated, testnet, or localnet
+    #[arg(long, default_value = "simulated")]
+    mode: String,
+
+    /// Path to testnet/localnet config file (required for non-simulated modes)
+    #[arg(long)]
+    config: Option<String>,
+
+    /// API server port
+    #[arg(long, default_value = "8080")]
+    port: u16,
+
+    /// Auction interval in milliseconds
+    #[arg(long, default_value = "500")]
+    auction_interval: u64,
+
+    /// Mock latency in milliseconds (simulated mode only)
+    #[arg(long, default_value = "100")]
+    mock_latency: u64,
+}
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -39,14 +74,93 @@ async fn main() -> anyhow::Result<()> {
         .with(tracing_subscriber::fmt::layer())
         .init();
 
+    // Parse CLI arguments
+    let args = Args::parse();
+
     info!("Starting Skip Select Simulator");
+    info!("  Mode: {}", args.mode);
+    info!("  Port: {}", args.port);
+
+    // Initialize execution backend based on mode
+    let backend: Arc<dyn ExecutionBackend> = match args.mode.as_str() {
+        "simulated" => {
+            info!("🎭 Running in SIMULATED mode (no blockchain)");
+            Arc::new(SimulatedBackend::with_settings(
+                (args.mock_latency, args.mock_latency * 3),
+                0.95,
+            ))
+        }
+        "testnet" => {
+            let config_path = args.config.as_ref().ok_or_else(|| {
+                anyhow::anyhow!("--config is required for testnet mode")
+            })?;
+
+            info!("🌐 Running in TESTNET mode");
+            info!("  Config: {}", config_path);
+
+            match TestnetBackend::from_config_file(config_path).await {
+                Ok(backend) => {
+                    if let Some(addrs) = backend.contract_addresses() {
+                        info!("  Settlement contract: {}", addrs.settlement);
+                        info!("  Escrow contract: {}", addrs.escrow);
+                    }
+                    Arc::new(backend)
+                }
+                Err(e) => {
+                    error!("Failed to initialize testnet backend: {}", e);
+                    return Err(anyhow::anyhow!("Testnet initialization failed: {}", e));
+                }
+            }
+        }
+        "localnet" => {
+            info!("🏠 Running in LOCALNET mode");
+
+            match TestnetBackend::localnet().await {
+                Ok(backend) => {
+                    if let Some(addrs) = backend.contract_addresses() {
+                        info!("  Settlement contract: {}", addrs.settlement);
+                        info!("  Escrow contract: {}", addrs.escrow);
+                    }
+                    Arc::new(backend)
+                }
+                Err(e) => {
+                    warn!("Failed to connect to localnet: {}", e);
+                    warn!("Falling back to simulated mode");
+                    Arc::new(SimulatedBackend::new())
+                }
+            }
+        }
+        other => {
+            error!("Unknown mode: {}. Use simulated, testnet, or localnet", other);
+            return Err(anyhow::anyhow!("Unknown mode: {}", other));
+        }
+    };
 
     // Load configuration
-    let config = load_config()?;
+    let config = Config {
+        api_port: args.port,
+        auction_interval_ms: args.auction_interval,
+        mock_latency_ms: args.mock_latency,
+        enable_analytics: true,
+        initial_prices: Config::default().initial_prices,
+    };
     info!("Configuration loaded: {:?}", config);
 
-    // Initialize application state
-    let state = Arc::new(RwLock::new(AppState::new(config.clone())));
+    // Display mode information
+    match backend.mode() {
+        BackendMode::Simulated => {
+            info!("📊 All settlements will be simulated in-memory");
+        }
+        BackendMode::Testnet { chain_id, .. } => {
+            info!("📊 Settlements will execute on testnet: {}", chain_id);
+        }
+        BackendMode::Localnet { .. } => {
+            info!("📊 Settlements will execute on local docker chains");
+        }
+    }
+
+    // Initialize application state with backend
+    let state = Arc::new(RwLock::new(AppState::new_with_backend(config.clone(), backend.clone())));
 
     // Start mock solvers
     let solver_state = state.clone();
@@ -69,8 +183,9 @@ async fn main() -> anyhow::Result<()> {
 
     // Start settlement processor
     let settlement_state = state.clone();
+    let settlement_backend = backend.clone();
     tokio::spawn(async move {
-        settlement::run_settlement_processor(settlement_state).await;
+        settlement::run_settlement_processor_with_backend(settlement_state, settlement_backend).await;
     });
 
     // Build router
@@ -96,6 +211,8 @@ fn build_router(state: Arc<RwLock<AppState>>) -> Router {
     Router::new()
         // Health check
         .route("/health", get(api::health_check))
+        // Mode endpoint (shows testnet/simulated status)
+        .route("/api/v1/mode", get(api::get_mode))
         // REST API routes
         .route("/api/v1/intents", post(api::submit_intent))
         .route("/api/v1/intents", get(api::list_intents))

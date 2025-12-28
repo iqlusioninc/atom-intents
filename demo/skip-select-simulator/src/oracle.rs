@@ -8,7 +8,7 @@ use chrono::Utc;
 use reqwest::Client;
 use serde::Deserialize;
 use tokio::sync::RwLock;
-use tracing::{debug, warn, info};
+use tracing::{warn, info};
 
 use crate::models::{PriceFeed, WsMessage};
 use crate::state::AppState;

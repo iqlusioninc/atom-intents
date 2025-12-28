@@ -1,10 +1,12 @@
 //! Application state management
 
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use chrono::Utc;
 use tokio::sync::broadcast;
 
+use crate::backend::{BackendMode, ExecutionBackend};
 use crate::models::*;
 use crate::Config;
 
@@ -19,10 +21,25 @@ pub struct AppState {
     pub stats: SystemStats,
     pub current_auction_id: Option<String>,
     pub ws_broadcast: broadcast::Sender<WsMessage>,
+    /// Execution backend (simulated or testnet)
+    pub backend: Option<Arc<dyn ExecutionBackend>>,
+    /// Current execution mode
+    pub backend_mode: BackendMode,
 }
 
 impl AppState {
+    /// Create new state with simulated backend (default)
     pub fn new(config: Config) -> Self {
+        Self::new_with_mode(config, BackendMode::Simulated, None)
+    }
+
+    /// Create new state with a specific backend
+    pub fn new_with_backend(config: Config, backend: Arc<dyn ExecutionBackend>) -> Self {
+        let mode = backend.mode();
+        Self::new_with_mode(config, mode, Some(backend))
+    }
+
+    fn new_with_mode(config: Config, mode: BackendMode, backend: Option<Arc<dyn ExecutionBackend>>) -> Self {
         let (ws_broadcast, _) = broadcast::channel(1000);
 
         // Initialize price feeds
@@ -255,7 +272,24 @@ impl AppState {
             stats: SystemStats::default(),
             current_auction_id: None,
             ws_broadcast,
+            backend,
+            backend_mode: mode,
         }
+    }
+
+    /// Get the current execution mode
+    pub fn mode(&self) -> &BackendMode {
+        &self.backend_mode
+    }
+
+    /// Check if running in testnet mode
+    pub fn is_testnet(&self) -> bool {
+        matches!(self.backend_mode, BackendMode::Testnet { .. })
+    }
+
+    /// Check if running in simulated mode
+    pub fn is_simulated(&self) -> bool {
+        matches!(self.backend_mode, BackendMode::Simulated)
     }
 
     pub fn add_intent(&mut self, intent: Intent) {

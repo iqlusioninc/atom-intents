@@ -12,6 +12,7 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::RwLock;
 use tracing::info;
 
+use crate::backend::{BackendMode, ContractAddresses};
 use crate::models::*;
 use crate::state::AppState;
 
@@ -22,13 +23,76 @@ pub struct HealthResponse {
     status: String,
     version: String,
     uptime_seconds: u64,
+    mode: String,
 }
 
-pub async fn health_check() -> Json<HealthResponse> {
+pub async fn health_check(State(state): State<AppStateRef>) -> Json<HealthResponse> {
+    let mode_str = {
+        let state = state.read().await;
+        match &state.backend_mode {
+            BackendMode::Simulated => "simulated".to_string(),
+            BackendMode::Testnet { chain_id, .. } => format!("testnet:{}", chain_id),
+            BackendMode::Localnet { .. } => "localnet".to_string(),
+        }
+    };
+
     Json(HealthResponse {
         status: "healthy".to_string(),
         version: env!("CARGO_PKG_VERSION").to_string(),
         uptime_seconds: 0, // Would track actual uptime in production
+        mode: mode_str,
+    })
+}
+
+/// Response for the /mode endpoint
+#[derive(Serialize)]
+pub struct ModeResponse {
+    pub mode: BackendMode,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub contracts: Option<ContractAddresses>,
+    pub is_simulated: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub explorer_base_url: Option<String>,
+}
+
+/// Get the current execution mode
+pub async fn get_mode(State(state): State<AppStateRef>) -> Json<ModeResponse> {
+    let state = state.read().await;
+    let mode = state.backend_mode.clone();
+
+    let (contracts, explorer_base_url) = match &mode {
+        BackendMode::Simulated => (None, None),
+        BackendMode::Testnet { chain_id, settlement_contract, escrow_contract } => {
+            let explorer = match chain_id.as_str() {
+                "theta-testnet-001" => Some("https://www.mintscan.io/cosmos-testnet/tx/".to_string()),
+                "osmo-test-5" => Some("https://testnet.mintscan.io/osmosis-testnet/tx/".to_string()),
+                "pion-1" => Some("https://www.mintscan.io/neutron-testnet/tx/".to_string()),
+                _ => None,
+            };
+            (
+                Some(ContractAddresses {
+                    settlement: settlement_contract.clone(),
+                    escrow: escrow_contract.clone(),
+                }),
+                explorer,
+            )
+        }
+        BackendMode::Localnet { settlement_contract, escrow_contract } => (
+            Some(ContractAddresses {
+                settlement: settlement_contract.clone(),
+                escrow: escrow_contract.clone(),
+            }),
+            Some("http://localhost:1317/cosmos/tx/v1beta1/txs/".to_string()),
+        ),
+    };
+
+    let is_simulated = matches!(mode, BackendMode::Simulated);
+
+    Json(ModeResponse {
+        mode,
+        contracts,
+        is_simulated,
+        explorer_base_url,
     })
 }
 
