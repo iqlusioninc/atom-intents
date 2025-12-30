@@ -1,6 +1,6 @@
 import { useState } from 'react';
-import { useMutation } from '@tanstack/react-query';
-import { ArrowRight, Loader2, Check, Wallet, AlertCircle, Settings, ChevronDown, ChevronUp, ExternalLink } from 'lucide-react';
+import { useMutation, useQuery } from '@tanstack/react-query';
+import { ArrowRight, Loader2, Check, Wallet, AlertCircle, Settings, ChevronDown, ChevronUp, ExternalLink, Activity, AlertTriangle } from 'lucide-react';
 import * as api from '../services/api';
 import { useStore } from '../hooks/useStore';
 import { useWallet } from '../hooks/useWallet';
@@ -23,6 +23,30 @@ export default function IntentCreator() {
     lockFundsInEscrow,
     hasEnoughBalance,
   } = useWallet();
+
+  // Fetch chain health status
+  const { data: chainHealth } = useQuery({
+    queryKey: ['chainHealth'],
+    queryFn: api.getChainHealth,
+    refetchInterval: 30000, // Refresh every 30 seconds
+    staleTime: 10000,
+  });
+
+  // Get chain status for a token
+  const getTokenChainStatus = (denom: string): { healthy: boolean; error?: string } => {
+    const token = TOKENS[denom];
+    if (!token) return { healthy: true };
+    const chainId = token.chain;
+    if (!chainHealth?.chains) return { healthy: true };
+    const chain = chainHealth.chains.find(c =>
+      c.chain_id === chainId ||
+      c.chain_id.includes(chainId.split('-')[0])
+    );
+    return {
+      healthy: chain?.healthy ?? true,
+      error: chain?.error ?? undefined,
+    };
+  };
 
   const [inputDenom, setInputDenom] = useState('ATOM');
   const [outputDenom, setOutputDenom] = useState('OSMO');
@@ -293,11 +317,18 @@ export default function IntentCreator() {
               >
                 {Object.entries(TOKENS)
                   .filter(([denom]) => denom !== inputDenom)
-                  .map(([denom, token]) => (
-                    <option key={denom} value={denom}>
-                      {token.logo} {denom}
-                    </option>
-                  ))}
+                  .map(([denom, token]) => {
+                    const chainStatus = getTokenChainStatus(denom);
+                    return (
+                      <option
+                        key={denom}
+                        value={denom}
+                        disabled={!chainStatus.healthy}
+                      >
+                        {token.logo} {denom} {!chainStatus.healthy ? '(offline)' : ''}
+                      </option>
+                    );
+                  })}
               </select>
               <input
                 type="text"
@@ -306,9 +337,17 @@ export default function IntentCreator() {
                 className="input flex-1 bg-gray-900/50"
               />
             </div>
-            <p className="text-xs text-gray-500 mt-1">
-              Estimated output @ ${outputPrice.toFixed(4)}/{outputDenom}
-            </p>
+            <div className="flex items-center justify-between mt-1">
+              <p className="text-xs text-gray-500">
+                Estimated output @ ${outputPrice.toFixed(4)}/{outputDenom}
+              </p>
+              {!getTokenChainStatus(outputDenom).healthy && (
+                <p className="text-xs text-yellow-400 flex items-center gap-1">
+                  <AlertTriangle className="w-3 h-3" />
+                  Chain offline
+                </p>
+              )}
+            </div>
           </div>
 
           <div>
@@ -518,15 +557,31 @@ export default function IntentCreator() {
             </div>
 
             <div className="p-3 sm:p-4 bg-gray-800/50 rounded-lg space-y-2">
-              <p className="text-sm text-gray-400">Execution Details</p>
+              <div className="flex items-center justify-between">
+                <p className="text-sm text-gray-400">Execution Details</p>
+                {chainHealth && (
+                  <div className="flex items-center gap-1">
+                    <Activity className={`w-3 h-3 ${chainHealth.all_healthy ? 'text-green-400' : 'text-yellow-400'}`} />
+                    <span className={`text-xs ${chainHealth.all_healthy ? 'text-green-400' : 'text-yellow-400'}`}>
+                      {chainHealth.all_healthy ? 'All chains healthy' : 'Some chains degraded'}
+                    </span>
+                  </div>
+                )}
+              </div>
               <div className="grid grid-cols-2 gap-2 sm:gap-4 text-xs sm:text-sm">
                 <div>
                   <p className="text-gray-500">Source Chain</p>
-                  <p className="text-white truncate">{TOKENS[inputDenom]?.chain}</p>
+                  <div className="flex items-center gap-1">
+                    <span className={`w-2 h-2 rounded-full ${getTokenChainStatus(inputDenom).healthy ? 'bg-green-400' : 'bg-red-400'}`} />
+                    <p className="text-white truncate">{TOKENS[inputDenom]?.chain}</p>
+                  </div>
                 </div>
                 <div>
                   <p className="text-gray-500">Dest Chain</p>
-                  <p className="text-white truncate">{TOKENS[outputDenom]?.chain}</p>
+                  <div className="flex items-center gap-1">
+                    <span className={`w-2 h-2 rounded-full ${getTokenChainStatus(outputDenom).healthy ? 'bg-green-400' : 'bg-red-400'}`} />
+                    <p className="text-white truncate">{TOKENS[outputDenom]?.chain}</p>
+                  </div>
                 </div>
                 <div>
                   <p className="text-gray-500">Max Slippage</p>

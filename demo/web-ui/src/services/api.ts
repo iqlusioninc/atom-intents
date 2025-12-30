@@ -97,3 +97,47 @@ export async function runScenario(name: string): Promise<{
 export async function healthCheck(): Promise<{ status: string; version: string; uptime_seconds: number }> {
   return fetchJson('/health');
 }
+
+// Chain health
+export interface ChainHealthStatus {
+  chain_id: string;
+  healthy: boolean;
+  latest_height: number | null;
+  synced: boolean;
+  rpc_url: string;
+  error: string | null;
+}
+
+export interface ChainHealthResponse {
+  chains: ChainHealthStatus[];
+  all_healthy: boolean;
+  mode: string;
+}
+
+export async function getChainHealth(): Promise<ChainHealthResponse> {
+  return fetchJson(`${API_BASE}/chains/health`);
+}
+
+// Wallet status (admin)
+export interface WalletBalance {
+  denom: string;
+  amount: string;
+  amount_display: string;
+}
+
+export interface WalletStatus {
+  address: string;
+  balances: WalletBalance[];
+  low_balance_warning: boolean;
+  chain_id: string;
+}
+
+export interface WalletStatusResponse {
+  wallet: WalletStatus | null;
+  mode: string;
+  warnings: string[];
+}
+
+export async function getWalletStatus(): Promise<WalletStatusResponse> {
+  return fetchJson(`${API_BASE}/admin/wallet`);
+}

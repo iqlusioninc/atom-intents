@@ -95,3 +95,36 @@ spec:
           annotations:
             summary: "Settlement failures detected"
             description: "One or more settlements have failed in the last 15 minutes"
+
+        # Server wallet low balance - critical for demo operations
+        - alert: ServerWalletLowBalance
+          expr: |
+            server_wallet_balance_uatom < 1000000
+          for: 5m
+          labels:
+            severity: critical
+          annotations:
+            summary: "Server wallet balance critically low"
+            description: "Server wallet has less than 1 ATOM. Settlements will fail. Fund the wallet immediately."
+
+        # Server wallet warning threshold
+        - alert: ServerWalletBalanceWarning
+          expr: |
+            server_wallet_balance_uatom < 10000000
+          for: 10m
+          labels:
+            severity: warning
+          annotations:
+            summary: "Server wallet balance low"
+            description: "Server wallet has less than 10 ATOM. Consider funding the wallet soon."
+
+        # Chain health degraded
+        - alert: ChainHealthDegraded
+          expr: |
+            chain_health_status == 0
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: "Chain health check failing"
+            description: "Chain {{ $labels.chain_id }} health check has been failing for 5 minutes"

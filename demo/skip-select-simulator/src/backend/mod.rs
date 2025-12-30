@@ -193,6 +193,46 @@ pub trait ExecutionBackend: Send + Sync {
 
     /// Check if the backend is healthy/connected
     async fn health_check(&self) -> Result<bool, BackendError>;
+
+    /// Get health status for all configured chains
+    async fn get_chain_health(&self) -> Vec<ChainHealthStatus> {
+        // Default implementation returns empty (for simulated mode)
+        vec![]
+    }
+
+    /// Get wallet status (balance, address)
+    async fn get_wallet_status(&self) -> Option<WalletStatus> {
+        // Default implementation returns None (for simulated mode)
+        None
+    }
+}
+
+/// Health status for a chain
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ChainHealthStatus {
+    pub chain_id: String,
+    pub healthy: bool,
+    pub latest_height: Option<u64>,
+    pub synced: bool,
+    pub rpc_url: String,
+    pub error: Option<String>,
+}
+
+/// Wallet status for monitoring
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WalletStatus {
+    pub address: String,
+    pub balances: Vec<WalletBalance>,
+    pub low_balance_warning: bool,
+    pub chain_id: String,
+}
+
+/// Individual balance entry
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WalletBalance {
+    pub denom: String,
+    pub amount: String,
+    pub amount_display: String,
 }
 
 /// Contract addresses for testnet mode

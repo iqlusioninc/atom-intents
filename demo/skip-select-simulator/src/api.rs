@@ -12,7 +12,7 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::RwLock;
 use tracing::info;
 
-use crate::backend::{BackendMode, ContractAddresses};
+use crate::backend::{BackendMode, ChainHealthStatus, ContractAddresses, WalletStatus};
 use crate::models::*;
 use crate::state::AppState;
 
@@ -302,6 +302,114 @@ pub async fn list_solvers(State(state): State<AppStateRef>) -> Json<SolversRespo
 pub async fn get_stats(State(state): State<AppStateRef>) -> Json<SystemStats> {
     let state = state.read().await;
     Json(state.stats.clone())
+}
+
+// Chain health endpoint
+#[derive(Serialize)]
+pub struct ChainHealthResponse {
+    pub chains: Vec<ChainHealthStatus>,
+    pub all_healthy: bool,
+    pub mode: String,
+}
+
+pub async fn get_chain_health(State(state): State<AppStateRef>) -> Json<ChainHealthResponse> {
+    let state = state.read().await;
+
+    let (chains, mode) = if let Some(ref backend) = state.backend {
+        let health = backend.get_chain_health().await;
+        let mode = match &state.backend_mode {
+            BackendMode::Simulated => "simulated".to_string(),
+            BackendMode::Testnet { chain_id, .. } => format!("testnet:{}", chain_id),
+            BackendMode::Localnet { .. } => "localnet".to_string(),
+        };
+        (health, mode)
+    } else {
+        // Simulated mode - return mock healthy chains
+        let mock_chains = vec![
+            ChainHealthStatus {
+                chain_id: "cosmoshub-4".to_string(),
+                healthy: true,
+                latest_height: Some(20000000),
+                synced: true,
+                rpc_url: "simulated".to_string(),
+                error: None,
+            },
+            ChainHealthStatus {
+                chain_id: "osmosis-1".to_string(),
+                healthy: true,
+                latest_height: Some(15000000),
+                synced: true,
+                rpc_url: "simulated".to_string(),
+                error: None,
+            },
+            ChainHealthStatus {
+                chain_id: "neutron-1".to_string(),
+                healthy: true,
+                latest_height: Some(5000000),
+                synced: true,
+                rpc_url: "simulated".to_string(),
+                error: None,
+            },
+        ];
+        (mock_chains, "simulated".to_string())
+    };
+
+    let all_healthy = chains.iter().all(|c| c.healthy);
+
+    Json(ChainHealthResponse {
+        chains,
+        all_healthy,
+        mode,
+    })
+}
+
+// Wallet status endpoint (admin)
+#[derive(Serialize)]
+pub struct WalletStatusResponse {
+    pub wallet: Option<WalletStatus>,
+    pub mode: String,
+    pub warnings: Vec<String>,
+}
+
+pub async fn get_wallet_status(State(state): State<AppStateRef>) -> Json<WalletStatusResponse> {
+    let state = state.read().await;
+
+    let mode = match &state.backend_mode {
+        BackendMode::Simulated => "simulated".to_string(),
+        BackendMode::Testnet { chain_id, .. } => format!("testnet:{}", chain_id),
+        BackendMode::Localnet { .. } => "localnet".to_string(),
+    };
+
+    let wallet = if let Some(ref backend) = state.backend {
+        backend.get_wallet_status().await
+    } else {
+        None
+    };
+
+    let mut warnings = Vec::new();
+
+    if let Some(ref w) = wallet {
+        if w.low_balance_warning {
+            warnings.push(format!(
+                "Low balance warning: Server wallet {} may not have sufficient funds for settlements",
+                w.address
+            ));
+        }
+        if w.balances.is_empty() {
+            warnings.push(format!(
+                "No balances found for wallet {}. Please fund the wallet.",
+                w.address
+            ));
+        }
+    } else if matches!(state.backend_mode, BackendMode::Testnet { .. }) {
+        warnings.push("No wallet configured for testnet mode. Transactions will be simulated.".to_string());
+    }
+
+    Json(WalletStatusResponse {
+        wallet,
+        mode,
+        warnings,
+    })
 }
 
 // Demo endpoints

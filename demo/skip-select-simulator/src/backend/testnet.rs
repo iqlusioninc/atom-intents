@@ -19,8 +19,9 @@ use super::config::TestnetConfig;
 use super::tx_builder::{AccountInfo, TxBuilder};
 use super::wallet::{load_wallet_from_env, CosmosWallet};
 use super::{
-    build_explorer_url, BackendError, BackendEvent, BackendMode, ContractAddresses,
-    EscrowLockResult, ExecutionBackend, SettlementResult,
+    build_explorer_url, BackendError, BackendEvent, BackendMode, ChainHealthStatus,
+    ContractAddresses, EscrowLockResult, ExecutionBackend, SettlementResult, WalletBalance,
+    WalletStatus,
 };
 use crate::models::{Settlement, SettlementStatus};
 
@@ -773,6 +774,56 @@ impl TestnetBackend {
     pub fn wallet_address(&self) -> Option<String> {
         self.wallet.as_ref().and_then(|w| w.address().ok())
     }
+
+    /// Query wallet balance from the chain
+    async fn query_wallet_balance(&self, address: &str) -> Result<Vec<WalletBalance>, BackendError> {
+        let client = self.primary_client()?;
+        let rest_base = self.config.chains.get(&self.config.primary_chain)
+            .and_then(|c| c.rest_url.as_ref())
+            .map(|s| s.trim_end_matches('/').to_string())
+            .unwrap_or_else(|| {
+                client.rpc_url.replace(":26657", ":1317")
+                    .replace("-rpc.", "-api.")
+            });
+
+        let url = format!("{}/cosmos/bank/v1beta1/balances/{}", rest_base, address);
+
+        let response = reqwest::Client::new()
+            .get(&url)
+            .timeout(Duration::from_secs(10))
+            .send()
+            .await
+            .map_err(|e| BackendError::ConnectionFailed(format!("Balance query failed: {}", e)))?;
+
+        if !response.status().is_success() {
+            return Ok(vec![]);
+        }
+
+        let json: serde_json::Value = response.json().await.map_err(|e| {
+            BackendError::ConnectionFailed(format!("Failed to parse balance response: {}", e))
+        })?;
+
+        let balances: Vec<WalletBalance> = json["balances"]
+            .as_array()
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|b| {
+                        let denom = b["denom"].as_str()?.to_string();
+                        let amount = b["amount"].as_str()?.to_string();
+                        let amount_val: u128 = amount.parse().unwrap_or(0);
+                        let amount_display = format!("{:.6}", amount_val as f64 / 1_000_000.0);
+                        Some(WalletBalance {
+                            denom,
+                            amount,
+                            amount_display,
+                        })
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+
+        Ok(balances)
+    }
 }
 
 #[async_trait]
@@ -1167,6 +1218,57 @@ impl ExecutionBackend for TestnetBackend {
                 Ok(false)
             }
         }
+    }
+
+    async fn get_chain_health(&self) -> Vec<ChainHealthStatus> {
+        let mut results = Vec::new();
+
+        for (chain_id, client) in &self.chain_clients {
+            let rpc_url = self.config.chains.get(chain_id)
+                .map(|c| c.rpc_url.clone())
+                .unwrap_or_default();
+
+            // Check height
+            let height_result = client.get_latest_height().await;
+            let synced_result = client.is_synced().await;
+
+            let (healthy, height, synced, error) = match (height_result, synced_result) {
+                (Ok(h), Ok(s)) => (true, Some(h), s, None),
+                (Ok(h), Err(e)) => (true, Some(h), false, Some(format!("Sync check failed: {}", e))),
+                (Err(e), _) => (false, None, false, Some(e.to_string())),
+            };
+
+            results.push(ChainHealthStatus {
+                chain_id: chain_id.clone(),
+                healthy,
+                latest_height: height,
+                synced,
+                rpc_url,
+                error,
+            });
+        }
+
+        results
+    }
+
+    async fn get_wallet_status(&self) -> Option<WalletStatus> {
+        let address = self.wallet_address()?;
+
+        let balances = self.query_wallet_balance(&address).await.unwrap_or_default();
+
+        // Check if any balance is critically low (< 1 token)
+        let low_balance_warning = balances.iter().any(|b| {
+            let amount: u128 = b.amount.parse().unwrap_or(0);
+            // Less than 1 token (1_000_000 micro units)
+            amount < 1_000_000
+        });
+
+        Some(WalletStatus {
+            address,
+            balances,
+            low_balance_warning,
+            chain_id: self.config.primary_chain.clone(),
+        })
     }
 }
 

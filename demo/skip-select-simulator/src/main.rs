@@ -224,6 +224,9 @@ fn build_router(state: Arc<RwLock<AppState>>) -> Router {
         .route("/api/v1/prices", get(api::get_prices))
         .route("/api/v1/solvers", get(api::list_solvers))
         .route("/api/v1/stats", get(api::get_stats))
+        // Health and monitoring endpoints
+        .route("/api/v1/chains/health", get(api::get_chain_health))
+        .route("/api/v1/admin/wallet", get(api::get_wallet_status))
         // Demo endpoints
         .route("/api/v1/demo/generate-intent", post(api::generate_demo_intent))
         .route("/api/v1/demo/scenario/:name", post(api::run_scenario))
