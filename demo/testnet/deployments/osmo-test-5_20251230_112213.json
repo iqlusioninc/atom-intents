@@ -1,0 +1,16 @@
+{
+  "chain_id": "osmo-test-5",
+  "rpc_url": "https://rpc.testnet.osmosis.zone:443",
+  "deployer": "osmo1q6u2k563ep39un0p0j0p6ked5653dr0ytqgvnl",
+  "timestamp": "2025-12-30T11:20:00Z",
+  "contracts": {
+    "settlement": {
+      "code_id": 13057,
+      "address": "osmo1qdfc5yhptjfv2puzlde49hjkdhqpllenka4t352henukw9vzkwvqafnzv3"
+    },
+    "escrow": {
+      "code_id": 13058,
+      "address": "osmo1gcgcng338wnwwmcwklqa2830qwhww96zg9rl3g4kf7mw89mljfcqe98wu7"
+    }
+  }
+}
