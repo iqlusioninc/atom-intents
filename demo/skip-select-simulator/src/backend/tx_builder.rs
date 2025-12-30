@@ -1,13 +1,15 @@
 //! Cosmos transaction builder
 //!
 //! This module handles building and encoding Cosmos SDK transactions
-//! for CosmWasm contract interactions.
+//! for CosmWasm contract interactions and IBC transfers.
 
 use cosmos_sdk_proto::cosmos::base::v1beta1::Coin;
 use cosmos_sdk_proto::cosmos::tx::v1beta1::{
     AuthInfo, Fee, ModeInfo, SignDoc, SignerInfo, TxBody, TxRaw,
 };
 use cosmos_sdk_proto::cosmwasm::wasm::v1::MsgExecuteContract;
+use cosmos_sdk_proto::ibc::applications::transfer::v1::MsgTransfer;
+use cosmos_sdk_proto::ibc::core::client::v1::Height;
 use cosmos_sdk_proto::traits::Message;
 use sha2::{Digest, Sha256};
 use thiserror::Error;
@@ -147,6 +149,133 @@ impl TxBuilder {
             contract: contract.to_string(),
             msg: msg_bytes,
             funds: coins,
+        })
+    }
+
+    /// Build an IBC MsgTransfer
+    pub fn build_ibc_transfer_msg(
+        &self,
+        sender: &str,
+        receiver: &str,
+        source_port: &str,
+        source_channel: &str,
+        amount: u128,
+        denom: &str,
+        timeout_timestamp_ns: u64,
+    ) -> MsgTransfer {
+        MsgTransfer {
+            source_port: source_port.to_string(),
+            source_channel: source_channel.to_string(),
+            token: Some(Coin {
+                denom: denom.to_string(),
+                amount: amount.to_string(),
+            }),
+            sender: sender.to_string(),
+            receiver: receiver.to_string(),
+            timeout_height: Some(Height {
+                revision_number: 0,
+                revision_height: 0,  // Use timestamp-based timeout instead
+            }),
+            timeout_timestamp: timeout_timestamp_ns,
+        }
+    }
+
+    /// Build and sign an IBC transfer transaction
+    pub fn build_and_sign_ibc_transfer(
+        &self,
+        wallet: &CosmosWallet,
+        account_info: &AccountInfo,
+        msg: MsgTransfer,
+    ) -> Result<TxRaw, TxBuilderError> {
+        let any_msg = cosmos_sdk_proto::Any {
+            type_url: "/ibc.applications.transfer.v1.MsgTransfer".to_string(),
+            value: msg.encode_to_vec(),
+        };
+        self.build_and_sign_any(wallet, account_info, vec![any_msg])
+    }
+
+    /// Build and sign a transaction with any message types
+    pub fn build_and_sign_any(
+        &self,
+        wallet: &CosmosWallet,
+        account_info: &AccountInfo,
+        any_messages: Vec<cosmos_sdk_proto::Any>,
+    ) -> Result<TxRaw, TxBuilderError> {
+        // Build TxBody
+        let tx_body = TxBody {
+            messages: any_messages,
+            memo: self.memo.clone(),
+            timeout_height: self.timeout_height,
+            extension_options: vec![],
+            non_critical_extension_options: vec![],
+        };
+
+        // Build AuthInfo
+        let public_key = wallet.public_key_bytes();
+        let pubkey_any = cosmos_sdk_proto::Any {
+            type_url: "/cosmos.crypto.secp256k1.PubKey".to_string(),
+            value: encode_pubkey(&public_key),
+        };
+
+        let signer_info = SignerInfo {
+            public_key: Some(pubkey_any),
+            mode_info: Some(ModeInfo {
+                sum: Some(cosmos_sdk_proto::cosmos::tx::v1beta1::mode_info::Sum::Single(
+                    cosmos_sdk_proto::cosmos::tx::v1beta1::mode_info::Single {
+                        mode: 1, // SIGN_MODE_DIRECT
+                    },
+                )),
+            }),
+            sequence: account_info.sequence,
+        };
+
+        let fee = Fee {
+            amount: vec![Coin {
+                denom: self.gas_config.fee_denom.clone(),
+                amount: self.gas_config.fee_amount().to_string(),
+            }],
+            gas_limit: self.gas_config.gas_limit,
+            payer: String::new(),
+            granter: String::new(),
+        };
+
+        let auth_info = AuthInfo {
+            signer_infos: vec![signer_info],
+            fee: Some(fee),
+            tip: None,
+        };
+
+        // Encode body and auth_info
+        let body_bytes = tx_body.encode_to_vec();
+        let auth_info_bytes = auth_info.encode_to_vec();
+
+        // Create SignDoc
+        let sign_doc = SignDoc {
+            body_bytes: body_bytes.clone(),
+            auth_info_bytes: auth_info_bytes.clone(),
+            chain_id: self.chain_id.clone(),
+            account_number: account_info.account_number,
+        };
+
+        // Hash and sign
+        let sign_doc_bytes = sign_doc.encode_to_vec();
+        let sign_doc_hash = Sha256::digest(&sign_doc_bytes);
+
+        let signature = wallet
+            .sign_prehashed(&sign_doc_hash)
+            .map_err(|e| TxBuilderError::SigningError(e.to_string()))?;
+
+        debug!(
+            chain_id = %self.chain_id,
+            account_number = account_info.account_number,
+            sequence = account_info.sequence,
+            "Transaction signed (generic)"
+        );
+
+        Ok(TxRaw {
+            body_bytes,
+            auth_info_bytes,
+            signatures: vec![signature],
         })
     }
 

@@ -22,8 +22,8 @@ data:
   RATE_LIMIT_AUTHENTICATED_RPM: "100"
   RATE_LIMIT_SOLVER_RPM: "500"
 
-  # CORS - Update with actual domain
-  ALLOWED_ORIGINS: "https://demo.atom-intents.io,https://atom-intents.io"
+  # CORS - Production domains
+  ALLOWED_ORIGINS: "https://atom-intents.com,https://www.atom-intents.com,https://demo.atom-intents.io,https://atom-intents.io"
 
   # Feature flags
   ENABLE_PERSISTENCE: "true"

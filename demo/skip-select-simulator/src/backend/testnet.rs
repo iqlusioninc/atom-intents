@@ -11,7 +11,7 @@ use async_trait::async_trait;
 use cosmos_sdk_proto::cosmos::tx::v1beta1::TxRaw;
 use cosmos_sdk_proto::traits::Message;
 use serde_json::json;
-use tokio::sync::{broadcast, RwLock};
+use tokio::sync::{broadcast, Mutex, RwLock};
 use tracing::{debug, error, info, warn};
 use uuid::Uuid;
 
@@ -24,20 +24,72 @@ use super::{
 };
 use crate::models::{Settlement, SettlementStatus};
 
+/// Retry an async operation with exponential backoff and jitter
+/// Used for RPC calls that may be rate-limited or experience transient failures
+async fn retry_with_backoff<F, Fut, T, E>(
+    operation: F,
+    max_retries: u32,
+    initial_delay_ms: u64,
+    operation_name: &str,
+) -> Result<T, E>
+where
+    F: Fn() -> Fut,
+    Fut: std::future::Future<Output = Result<T, E>>,
+    E: std::fmt::Display,
+{
+    let mut last_error: Option<E> = None;
+
+    for attempt in 0..max_retries {
+        match operation().await {
+            Ok(result) => return Ok(result),
+            Err(e) => {
+                let delay = initial_delay_ms * 2u64.pow(attempt);
+                // Use simple hash-based jitter instead of thread_rng to avoid Send issues
+                let jitter = (std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .subsec_nanos() % 100) as u64;
+                let total_delay = delay + jitter;
+
+                if attempt < max_retries - 1 {
+                    warn!(
+                        operation = %operation_name,
+                        attempt = attempt + 1,
+                        max_retries = max_retries,
+                        delay_ms = total_delay,
+                        error = %e,
+                        "Operation failed, retrying with backoff"
+                    );
+                    tokio::time::sleep(Duration::from_millis(total_delay)).await;
+                }
+                last_error = Some(e);
+            }
+        }
+    }
+
+    Err(last_error.expect("Should have error after retries exhausted"))
+}
+
+/// Global mutex for transaction signing to prevent sequence conflicts
+/// Only one transaction can be signed/broadcast at a time
+static TX_MUTEX: std::sync::LazyLock<Mutex<()>> = std::sync::LazyLock::new(|| Mutex::new(()));
+
 /// Chain client for RPC communication
 /// This is a simplified client - in production, use atom_intents_relayer::CosmosChainClient
 pub struct SimpleChainClient {
     chain_id: String,
     rpc_url: String,
+    rest_url: Option<String>,
     client: reqwest::Client,
     timeout: Duration,
 }
 
 impl SimpleChainClient {
-    pub fn new(chain_id: &str, rpc_url: &str, timeout_ms: u64) -> Self {
+    pub fn new(chain_id: &str, rpc_url: &str, rest_url: Option<&str>, timeout_ms: u64) -> Self {
         Self {
             chain_id: chain_id.to_string(),
             rpc_url: rpc_url.to_string(),
+            rest_url: rest_url.map(|s| s.to_string()),
             client: reqwest::Client::new(),
             timeout: Duration::from_millis(timeout_ms),
         }
@@ -126,13 +178,17 @@ impl SimpleChainClient {
     /// Get account info (account_number and sequence) for signing
     pub async fn get_account_info(&self, address: &str) -> Result<AccountInfo, BackendError> {
         // Use REST endpoint for account info
-        let rpc_base = self.rpc_url.trim_end_matches('/');
-        // Convert RPC port to REST port (typically 26657 -> 1317)
-        let rest_url = rpc_base
-            .replace(":26657", ":1317")
-            .replace(":26667", ":1327");
+        let rest_base = self.rest_url.as_ref().map(|s| s.trim_end_matches('/').to_string())
+            .unwrap_or_else(|| {
+                // Fallback: try to derive REST URL from RPC URL
+                let rpc_base = self.rpc_url.trim_end_matches('/');
+                rpc_base
+                    .replace(":26657", ":1317")
+                    .replace(":26667", ":1327")
+                    .replace("-rpc.", "-api.")  // Polkachu pattern
+            });
 
-        let url = format!("{}/cosmos/auth/v1beta1/accounts/{}", rest_url, address);
+        let url = format!("{}/cosmos/auth/v1beta1/accounts/{}", rest_base, address);
 
         debug!(url = %url, address = %address, "Querying account info");
 
@@ -205,7 +261,8 @@ impl SimpleChainClient {
         );
 
         // Use broadcast_tx_sync for faster response, then poll for confirmation
-        let url = format!("{}/broadcast_tx_sync", self.rpc_url);
+        // JSON-RPC requests go to the base URL, not a method-specific path
+        let url = self.rpc_url.trim_end_matches('/').to_string();
 
         let body = json!({
             "jsonrpc": "2.0",
@@ -404,6 +461,7 @@ impl TestnetBackend {
             let client = SimpleChainClient::new(
                 chain_id,
                 &chain_config.rpc_url,
+                chain_config.rest_url.as_deref(),
                 chain_config.timeout_ms,
             );
             chain_clients.insert(chain_id.clone(), Arc::new(client));
@@ -603,6 +661,7 @@ impl TestnetBackend {
     }
 
     /// Execute a contract call, either simulated or real
+    /// Uses a global mutex to prevent sequence conflicts and retry logic for transient failures
     async fn execute_contract_call(
         &self,
         contract: &str,
@@ -614,47 +673,67 @@ impl TestnetBackend {
             return self.simulate_tx_broadcast(msg_type).await;
         }
 
-        // Real transaction execution
-        let wallet = self.wallet.as_ref().ok_or_else(|| {
-            BackendError::ConfigError("No wallet configured for real transactions".to_string())
-        })?;
+        // Acquire transaction mutex to prevent sequence conflicts
+        // Only one transaction can be signed/broadcast at a time
+        let _tx_lock = TX_MUTEX.lock().await;
+        info!(msg_type = %msg_type, "Acquired transaction mutex");
 
-        let client = self.primary_client()?;
-        let sender = wallet.address().map_err(|e| {
-            BackendError::Internal(format!("Failed to get wallet address: {}", e))
-        })?;
+        // Use retry logic for the entire transaction flow
+        let contract = contract.to_string();
+        let msg = msg.clone();
+        let funds: Vec<_> = funds.iter().map(|(a, d)| (*a, d.to_string())).collect();
+        let msg_type = msg_type.to_string();
 
-        // Get account info (use cached sequence for performance)
-        let account_info = client.get_account_info(&sender).await?;
+        retry_with_backoff(
+            || async {
+                // Real transaction execution
+                let wallet = self.wallet.as_ref().ok_or_else(|| {
+                    BackendError::ConfigError("No wallet configured for real transactions".to_string())
+                })?;
 
-        // Build the transaction
-        let memo = format!("atom-intents demo: {}", msg_type);
-        let tx_builder = TxBuilder::new(&self.config.primary_chain)
-            .with_memo(&memo);
+                let client = self.primary_client()?;
+                let sender = wallet.address().map_err(|e| {
+                    BackendError::Internal(format!("Failed to get wallet address: {}", e))
+                })?;
 
-        let execute_msg = tx_builder
-            .build_execute_msg(&sender, contract, msg, funds)
-            .map_err(|e| BackendError::ContractCallFailed(format!("Failed to build message: {}", e)))?;
+                // Get fresh account info for each retry (sequence may have changed)
+                let account_info = client.get_account_info(&sender).await?;
 
-        let tx = tx_builder
-            .build_and_sign(wallet, &account_info, execute_msg)
-            .map_err(|e| BackendError::TransactionFailed(format!("Failed to sign transaction: {}", e)))?;
+                // Build the transaction
+                let memo = format!("atom-intents demo: {}", msg_type);
+                let tx_builder = TxBuilder::new(&self.config.primary_chain)
+                    .with_memo(&memo);
 
-        // Broadcast the transaction
-        let broadcast_result = client.broadcast_tx(&tx).await?;
+                let funds_refs: Vec<(u128, &str)> = funds.iter().map(|(a, d)| (*a, d.as_str())).collect();
+                let execute_msg = tx_builder
+                    .build_execute_msg(&sender, &contract, &msg, funds_refs)
+                    .map_err(|e| BackendError::ContractCallFailed(format!("Failed to build message: {}", e)))?;
 
-        // Update cached sequence
-        {
-            let mut seq = self.account_sequence.write().await;
-            *seq = account_info.sequence + 1;
-        }
+                let tx = tx_builder
+                    .build_and_sign(wallet, &account_info, execute_msg)
+                    .map_err(|e| BackendError::TransactionFailed(format!("Failed to sign transaction: {}", e)))?;
 
-        // Wait for confirmation
-        let tx_result = client
-            .wait_for_tx(&broadcast_result.tx_hash, 30, 1000)
-            .await?;
+                // Broadcast the transaction
+                let broadcast_result = client.broadcast_tx(&tx).await?;
 
-        Ok((tx_result.tx_hash, tx_result.height))
+                // Update cached sequence
+                {
+                    let mut seq = self.account_sequence.write().await;
+                    *seq = account_info.sequence + 1;
+                }
+
+                // Wait for confirmation
+                let tx_result = client
+                    .wait_for_tx(&broadcast_result.tx_hash, 30, 1000)
+                    .await?;
+
+                Ok((tx_result.tx_hash, tx_result.height))
+            },
+            3, // max retries
+            200, // initial delay ms
+            &msg_type,
+        )
+        .await
     }
 
     /// Simulate a successful transaction for demo purposes
@@ -874,21 +953,94 @@ impl ExecutionBackend for TestnetBackend {
         });
 
         // Phase 2: IBC transfer
-        // Note: Real IBC transfers require relayer infrastructure
-        // For now, we simulate this step even in real mode
-        tokio::time::sleep(Duration::from_millis(500)).await;
+        // Check if this is a cross-chain settlement
+        let is_cross_chain = !settlement.input_chain_id.is_empty()
+            && !settlement.output_chain_id.is_empty()
+            && settlement.input_chain_id != settlement.output_chain_id;
 
         let ibc_tx_hash = if self.simulation_mode {
+            tokio::time::sleep(Duration::from_millis(500)).await;
             let (hash, _) = self.simulate_tx_broadcast("ibc_transfer").await?;
             hash
+        } else if is_cross_chain {
+            // Look up IBC channel for cross-chain settlement
+            if let Some(channel) = self.config.find_channel(&settlement.input_chain_id, &settlement.output_chain_id) {
+                // Get wallet and client first
+                let wallet = self.wallet.as_ref().ok_or_else(|| {
+                    BackendError::ConfigError("No wallet configured for IBC transfers".to_string())
+                })?;
+                let client = self.primary_client()?;
+                let sender = wallet.address().map_err(|e| BackendError::Internal(format!("Wallet error: {}", e)))?;
+
+                info!(
+                    settlement_id = %settlement.id,
+                    source_chain = %settlement.input_chain_id,
+                    dest_chain = %settlement.output_chain_id,
+                    channel = %channel.channel_id,
+                    "Executing real IBC transfer"
+                );
+
+                // Build IBC transfer message
+                // The output is delivered in the output denom, which needs to be the IBC denom on the source chain
+                // For simplicity, we use uatom as the transfer denom (real implementation would look up IBC denom)
+                let source_denom = format!("u{}", settlement.input_denom.to_lowercase().trim_start_matches('u'));
+                let timeout_ns = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap()
+                    .as_nanos() as u64 + (10 * 60 * 1_000_000_000); // 10 minute timeout
+
+                let tx_builder = TxBuilder::new(&self.config.primary_chain)
+                    .with_memo(&format!("atom-intents settlement {}", settlement.id));
+
+                let ibc_msg = tx_builder.build_ibc_transfer_msg(
+                    &sender,
+                    &settlement.user_output_address,
+                    &channel.port_id,
+                    &channel.channel_id,
+                    settlement.output_amount,
+                    &source_denom,
+                    timeout_ns,
+                );
+
+                // Get account info and sign
+                let account_info = client.get_account_info(&sender).await?;
+                let tx_raw = tx_builder
+                    .build_and_sign_ibc_transfer(wallet, &account_info, ibc_msg)
+                    .map_err(|e| BackendError::TransactionFailed(e.to_string()))?;
+
+                // Broadcast the IBC transfer
+                let broadcast_result = client.broadcast_tx(&tx_raw).await?;
+
+                // Wait for confirmation
+                let tx_result = client
+                    .wait_for_tx(&broadcast_result.tx_hash, 30, 1000)
+                    .await?;
+
+                let hash = tx_result.tx_hash;
+
+                info!(
+                    settlement_id = %settlement.id,
+                    tx_hash = %hash,
+                    "IBC transfer broadcast successful - relayer will deliver"
+                );
+
+                hash
+            } else {
+                warn!(
+                    settlement_id = %settlement.id,
+                    input_chain = %settlement.input_chain_id,
+                    output_chain = %settlement.output_chain_id,
+                    "No IBC channel configured - simulating transfer"
+                );
+                tokio::time::sleep(Duration::from_millis(500)).await;
+                let (hash, _) = self.simulate_tx_broadcast("ibc_transfer").await?;
+                hash
+            }
         } else {
-            // In real mode, we would initiate an actual IBC transfer here
-            // For now, still simulate but log that this needs implementation
-            warn!(
-                settlement_id = %settlement.id,
-                "IBC transfer requires relayer - simulating for now"
-            );
-            let (hash, _) = self.simulate_tx_broadcast("ibc_transfer").await?;
+            // Same-chain settlement, no IBC needed
+            debug!(settlement_id = %settlement.id, "Same-chain settlement - no IBC transfer needed");
+            tokio::time::sleep(Duration::from_millis(100)).await;
+            let (hash, _) = self.simulate_tx_broadcast("local_transfer").await?;
             hash
         };
 

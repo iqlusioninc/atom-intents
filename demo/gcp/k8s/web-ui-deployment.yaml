@@ -23,7 +23,7 @@ spec:
         fsGroup: 101
       containers:
         - name: nginx
-          image: REGISTRY/atom-intents-web-ui:latest
+          image: us-central1-docker.pkg.dev/atom-intents-demo-20251225/atom-intents/web-ui:v1.0.0
           imagePullPolicy: Always
           ports:
             - name: http

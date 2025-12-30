@@ -27,7 +27,7 @@ pub async fn run_auction_loop(state: AppStateRef, interval: Duration) {
 /// Execute one auction cycle
 async fn run_auction_cycle(state: &AppStateRef) {
     // Get pending intents
-    let pending_intents = {
+    let mut pending_intents = {
         let state = state.read().await;
         state.get_pending_intents()
     };
@@ -36,7 +36,19 @@ async fn run_auction_cycle(state: &AppStateRef) {
         return;
     }
 
-    info!("Starting auction with {} pending intents", pending_intents.len());
+    // Prioritize real intents over demo intents (is_demo: false sorts before true)
+    // This ensures real Keplr users get processed first and don't get rate-limited
+    // by demo intents consuming RPC quota
+    pending_intents.sort_by_key(|i| i.is_demo);
+
+    let real_count = pending_intents.iter().filter(|i| !i.is_demo).count();
+    let demo_count = pending_intents.len() - real_count;
+    info!(
+        "Starting auction with {} pending intents ({} real, {} demo)",
+        pending_intents.len(),
+        real_count,
+        demo_count
+    );
 
     // Create auction
     let intent_ids: Vec<String> = pending_intents.iter().map(|i| i.id.clone()).collect();

@@ -27,6 +27,9 @@ pub struct Intent {
     /// Fill percentage (0-100)
     #[serde(default)]
     pub fill_percentage: u8,
+    /// Whether this intent was created by the demo generator (vs real Keplr user)
+    #[serde(default)]
+    pub is_demo: bool,
 }
 
 impl Intent {
@@ -51,6 +54,7 @@ impl Intent {
             filled_amount: 0,
             remaining_amount: input_amount,
             fill_percentage: 0,
+            is_demo: req.is_demo.unwrap_or(false),
         }
     }
 
@@ -146,6 +150,9 @@ pub struct CreateIntentRequest {
     pub constraints: Option<ExecutionConstraints>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub timeout_seconds: Option<u32>,
+    /// Mark as demo-generated intent (lower priority than real intents)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub is_demo: Option<bool>,
 }
 
 /// Batch auction state

@@ -10,6 +10,8 @@ pub struct ChainConfig {
     pub chain_id: String,
     pub rpc_url: String,
     #[serde(default)]
+    pub rest_url: Option<String>,
+    #[serde(default)]
     pub grpc_url: Option<String>,
     #[serde(default = "default_gas_price")]
     pub gas_price: String,
@@ -120,6 +122,7 @@ impl TestnetConfig {
             ChainConfig {
                 chain_id: primary_chain.clone(),
                 rpc_url,
+                rest_url: std::env::var("TESTNET_REST_URL").ok(),
                 grpc_url: std::env::var("TESTNET_GRPC_URL").ok(),
                 gas_price: std::env::var("GAS_PRICE").unwrap_or_else(|_| "0.025".to_string()),
                 fee_denom: std::env::var("FEE_DENOM").unwrap_or_else(|_| "uatom".to_string()),
@@ -167,6 +170,7 @@ impl TestnetConfig {
             ChainConfig {
                 chain_id: "localhub-1".to_string(),
                 rpc_url: "http://localhost:26657".to_string(),
+                rest_url: Some("http://localhost:1317".to_string()),
                 grpc_url: Some("http://localhost:9090".to_string()),
                 gas_price: "0.025".to_string(),
                 fee_denom: "uatom".to_string(),
@@ -182,6 +186,7 @@ impl TestnetConfig {
             ChainConfig {
                 chain_id: "localosmo-1".to_string(),
                 rpc_url: "http://localhost:26667".to_string(),
+                rest_url: Some("http://localhost:1327".to_string()),
                 grpc_url: Some("http://localhost:9091".to_string()),
                 gas_price: "0.025".to_string(),
                 fee_denom: "uosmo".to_string(),

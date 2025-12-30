@@ -133,6 +133,7 @@ fn maybe_generate_counter_order(intent: &Intent) -> Option<Intent> {
         fill_config: Some(FillConfig::default()),
         constraints: Some(ExecutionConstraints::default()),
         timeout_seconds: Some(60),
+        is_demo: Some(true), // Synthetic counter-order gets demo priority
     };
 
     Some(Intent::new(req))
@@ -366,6 +367,7 @@ pub async fn generate_demo_intent(
             fill_config: Some(FillConfig::default()),
             constraints: Some(ExecutionConstraints::default()),
             timeout_seconds: Some(60),
+            is_demo: Some(true), // Mark as demo-generated for lower priority
         };
 
         (req, input_denom.to_string(), output_denom.to_string(), output_chain.to_string(), amount)
@@ -458,6 +460,7 @@ fn get_scenario(name: &str) -> Option<DemoScenario> {
                 fill_config: None,
                 constraints: None,
                 timeout_seconds: Some(60),
+                is_demo: Some(true),
             }],
             expected_outcome: "DEX Router fills via Osmosis AMM".to_string(),
         }),
@@ -485,6 +488,7 @@ fn get_scenario(name: &str) -> Option<DemoScenario> {
                     max_slippage_bps: 100,
                 }),
                 timeout_seconds: Some(60),
+                is_demo: Some(true),
             }],
             expected_outcome: "Flow: Celestia -> Hub Escrow (IBC Hooks) -> Solver delivers USDC -> Hub releases TIA. Solver takes relay risk.".to_string(),
         }),
@@ -508,6 +512,7 @@ fn get_scenario(name: &str) -> Option<DemoScenario> {
                     fill_config: None,
                     constraints: None,
                     timeout_seconds: Some(60),
+                    is_demo: Some(true),
                 },
                 CreateIntentRequest {
                     user_address: "cosmos1demo_bob".to_string(),
@@ -525,6 +530,7 @@ fn get_scenario(name: &str) -> Option<DemoScenario> {
                     fill_config: None,
                     constraints: None,
                     timeout_seconds: Some(60),
+                    is_demo: Some(true),
                 },
             ],
             expected_outcome: "Intent Matcher matches Alice and Bob directly".to_string(),
@@ -553,6 +559,7 @@ fn get_scenario(name: &str) -> Option<DemoScenario> {
                     max_slippage_bps: 150,
                 }),
                 timeout_seconds: Some(120),
+                is_demo: Some(true),
             }],
             expected_outcome: "Route: Hub -> Osmosis (swap) -> Neutron via PFM".to_string(),
         }),
@@ -579,6 +586,7 @@ fn get_scenario(name: &str) -> Option<DemoScenario> {
                 }),
                 constraints: None,
                 timeout_seconds: Some(300),
+                is_demo: Some(true),
             }],
             expected_outcome: "CEX Backstop provides deep liquidity for large order".to_string(),
         }),
@@ -602,6 +610,7 @@ fn get_scenario(name: &str) -> Option<DemoScenario> {
                     fill_config: None,
                     constraints: None,
                     timeout_seconds: Some(60),
+                    is_demo: Some(true),
                 },
                 CreateIntentRequest {
                     user_address: "cosmos1demo_user2".to_string(),
@@ -619,6 +628,7 @@ fn get_scenario(name: &str) -> Option<DemoScenario> {
                     fill_config: None,
                     constraints: None,
                     timeout_seconds: Some(60),
+                    is_demo: Some(true),
                 },
             ],
             expected_outcome: "Batch auction with uniform clearing price".to_string(),
@@ -646,6 +656,7 @@ fn get_scenario(name: &str) -> Option<DemoScenario> {
                 }),
                 constraints: None,
                 timeout_seconds: Some(120),
+                is_demo: Some(true),
             }],
             expected_outcome: "Order may partially fill (50-100%) based on available liquidity".to_string(),
         }),
@@ -672,6 +683,7 @@ fn get_scenario(name: &str) -> Option<DemoScenario> {
                 }),
                 constraints: None,
                 timeout_seconds: Some(60),
+                is_demo: Some(true),
             }],
             expected_outcome: "LST Specialist solver provides best rate for stATOM → ATOM".to_string(),
         }),

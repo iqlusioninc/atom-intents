@@ -21,6 +21,7 @@ escrow_address = "cosmos13jv2umdqvlkfncpd6vf7r2sc0ljdtenmzujlpqqpgagarassqsws86p
 [chains.provider]
 chain_id = "provider"
 rpc_url = "https://cosmos-testnet-rpc.polkachu.com:443"
+rest_url = "https://cosmos-testnet-api.polkachu.com"
 grpc_url = "https://cosmos-testnet-grpc.polkachu.com:443"
 gas_price = "0.025"
 fee_denom = "uatom"
@@ -53,15 +54,53 @@ gas_adjustment = 1.5
 timeout_ms = 30000
 max_retries = 3
 
-# IBC Channels
+# ZIGChain Testnet (Active IBC client!)
+[chains.zig-test-2]
+chain_id = "zig-test-2"
+rpc_url = "https://public-zigchain-testnet-rpc.numia.xyz:443"
+rest_url = "https://public-zigchain-testnet-lcd.numia.xyz"
+gas_price = "0.025"
+fee_denom = "uzig"
+account_prefix = "zig"
+gas_adjustment = 1.5
+timeout_ms = 30000
+max_retries = 3
+
+# IBC Channels - Provider ↔ ZIGChain testnet (ACTIVE CLIENT!)
 [[ibc_channels]]
-source_chain = "theta-testnet-001"
+source_chain = "provider"
+dest_chain = "zig-test-2"
+channel_id = "channel-566"
+port_id = "transfer"
+
+[[ibc_channels]]
+source_chain = "zig-test-2"
+dest_chain = "provider"
+channel_id = "channel-43"
+port_id = "transfer"
+
+# IBC Channels - Provider (Cosmos Hub ICS testnet) ↔ Osmosis testnet
+[[ibc_channels]]
+source_chain = "provider"
 dest_chain = "osmo-test-5"
-channel_id = "channel-3306"
+channel_id = "channel-120"
 port_id = "transfer"
 
 [[ibc_channels]]
 source_chain = "osmo-test-5"
-dest_chain = "theta-testnet-001"
-channel_id = "channel-4156"
+dest_chain = "provider"
+channel_id = "channel-7830"
+port_id = "transfer"
+
+# Provider ↔ Neutron testnet (pion-1)
+[[ibc_channels]]
+source_chain = "provider"
+dest_chain = "pion-1"
+channel_id = "channel-1"
+port_id = "transfer"
+
+[[ibc_channels]]
+source_chain = "pion-1"
+dest_chain = "provider"
+channel_id = "channel-1"
 port_id = "transfer"

@@ -1,23 +1,39 @@
 import { useState } from 'react';
 import { useMutation } from '@tanstack/react-query';
-import { ArrowRight, Loader2, Check, Wallet, AlertCircle, Settings, ChevronDown, ChevronUp } from 'lucide-react';
+import { ArrowRight, Loader2, Check, Wallet, AlertCircle, Settings, ChevronDown, ChevronUp, ExternalLink } from 'lucide-react';
 import * as api from '../services/api';
 import { useStore } from '../hooks/useStore';
 import { useWallet } from '../hooks/useWallet';
 import { TOKENS } from '../types';
+import { getTxUrl } from '../config/chains';
+import { friendlyError } from '../utils/errors';
 
 type FillStrategy = 'eager' | 'all_or_nothing' | 'time_based' | 'price_based';
+type TxStatus = 'idle' | 'signing' | 'broadcasting' | 'confirming' | 'success' | 'error';
 
 export default function IntentCreator() {
   const prices = useStore((state) => state.prices);
   const addIntent = useStore((state) => state.addIntent);
-  const { connected, address, balances, updateBalance } = useWallet();
+  const {
+    connected,
+    address,
+    balances,
+    walletType,
+    pendingTx,
+    lockFundsInEscrow,
+    hasEnoughBalance,
+  } = useWallet();
 
   const [inputDenom, setInputDenom] = useState('ATOM');
   const [outputDenom, setOutputDenom] = useState('OSMO');
   const [inputAmount, setInputAmount] = useState('10');
   const [slippage, setSlippage] = useState('1');
   const [success, setSuccess] = useState(false);
+
+  // Transaction state for Keplr
+  const [txStatus, setTxStatus] = useState<TxStatus>('idle');
+  const [txHash, setTxHash] = useState<string | null>(null);
+  const [txError, setTxError] = useState<string | null>(null);
 
   // Partial fill configuration
   const [showAdvanced, setShowAdvanced] = useState(false);
@@ -35,64 +51,179 @@ export default function IntentCreator() {
   // Get user's balance for the input token
   const userBalance = balances[inputDenom] || 0;
   const userBalanceFormatted = userBalance / 1_000_000;
-  const inputAmountMicro = Math.floor(parseFloat(inputAmount || '0') * 1_000_000);
-  const hasInsufficientBalance = inputAmountMicro > userBalance;
+  const inputAmountNum = parseFloat(inputAmount || '0');
+  const hasInsufficientBalance = !hasEnoughBalance(inputDenom, inputAmountNum);
 
+  // API mutation for demo mode (and after escrow deposit for Keplr)
   const mutation = useMutation({
     mutationFn: api.submitIntent,
     onSuccess: (data) => {
       addIntent(data.intent);
       setSuccess(true);
-      // Deduct from simulated balance
-      if (connected) {
-        updateBalance(inputDenom, userBalance - inputAmountMicro);
-      }
       setTimeout(() => setSuccess(false), 3000);
     },
   });
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
 
-    if (!connected) {
+    if (!connected || !address) {
       return;
     }
 
     const inputToken = TOKENS[inputDenom];
     const outputToken = TOKENS[outputDenom];
+    const intentId = `intent_${Date.now()}_${Math.random().toString(16).slice(2, 10)}`;
 
-    mutation.mutate({
-      user_address: address || `cosmos1demo${Math.random().toString(16).slice(2, 10)}`,
-      input: {
-        chain_id: inputToken.chain,
-        denom: inputDenom,
-        amount: Math.floor(parseFloat(inputAmount) * 1_000_000),
-      },
-      output: {
-        chain_id: outputToken.chain,
-        denom: outputDenom,
-        min_amount: Math.floor(minOutput * 1_000_000),
-      },
-      fill_config: {
-        allow_partial: allowPartial,
-        min_fill_percent: minFillPercent,
-        strategy: fillStrategy,
-      },
-      constraints: {
-        max_hops: 3,
-        allowed_venues: [],
-        excluded_venues: [],
-        max_slippage_bps: Math.floor(parseFloat(slippage) * 100),
-      },
-      timeout_seconds: 60,
-    });
+    // For Keplr: Lock funds in escrow first
+    if (walletType === 'keplr') {
+      setTxStatus('signing');
+      setTxHash(null);
+      setTxError(null);
+
+      try {
+        // Step 1: Lock funds in escrow (user signs in Keplr)
+        setTxStatus('signing');
+
+        const result = await lockFundsInEscrow(
+          inputAmountNum,
+          inputDenom,
+          intentId
+        );
+
+        setTxHash(result.txHash);
+        setTxStatus('success');
+
+        // Step 2: Submit intent to backend (after escrow is locked)
+        // Note: Backend will detect the on-chain escrow deposit
+        mutation.mutate({
+          user_address: address,
+          input: {
+            chain_id: inputToken.chain,
+            denom: inputDenom,
+            amount: Math.floor(inputAmountNum * 1_000_000),
+          },
+          output: {
+            chain_id: outputToken.chain,
+            denom: outputDenom,
+            min_amount: Math.floor(minOutput * 1_000_000),
+          },
+          fill_config: {
+            allow_partial: allowPartial,
+            min_fill_percent: minFillPercent,
+            strategy: fillStrategy,
+          },
+          constraints: {
+            max_hops: 3,
+            allowed_venues: [],
+            excluded_venues: [],
+            max_slippage_bps: Math.floor(parseFloat(slippage) * 100),
+          },
+          timeout_seconds: 60,
+        });
+
+        // Reset after delay
+        setTimeout(() => {
+          setTxStatus('idle');
+          setTxHash(null);
+        }, 10000);
+
+      } catch (err) {
+        setTxError(friendlyError(err));
+        setTxStatus('error');
+
+        // Reset error after delay
+        setTimeout(() => {
+          setTxStatus('idle');
+          setTxError(null);
+        }, 5000);
+      }
+    } else {
+      // Demo mode: Just submit to API (no on-chain tx)
+      mutation.mutate({
+        user_address: address,
+        input: {
+          chain_id: inputToken.chain,
+          denom: inputDenom,
+          amount: Math.floor(inputAmountNum * 1_000_000),
+        },
+        output: {
+          chain_id: outputToken.chain,
+          denom: outputDenom,
+          min_amount: Math.floor(minOutput * 1_000_000),
+        },
+        fill_config: {
+          allow_partial: allowPartial,
+          min_fill_percent: minFillPercent,
+          strategy: fillStrategy,
+        },
+        constraints: {
+          max_hops: 3,
+          allowed_venues: [],
+          excluded_venues: [],
+          max_slippage_bps: Math.floor(parseFloat(slippage) * 100),
+        },
+        timeout_seconds: 60,
+      });
+    }
+  };
+
+  const isSubmitting = mutation.isPending || pendingTx || txStatus === 'signing' || txStatus === 'broadcasting';
+
+  const getButtonContent = () => {
+    if (txStatus === 'signing') {
+      return (
+        <>
+          <Loader2 className="w-5 h-5 animate-spin" />
+          Confirm in Keplr...
+        </>
+      );
+    }
+    if (txStatus === 'broadcasting') {
+      return (
+        <>
+          <Loader2 className="w-5 h-5 animate-spin" />
+          Broadcasting...
+        </>
+      );
+    }
+    if (txStatus === 'confirming') {
+      return (
+        <>
+          <Loader2 className="w-5 h-5 animate-spin" />
+          Confirming...
+        </>
+      );
+    }
+    if (txStatus === 'success' || success) {
+      return (
+        <>
+          <Check className="w-5 h-5" />
+          Intent Submitted!
+        </>
+      );
+    }
+    if (mutation.isPending) {
+      return (
+        <>
+          <Loader2 className="w-5 h-5 animate-spin" />
+          Submitting...
+        </>
+      );
+    }
+
+    return walletType === 'keplr' ? 'Sign & Deposit to Escrow' : 'Submit Intent';
   };
 
   return (
     <div className="space-y-4 sm:space-y-6 animate-slide-in">
       <div>
         <h2 className="text-xl sm:text-2xl font-bold text-white">Create Intent</h2>
-        <p className="text-gray-400 text-sm sm:text-base">Submit a new trading intent to the system</p>
+        <p className="text-gray-400 text-sm sm:text-base">
+          {walletType === 'keplr'
+            ? 'Submit a trading intent with on-chain escrow deposit'
+            : 'Submit a new trading intent to the system'}
+        </p>
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 sm:gap-6">
@@ -301,30 +432,65 @@ export default function IntentCreator() {
               </div>
             </div>
           ) : (
-            <button
-              type="submit"
-              disabled={mutation.isPending || !inputAmount || parseFloat(inputAmount) <= 0 || hasInsufficientBalance}
-              className="w-full btn-primary flex items-center justify-center gap-2 py-3 disabled:opacity-50"
-            >
-              {mutation.isPending ? (
-                <>
-                  <Loader2 className="w-5 h-5 animate-spin" />
-                  Submitting...
-                </>
-              ) : success ? (
-                <>
-                  <Check className="w-5 h-5" />
-                  Intent Submitted!
-                </>
-              ) : (
-                'Submit Intent'
+            <>
+              <button
+                type="submit"
+                disabled={isSubmitting || !inputAmount || inputAmountNum <= 0 || hasInsufficientBalance}
+                className={`w-full btn-primary flex items-center justify-center gap-2 py-3 disabled:opacity-50 ${
+                  txStatus === 'success' ? 'bg-green-600 hover:bg-green-700' : ''
+                }`}
+              >
+                {getButtonContent()}
+              </button>
+
+              {/* Keplr mode info */}
+              {walletType === 'keplr' && txStatus === 'idle' && (
+                <p className="text-xs text-gray-500 text-center">
+                  You will be prompted to sign a transaction in Keplr to deposit funds into escrow
+                </p>
               )}
-            </button>
+            </>
+          )}
+
+          {/* Transaction success with link */}
+          {txHash && txStatus === 'success' && (
+            <div className="p-4 bg-green-900/20 border border-green-700/50 rounded-lg">
+              <div className="flex items-center justify-between">
+                <div>
+                  <p className="text-green-300 font-medium text-sm">Transaction Confirmed!</p>
+                  <p className="text-xs text-gray-400 mt-1 font-mono">
+                    {txHash.slice(0, 20)}...{txHash.slice(-8)}
+                  </p>
+                </div>
+                <a
+                  href={getTxUrl(txHash)}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="flex items-center gap-1 text-cosmos-400 hover:text-cosmos-300 text-sm"
+                >
+                  <ExternalLink className="w-4 h-4" />
+                  View
+                </a>
+              </div>
+            </div>
+          )}
+
+          {/* Transaction error */}
+          {txError && (
+            <div className="p-4 bg-red-900/20 border border-red-700/50 rounded-lg">
+              <div className="flex items-start gap-2">
+                <AlertCircle className="w-4 h-4 text-red-400 flex-shrink-0 mt-0.5" />
+                <div>
+                  <p className="text-red-300 font-medium text-sm">Transaction Failed</p>
+                  <p className="text-xs text-gray-400 mt-1">{txError}</p>
+                </div>
+              </div>
+            </div>
           )}
 
           {mutation.isError && (
             <p className="text-red-400 text-sm text-center">
-              Error: {(mutation.error as Error).message}
+              {friendlyError(mutation.error)}
             </p>
           )}
         </form>
@@ -395,12 +561,25 @@ export default function IntentCreator() {
             </div>
 
             <div className="p-3 sm:p-4 bg-cosmos-900/30 border border-cosmos-700/50 rounded-lg">
-              <p className="text-sm text-cosmos-300 mb-2">How it works:</p>
+              <p className="text-sm text-cosmos-300 mb-2">
+                {walletType === 'keplr' ? 'How testnet works:' : 'How it works:'}
+              </p>
               <ol className="text-xs sm:text-sm text-gray-400 space-y-1">
-                <li>1. Your intent is broadcast to all solvers</li>
-                <li>2. Solvers compete in a batch auction</li>
-                <li>3. Best price wins, funds are escrowed</li>
-                <li>4. Settlement via IBC (2-5 seconds)</li>
+                {walletType === 'keplr' ? (
+                  <>
+                    <li>1. Sign escrow deposit in Keplr</li>
+                    <li>2. Funds locked in escrow contract</li>
+                    <li>3. Solvers compete in batch auction</li>
+                    <li>4. Winner settles via IBC transfer</li>
+                  </>
+                ) : (
+                  <>
+                    <li>1. Your intent is broadcast to all solvers</li>
+                    <li>2. Solvers compete in a batch auction</li>
+                    <li>3. Best price wins, funds are escrowed</li>
+                    <li>4. Settlement via IBC (2-5 seconds)</li>
+                  </>
+                )}
               </ol>
             </div>
           </div>

@@ -1,0 +1,116 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: testnet-config
+  namespace: atom-intents
+  labels:
+    app.kubernetes.io/name: skip-select-simulator
+    app.kubernetes.io/component: testnet-config
+data:
+  testnet.toml: |
+    # Skip Select Simulator - Testnet Configuration
+    #
+    # This configuration connects to real Cosmos testnets.
+    # Deployed contracts on provider testnet
+
+    # Primary chain for settlement
+    primary_chain = "provider"
+
+    # Settlement timeout in seconds
+    settlement_timeout_secs = 600
+
+    # Enable debug logging
+    debug = false
+
+    # Contract addresses - Deployed 2024-12-28
+    [contracts]
+    settlement_address = "cosmos1xwft7w6kcspzufftw6ky4f5e8sykumpuenpm34tkxk4epmya0jdsahgsff"
+    escrow_address = "cosmos13jv2umdqvlkfncpd6vf7r2sc0ljdtenmzujlpqqpgagarassqsws86phq9"
+
+    # Cosmos Hub Provider Testnet (ICS)
+    [chains.provider]
+    chain_id = "provider"
+    rpc_url = "https://cosmos-testnet-rpc.polkachu.com:443"
+    rest_url = "https://cosmos-testnet-api.polkachu.com"
+    grpc_url = "https://cosmos-testnet-grpc.polkachu.com:443"
+    gas_price = "0.025"
+    fee_denom = "uatom"
+    account_prefix = "cosmos"
+    gas_adjustment = 1.5
+    timeout_ms = 30000
+    max_retries = 3
+
+    # Osmosis Testnet
+    [chains.osmo-test-5]
+    chain_id = "osmo-test-5"
+    rpc_url = "https://rpc.testnet.osmosis.zone:443"
+    grpc_url = "https://grpc.testnet.osmosis.zone:443"
+    gas_price = "0.025"
+    fee_denom = "uosmo"
+    account_prefix = "osmo"
+    gas_adjustment = 1.5
+    timeout_ms = 30000
+    max_retries = 3
+
+    # Neutron Testnet (Pion)
+    [chains.pion-1]
+    chain_id = "pion-1"
+    rpc_url = "https://neutron-testnet-rpc.polkachu.com:443"
+    grpc_url = "https://neutron-testnet-grpc.polkachu.com:443"
+    gas_price = "0.025"
+    fee_denom = "untrn"
+    account_prefix = "neutron"
+    gas_adjustment = 1.5
+    timeout_ms = 30000
+    max_retries = 3
+
+    # ZIGChain Testnet (Active IBC client!)
+    [chains.zig-test-2]
+    chain_id = "zig-test-2"
+    rpc_url = "https://public-zigchain-testnet-rpc.numia.xyz:443"
+    rest_url = "https://public-zigchain-testnet-lcd.numia.xyz"
+    gas_price = "0.025"
+    fee_denom = "uzig"
+    account_prefix = "zig"
+    gas_adjustment = 1.5
+    timeout_ms = 30000
+    max_retries = 3
+
+    # IBC Channels - Provider <-> ZIGChain testnet (ACTIVE CLIENT!)
+    [[ibc_channels]]
+    source_chain = "provider"
+    dest_chain = "zig-test-2"
+    channel_id = "channel-566"
+    port_id = "transfer"
+
+    [[ibc_channels]]
+    source_chain = "zig-test-2"
+    dest_chain = "provider"
+    channel_id = "channel-43"
+    port_id = "transfer"
+
+    # IBC Channels - Provider <-> Osmosis testnet (client may be expired)
+    [[ibc_channels]]
+    source_chain = "provider"
+    dest_chain = "osmo-test-5"
+    channel_id = "channel-120"
+    port_id = "transfer"
+
+    [[ibc_channels]]
+    source_chain = "osmo-test-5"
+    dest_chain = "provider"
+    channel_id = "channel-7830"
+    port_id = "transfer"
+
+    # Provider <-> Neutron testnet (client may be expired)
+    [[ibc_channels]]
+    source_chain = "provider"
+    dest_chain = "pion-1"
+    channel_id = "channel-1"
+    port_id = "transfer"
+
+    [[ibc_channels]]
+    source_chain = "pion-1"
+    dest_chain = "provider"
+    channel_id = "channel-1"
+    port_id = "transfer"

@@ -3,7 +3,7 @@
 //! This module handles key management and transaction signing for
 //! interacting with real Cosmos chains.
 
-use k256::ecdsa::{signature::Signer, Signature, SigningKey};
+use k256::ecdsa::{signature::Signer, signature::hazmat::PrehashSigner, Signature, SigningKey};
 use ripemd::Ripemd160;
 use sha2::{Digest, Sha256};
 use thiserror::Error;
@@ -124,8 +124,9 @@ impl CosmosWallet {
             ));
         }
 
+        // Use sign_prehash to sign already-hashed data without additional hashing
         let signature: Signature = self.signing_key
-            .try_sign(hash)
+            .sign_prehash(hash)
             .map_err(|e| WalletError::SigningFailed(format!("signing error: {}", e)))?;
 
         Ok(signature.to_bytes().to_vec())

@@ -28,8 +28,13 @@ spec:
         fsGroup: 1000
       containers:
         - name: skip-select
-          image: REGISTRY/skip-select-simulator:latest
+          image: us-central1-docker.pkg.dev/atom-intents-demo-20251225/atom-intents/skip-select-simulator:v1.0.0
           imagePullPolicy: Always
+          args:
+            - "--mode"
+            - "testnet"
+            - "--config"
+            - "/config/testnet.toml"
           ports:
             - name: http
               containerPort: 8080
@@ -51,6 +56,15 @@ spec:
                 secretKeyRef:
                   name: skip-select-secrets
                   key: redis-url
+            - name: PROVIDER_PRIVATE_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: skip-select-secrets
+                  key: provider-private-key
+          volumeMounts:
+            - name: testnet-config
+              mountPath: /config
+              readOnly: true
           resources:
             requests:
               cpu: 100m
@@ -96,6 +110,10 @@ spec:
           labelSelector:
             matchLabels:
               app.kubernetes.io/name: skip-select-simulator
+      volumes:
+        - name: testnet-config
+          configMap:
+            name: testnet-config
 
 ---
 apiVersion: v1
@@ -130,45 +148,22 @@ metadata:
   labels:
     app.kubernetes.io/name: skip-select-simulator
 
----
-apiVersion: autoscaling/v2
-kind: HorizontalPodAutoscaler
-metadata:
-  name: skip-select
-  namespace: atom-intents
-spec:
-  scaleTargetRef:
-    apiVersion: apps/v1
-    kind: Deployment
-    name: skip-select
-  minReplicas: 2
-  maxReplicas: 10
-  metrics:
-    - type: Resource
-      resource:
-        name: cpu
-        target:
-          type: Utilization
-          averageUtilization: 70
-    - type: Resource
-      resource:
-        name: memory
-        target:
-          type: Utilization
-          averageUtilization: 80
-  behavior:
-    scaleUp:
-      stabilizationWindowSeconds: 60
-      policies:
-        - type: Pods
-          value: 2
-          periodSeconds: 60
-    scaleDown:
-      stabilizationWindowSeconds: 300
-      policies:
-        - type: Pods
-          value: 1
-          periodSeconds: 120
+# NOTE: HPA disabled for skip-select - single replica required for transaction sequence consistency
+# The backend uses in-memory state and a transaction mutex that only works within a single process.
+# If horizontal scaling is needed, implement distributed locking (Redis) for sequence numbers.
+# ---
+# apiVersion: autoscaling/v2
+# kind: HorizontalPodAutoscaler
+# metadata:
+#   name: skip-select
+#   namespace: atom-intents
+# spec:
+#   scaleTargetRef:
+#     apiVersion: apps/v1
+#     kind: Deployment
+#     name: skip-select
+#   minReplicas: 1
+#   maxReplicas: 1
 
 ---
 apiVersion: policy/v1
