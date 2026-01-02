@@ -1,11 +1,16 @@
-use cosmwasm_std::{Deps, StdResult};
+use cosmwasm_std::{Deps, StdResult, Uint128};
 
 use crate::helpers::{reputation_to_response, settlement_to_response, solver_to_response};
 use crate::msg::{
-    ConfigResponse, SettlementResponse, SettlementsResponse, SolverReputationResponse,
-    SolverResponse, SolversByReputationResponse, SolversResponse, TopSolversResponse,
+    AcceptedLstTokensResponse, BondAssetResponse, ConfigResponse, LsmConfigResponse,
+    LstConfigResponse, SettlementResponse, SettlementsResponse, SolverBondResponse,
+    SolverReputationResponse, SolverResponse, SolversByReputationResponse, SolversResponse,
+    TopSolversResponse,
 };
-use crate::state::{SolverReputation, CONFIG, INTENT_SETTLEMENTS, REPUTATIONS, SETTLEMENTS, SOLVERS};
+use crate::state::{
+    BondAssetType, LsmBondConfig, LstBondConfig, SolverReputation, CONFIG, INTENT_SETTLEMENTS,
+    LSM_CONFIG, LST_CONFIG, REPUTATIONS, SETTLEMENTS, SOLVERS,
+};
 
 pub fn query_config(deps: Deps) -> StdResult<ConfigResponse> {
     let config = CONFIG.load(deps.storage)?;
@@ -119,4 +124,103 @@ pub fn query_solvers_by_reputation(
         .collect();
 
     Ok(SolversByReputationResponse { solvers })
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// LSM & LST BOND QUERIES
+// ═══════════════════════════════════════════════════════════════════════════
+
+/// Query detailed bond information for a solver
+pub fn query_solver_bond(deps: Deps, solver_id: String) -> StdResult<SolverBondResponse> {
+    let solver = SOLVERS.load(deps.storage, &solver_id)?;
+
+    // Convert bond assets to response format
+    let assets: Vec<BondAssetResponse> = solver
+        .bond
+        .assets
+        .iter()
+        .map(|a| {
+            let (asset_type, asset_info) = match &a.asset_type {
+                BondAssetType::NativeAtom => ("native_atom".to_string(), None),
+                BondAssetType::LsmShare { validator } => {
+                    ("lsm_share".to_string(), Some(validator.clone()))
+                }
+                BondAssetType::Lst { protocol } => ("lst".to_string(), Some(protocol.clone())),
+            };
+            BondAssetResponse {
+                denom: a.denom.clone(),
+                amount: a.amount,
+                asset_type,
+                asset_info,
+                atom_value: a.atom_value,
+            }
+        })
+        .collect();
+
+    // Calculate category totals
+    let native_atom_amount = solver.bond.native_atom_amount();
+
+    let lsm_value: Uint128 = solver
+        .bond
+        .assets
+        .iter()
+        .filter(|a| matches!(a.asset_type, BondAssetType::LsmShare { .. }))
+        .map(|a| a.atom_value)
+        .sum();
+
+    let lst_value: Uint128 = solver
+        .bond
+        .assets
+        .iter()
+        .filter(|a| matches!(a.asset_type, BondAssetType::Lst { .. }))
+        .map(|a| a.atom_value)
+        .sum();
+
+    Ok(SolverBondResponse {
+        solver_id,
+        assets,
+        total_atom_value: solver.bond.total_atom_value,
+        native_atom_amount,
+        lsm_value,
+        lst_value,
+        last_updated: solver.bond.last_updated,
+    })
+}
+
+/// Query LSM bond configuration
+pub fn query_lsm_config(deps: Deps) -> StdResult<LsmConfigResponse> {
+    let lsm_config = LSM_CONFIG
+        .may_load(deps.storage)?
+        .unwrap_or_else(LsmBondConfig::default);
+
+    Ok(LsmConfigResponse {
+        enabled: lsm_config.enabled,
+        blocked_validators: lsm_config.blocked_validators,
+        max_lsm_per_solver: lsm_config.max_lsm_per_solver,
+        valuation_discount_bps: lsm_config.valuation_discount_bps,
+    })
+}
+
+/// Query LST bond configuration
+pub fn query_lst_config(deps: Deps) -> StdResult<LstConfigResponse> {
+    let lst_config = LST_CONFIG
+        .may_load(deps.storage)?
+        .unwrap_or_else(LstBondConfig::default);
+
+    Ok(LstConfigResponse {
+        enabled: lst_config.enabled,
+        max_lst_per_solver: lst_config.max_lst_per_solver,
+        accepted_tokens_count: lst_config.accepted_tokens.len() as u32,
+    })
+}
+
+/// Query accepted LST tokens
+pub fn query_accepted_lst_tokens(deps: Deps) -> StdResult<AcceptedLstTokensResponse> {
+    let lst_config = LST_CONFIG
+        .may_load(deps.storage)?
+        .unwrap_or_else(LstBondConfig::default);
+
+    Ok(AcceptedLstTokensResponse {
+        tokens: lst_config.accepted_tokens,
+    })
 }

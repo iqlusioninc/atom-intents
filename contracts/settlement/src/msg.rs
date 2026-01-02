@@ -1,12 +1,18 @@
 use cosmwasm_schema::{cw_serde, QueryResponses};
 use cosmwasm_std::Uint128;
 
+use crate::state::{LsmBondConfig, LstBondConfig, LstTokenConfig};
+
 #[cw_serde]
 pub struct InstantiateMsg {
     pub admin: String,
     pub escrow_contract: String,
     pub min_solver_bond: Uint128,
     pub base_slash_bps: u64,
+    /// Optional LSM bond configuration (defaults to enabled with 95% valuation)
+    pub lsm_config: Option<LsmBondConfig>,
+    /// Optional LST bond configuration (defaults to enabled with standard tokens)
+    pub lst_config: Option<LstBondConfig>,
 }
 
 #[cw_serde]
@@ -96,6 +102,54 @@ pub enum ExecuteMsg {
         start_after: Option<String>,
         limit: Option<u32>,
     },
+
+    // ═══════════════════════════════════════════════════════════════════════
+    // LSM & LST BOND MANAGEMENT
+    // ═══════════════════════════════════════════════════════════════════════
+
+    /// Add additional bond assets to an existing solver registration
+    /// Accepts native ATOM, LSM shares, and LST tokens
+    AddBond { solver_id: String },
+
+    /// Withdraw bond assets from a solver (must maintain minimum bond)
+    /// Specifies which assets and amounts to withdraw
+    WithdrawBond {
+        solver_id: String,
+        /// List of (denom, amount) pairs to withdraw
+        withdrawals: Vec<(String, Uint128)>,
+    },
+
+    /// Update LSM bond configuration (admin only)
+    UpdateLsmConfig {
+        enabled: Option<bool>,
+        blocked_validators: Option<Vec<String>>,
+        max_lsm_per_solver: Option<Uint128>,
+        valuation_discount_bps: Option<u64>,
+    },
+
+    /// Update LST bond configuration (admin only)
+    UpdateLstConfig {
+        enabled: Option<bool>,
+        max_lst_per_solver: Option<Uint128>,
+    },
+
+    /// Add or update an accepted LST token (admin only)
+    AddOrUpdateLstToken {
+        denom: String,
+        protocol: String,
+        exchange_rate_bps: u64,
+        max_per_solver: Option<Uint128>,
+        enabled: bool,
+    },
+
+    /// Remove an LST token from accepted list (admin only)
+    RemoveLstToken { denom: String },
+
+    /// Block a validator for LSM bonding (admin only)
+    BlockValidator { validator: String },
+
+    /// Unblock a validator for LSM bonding (admin only)
+    UnblockValidator { validator: String },
 }
 
 #[cw_serde]
@@ -145,6 +199,26 @@ pub enum QueryMsg {
         start_after: Option<String>,
         limit: Option<u32>,
     },
+
+    // ═══════════════════════════════════════════════════════════════════════
+    // LSM & LST BOND QUERIES
+    // ═══════════════════════════════════════════════════════════════════════
+
+    /// Query detailed bond information for a solver
+    #[returns(SolverBondResponse)]
+    SolverBond { solver_id: String },
+
+    /// Query LSM bond configuration
+    #[returns(LsmConfigResponse)]
+    LsmConfig {},
+
+    /// Query LST bond configuration
+    #[returns(LstConfigResponse)]
+    LstConfig {},
+
+    /// Query accepted LST tokens
+    #[returns(AcceptedLstTokensResponse)]
+    AcceptedLstTokens {},
 }
 
 #[cw_serde]
@@ -287,4 +361,65 @@ pub struct InflightSettlementsResponse {
     pub settlement_ids: Vec<String>,
     /// Total count
     pub count: u64,
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// LSM & LST BOND RESPONSE TYPES
+// ═══════════════════════════════════════════════════════════════════════════
+
+/// Detailed bond asset information
+#[cw_serde]
+pub struct BondAssetResponse {
+    /// The denomination of the asset
+    pub denom: String,
+    /// The raw amount in base units
+    pub amount: Uint128,
+    /// Type: "native_atom", "lsm_share", or "lst"
+    pub asset_type: String,
+    /// Additional info (validator for LSM, protocol for LST)
+    pub asset_info: Option<String>,
+    /// ATOM-equivalent value
+    pub atom_value: Uint128,
+}
+
+/// Response for solver bond query
+#[cw_serde]
+pub struct SolverBondResponse {
+    pub solver_id: String,
+    /// List of all bond assets
+    pub assets: Vec<BondAssetResponse>,
+    /// Total ATOM-equivalent value
+    pub total_atom_value: Uint128,
+    /// Native ATOM amount
+    pub native_atom_amount: Uint128,
+    /// Total LSM share value (in ATOM-equivalent)
+    pub lsm_value: Uint128,
+    /// Total LST value (in ATOM-equivalent)
+    pub lst_value: Uint128,
+    /// Last update timestamp
+    pub last_updated: u64,
+}
+
+/// Response for LSM configuration query
+#[cw_serde]
+pub struct LsmConfigResponse {
+    pub enabled: bool,
+    pub blocked_validators: Vec<String>,
+    pub max_lsm_per_solver: Option<Uint128>,
+    /// Valuation discount in basis points (e.g., 9500 = 95%)
+    pub valuation_discount_bps: u64,
+}
+
+/// Response for LST configuration query
+#[cw_serde]
+pub struct LstConfigResponse {
+    pub enabled: bool,
+    pub max_lst_per_solver: Option<Uint128>,
+    pub accepted_tokens_count: u32,
+}
+
+/// Response for accepted LST tokens query
+#[cw_serde]
+pub struct AcceptedLstTokensResponse {
+    pub tokens: Vec<LstTokenConfig>,
 }

@@ -38,4 +38,7 @@ pub enum ContractError {
 
     #[error("Insufficient funds: required {required}, provided {provided}")]
     InsufficientFunds { required: String, provided: String },
+
+    #[error("Invalid bond asset: {reason}")]
+    InvalidBondAsset { reason: String },
 }

@@ -4,9 +4,11 @@ use cosmwasm_std::{
 };
 
 use crate::error::ContractError;
+use crate::helpers::validate_and_value_bond_funds;
 use crate::state::{
-    RegisteredSolver, Settlement, SettlementStatus, SolverReputation, CONFIG,
-    INTENT_SETTLEMENTS, REPUTATIONS, SETTLEMENTS, SOLVERS,
+    LsmBondConfig, LstBondConfig, LstTokenConfig, RegisteredSolver, Settlement, SettlementStatus,
+    SolverBond, SolverReputation, CONFIG, INTENT_SETTLEMENTS, LSM_CONFIG, LST_CONFIG, REPUTATIONS,
+    SETTLEMENTS, SOLVERS,
 };
 
 // Escrow contract execute messages
@@ -29,25 +31,45 @@ pub fn execute_register_solver(
 ) -> Result<Response, ContractError> {
     let config = CONFIG.load(deps.storage)?;
 
-    // Check bond amount
-    let bond_amount: Uint128 = info
-        .funds
-        .iter()
-        .filter(|c| c.denom == "uatom")
-        .map(|c| c.amount)
-        .sum();
+    // Validate and value all bond assets (native ATOM, LSM shares, LSTs)
+    let (assets, total_atom_value, validation_errors) =
+        validate_and_value_bond_funds(deps.storage, &info.funds)?;
 
-    if bond_amount < config.min_solver_bond {
+    // If there were validation errors but some valid assets, continue with valid ones
+    // If no valid assets at all, return error
+    if assets.is_empty() {
+        if !validation_errors.is_empty() {
+            return Err(ContractError::InvalidBondAsset {
+                reason: validation_errors.join("; "),
+            });
+        }
         return Err(ContractError::InsufficientBond {
             required: config.min_solver_bond.to_string(),
-            provided: bond_amount.to_string(),
+            provided: "0".to_string(),
         });
     }
+
+    // Check minimum bond requirement (in ATOM-equivalent value)
+    if total_atom_value < config.min_solver_bond {
+        return Err(ContractError::InsufficientBond {
+            required: config.min_solver_bond.to_string(),
+            provided: total_atom_value.to_string(),
+        });
+    }
+
+    // Build solver bond structure
+    let mut bond = SolverBond {
+        assets,
+        total_atom_value,
+        last_updated: env.block.time.seconds(),
+    };
+    bond.recalculate_total();
 
     let solver = RegisteredSolver {
         id: solver_id.clone(),
         operator: info.sender.clone(),
-        bond_amount,
+        bond_amount: total_atom_value, // Legacy field for backward compatibility
+        bond,
         active: true,
         total_settlements: 0,
         failed_settlements: 0,
@@ -56,11 +78,20 @@ pub fn execute_register_solver(
 
     SOLVERS.save(deps.storage, &solver_id, &solver)?;
 
-    Ok(Response::new()
+    // Build response with detailed bond info
+    let mut response = Response::new()
         .add_attribute("action", "register_solver")
         .add_attribute("solver_id", solver_id)
         .add_attribute("operator", info.sender)
-        .add_attribute("bond_amount", bond_amount))
+        .add_attribute("total_bond_value", total_atom_value)
+        .add_attribute("asset_count", solver.bond.assets.len().to_string());
+
+    // Add warnings for validation errors if any assets were rejected
+    if !validation_errors.is_empty() {
+        response = response.add_attribute("warnings", validation_errors.join("; "));
+    }
+
+    Ok(response)
 }
 
 pub fn execute_deregister_solver(
@@ -80,22 +111,27 @@ pub fn execute_deregister_solver(
         return Err(ContractError::Unauthorized {});
     }
 
-    // Return bond
-    let send_msg = BankMsg::Send {
-        to_address: solver.operator.to_string(),
-        amount: vec![Coin {
-            denom: "uatom".to_string(),
-            amount: solver.bond_amount,
-        }],
-    };
+    // Return all bond assets
+    let coins_to_return = solver.bond.to_coins();
+
+    let mut response = Response::new()
+        .add_attribute("action", "deregister_solver")
+        .add_attribute("solver_id", solver_id.clone())
+        .add_attribute("total_bond_returned", solver.bond.total_atom_value)
+        .add_attribute("assets_returned", coins_to_return.len().to_string());
+
+    // Only add bank message if there are coins to return
+    if !coins_to_return.is_empty() {
+        let send_msg = BankMsg::Send {
+            to_address: solver.operator.to_string(),
+            amount: coins_to_return,
+        };
+        response = response.add_message(send_msg);
+    }
 
     SOLVERS.remove(deps.storage, &solver_id);
 
-    Ok(Response::new()
-        .add_message(send_msg)
-        .add_attribute("action", "deregister_solver")
-        .add_attribute("solver_id", solver_id)
-        .add_attribute("bond_returned", solver.bond_amount))
+    Ok(response)
 }
 
 pub fn execute_create_settlement(
@@ -388,10 +424,48 @@ pub fn execute_slash_solver(
     // SECURITY FIX (1.7): Apply minimum slash threshold to prevent dust attacks
     let slash_with_minimum = std::cmp::max(calculated_slash, Uint128::new(MIN_SLASH_AMOUNT));
 
-    // Cap at solver's bond amount
-    let actual_slash = std::cmp::min(slash_with_minimum, solver.bond_amount);
+    // Cap at solver's total bond value
+    let actual_slash = std::cmp::min(slash_with_minimum, solver.bond.total_atom_value);
 
-    solver.bond_amount = solver.bond_amount.saturating_sub(actual_slash);
+    // Slash proportionally across all bond assets
+    // We reduce each asset proportionally based on its contribution to total value
+    if !solver.bond.total_atom_value.is_zero() && !actual_slash.is_zero() {
+        let slash_ratio_num = actual_slash;
+        let slash_ratio_denom = solver.bond.total_atom_value;
+
+        // Track slashed assets for logging
+        let mut slashed_denoms: Vec<String> = Vec::new();
+
+        for asset in &mut solver.bond.assets {
+            // Calculate proportional slash for this asset
+            let asset_slash_value = asset.atom_value * slash_ratio_num / slash_ratio_denom;
+
+            // Calculate corresponding raw amount to slash
+            // For assets with exchange rates != 1:1, we need to calculate the raw amount
+            let raw_amount_slash = if asset.atom_value.is_zero() {
+                Uint128::zero()
+            } else {
+                asset.amount * asset_slash_value / asset.atom_value
+            };
+
+            asset.amount = asset.amount.saturating_sub(raw_amount_slash);
+            asset.atom_value = asset.atom_value.saturating_sub(asset_slash_value);
+
+            if !raw_amount_slash.is_zero() {
+                slashed_denoms.push(format!("{}:{}", asset.denom, raw_amount_slash));
+            }
+        }
+
+        // Remove empty assets
+        solver.bond.assets.retain(|a| !a.amount.is_zero());
+
+        // Recalculate total
+        solver.bond.recalculate_total();
+    }
+
+    // Update legacy bond_amount field for backward compatibility
+    solver.bond_amount = solver.bond.total_atom_value;
+
     SOLVERS.save(deps.storage, &solver_id, &solver)?;
 
     // Update settlement status
@@ -404,7 +478,8 @@ pub fn execute_slash_solver(
         .add_attribute("action", "slash_solver")
         .add_attribute("solver_id", solver_id)
         .add_attribute("settlement_id", settlement_id)
-        .add_attribute("slash_amount", actual_slash))
+        .add_attribute("slash_amount", actual_slash)
+        .add_attribute("remaining_bond_value", solver.bond.total_atom_value))
 }
 
 pub fn execute_update_config(
@@ -944,4 +1019,348 @@ pub fn execute_decay_reputation(
     }
 
     Ok(response)
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// LSM & LST BOND MANAGEMENT HANDLERS
+// ═══════════════════════════════════════════════════════════════════════════
+
+/// Add additional bond assets to an existing solver registration
+pub fn execute_add_bond(
+    deps: DepsMut,
+    env: Env,
+    info: MessageInfo,
+    solver_id: String,
+) -> Result<Response, ContractError> {
+    let mut solver =
+        SOLVERS
+            .load(deps.storage, &solver_id)
+            .map_err(|_| ContractError::SolverNotRegistered {
+                id: solver_id.clone(),
+            })?;
+
+    // Only operator can add bond
+    if info.sender != solver.operator {
+        return Err(ContractError::Unauthorized {});
+    }
+
+    // Validate and value new bond assets
+    let (new_assets, new_value, validation_errors) =
+        validate_and_value_bond_funds(deps.storage, &info.funds)?;
+
+    if new_assets.is_empty() {
+        if !validation_errors.is_empty() {
+            return Err(ContractError::InvalidBondAsset {
+                reason: validation_errors.join("; "),
+            });
+        }
+        return Err(ContractError::InvalidBondAsset {
+            reason: "No valid bond assets provided".to_string(),
+        });
+    }
+
+    // Add new assets to existing bond
+    for asset in new_assets {
+        solver.bond.add_asset(asset);
+    }
+    solver.bond.last_updated = env.block.time.seconds();
+    solver.bond_amount = solver.bond.total_atom_value; // Update legacy field
+
+    SOLVERS.save(deps.storage, &solver_id, &solver)?;
+
+    let mut response = Response::new()
+        .add_attribute("action", "add_bond")
+        .add_attribute("solver_id", solver_id)
+        .add_attribute("added_value", new_value)
+        .add_attribute("new_total_value", solver.bond.total_atom_value);
+
+    if !validation_errors.is_empty() {
+        response = response.add_attribute("warnings", validation_errors.join("; "));
+    }
+
+    Ok(response)
+}
+
+/// Withdraw bond assets from a solver
+pub fn execute_withdraw_bond(
+    deps: DepsMut,
+    env: Env,
+    info: MessageInfo,
+    solver_id: String,
+    withdrawals: Vec<(String, Uint128)>,
+) -> Result<Response, ContractError> {
+    let config = CONFIG.load(deps.storage)?;
+
+    let mut solver =
+        SOLVERS
+            .load(deps.storage, &solver_id)
+            .map_err(|_| ContractError::SolverNotRegistered {
+                id: solver_id.clone(),
+            })?;
+
+    // Only operator can withdraw bond
+    if info.sender != solver.operator {
+        return Err(ContractError::Unauthorized {});
+    }
+
+    let mut coins_to_send: Vec<Coin> = Vec::new();
+    let mut total_value_withdrawn = Uint128::zero();
+
+    for (denom, amount) in &withdrawals {
+        if let Some((removed_amount, removed_value)) = solver.bond.remove_asset(denom, *amount) {
+            if !removed_amount.is_zero() {
+                coins_to_send.push(Coin {
+                    denom: denom.clone(),
+                    amount: removed_amount,
+                });
+                total_value_withdrawn += removed_value;
+            }
+        }
+    }
+
+    // Check that remaining bond meets minimum requirement
+    if solver.bond.total_atom_value < config.min_solver_bond {
+        return Err(ContractError::InsufficientBond {
+            required: config.min_solver_bond.to_string(),
+            provided: solver.bond.total_atom_value.to_string(),
+        });
+    }
+
+    solver.bond.last_updated = env.block.time.seconds();
+    solver.bond_amount = solver.bond.total_atom_value; // Update legacy field
+
+    SOLVERS.save(deps.storage, &solver_id, &solver)?;
+
+    let mut response = Response::new()
+        .add_attribute("action", "withdraw_bond")
+        .add_attribute("solver_id", solver_id)
+        .add_attribute("withdrawn_value", total_value_withdrawn)
+        .add_attribute("remaining_value", solver.bond.total_atom_value);
+
+    if !coins_to_send.is_empty() {
+        response = response.add_message(BankMsg::Send {
+            to_address: solver.operator.to_string(),
+            amount: coins_to_send,
+        });
+    }
+
+    Ok(response)
+}
+
+/// Update LSM bond configuration (admin only)
+pub fn execute_update_lsm_config(
+    deps: DepsMut,
+    info: MessageInfo,
+    enabled: Option<bool>,
+    blocked_validators: Option<Vec<String>>,
+    max_lsm_per_solver: Option<Uint128>,
+    valuation_discount_bps: Option<u64>,
+) -> Result<Response, ContractError> {
+    let config = CONFIG.load(deps.storage)?;
+
+    if info.sender != config.admin {
+        return Err(ContractError::Unauthorized {});
+    }
+
+    let mut lsm_config = LSM_CONFIG
+        .may_load(deps.storage)?
+        .unwrap_or_else(LsmBondConfig::default);
+
+    if let Some(enabled) = enabled {
+        lsm_config.enabled = enabled;
+    }
+    if let Some(blocked_validators) = blocked_validators {
+        lsm_config.blocked_validators = blocked_validators;
+    }
+    if let Some(max_lsm_per_solver) = max_lsm_per_solver {
+        lsm_config.max_lsm_per_solver = Some(max_lsm_per_solver);
+    }
+    if let Some(valuation_discount_bps) = valuation_discount_bps {
+        // Validate discount is reasonable (50% - 100%)
+        if valuation_discount_bps < 5000 || valuation_discount_bps > 10000 {
+            return Err(ContractError::InvalidBondAsset {
+                reason: "Valuation discount must be between 5000 (50%) and 10000 (100%)".to_string(),
+            });
+        }
+        lsm_config.valuation_discount_bps = valuation_discount_bps;
+    }
+
+    LSM_CONFIG.save(deps.storage, &lsm_config)?;
+
+    Ok(Response::new()
+        .add_attribute("action", "update_lsm_config")
+        .add_attribute("enabled", lsm_config.enabled.to_string())
+        .add_attribute("valuation_discount_bps", lsm_config.valuation_discount_bps.to_string()))
+}
+
+/// Update LST bond configuration (admin only)
+pub fn execute_update_lst_config(
+    deps: DepsMut,
+    info: MessageInfo,
+    enabled: Option<bool>,
+    max_lst_per_solver: Option<Uint128>,
+) -> Result<Response, ContractError> {
+    let config = CONFIG.load(deps.storage)?;
+
+    if info.sender != config.admin {
+        return Err(ContractError::Unauthorized {});
+    }
+
+    let mut lst_config = LST_CONFIG
+        .may_load(deps.storage)?
+        .unwrap_or_else(LstBondConfig::default);
+
+    if let Some(enabled) = enabled {
+        lst_config.enabled = enabled;
+    }
+    if let Some(max_lst_per_solver) = max_lst_per_solver {
+        lst_config.max_lst_per_solver = Some(max_lst_per_solver);
+    }
+
+    LST_CONFIG.save(deps.storage, &lst_config)?;
+
+    Ok(Response::new()
+        .add_attribute("action", "update_lst_config")
+        .add_attribute("enabled", lst_config.enabled.to_string()))
+}
+
+/// Add or update an accepted LST token (admin only)
+pub fn execute_add_or_update_lst_token(
+    deps: DepsMut,
+    info: MessageInfo,
+    denom: String,
+    protocol: String,
+    exchange_rate_bps: u64,
+    max_per_solver: Option<Uint128>,
+    enabled: bool,
+) -> Result<Response, ContractError> {
+    let config = CONFIG.load(deps.storage)?;
+
+    if info.sender != config.admin {
+        return Err(ContractError::Unauthorized {});
+    }
+
+    // Validate exchange rate (must be positive and reasonable: 0.5x to 2x)
+    if exchange_rate_bps < 5000 || exchange_rate_bps > 20000 {
+        return Err(ContractError::InvalidBondAsset {
+            reason: "Exchange rate must be between 5000 (0.5x) and 20000 (2.0x)".to_string(),
+        });
+    }
+
+    let mut lst_config = LST_CONFIG
+        .may_load(deps.storage)?
+        .unwrap_or_else(LstBondConfig::default);
+
+    // Find and update or add new token
+    if let Some(existing) = lst_config
+        .accepted_tokens
+        .iter_mut()
+        .find(|t| t.denom == denom)
+    {
+        existing.protocol = protocol.clone();
+        existing.exchange_rate_bps = exchange_rate_bps;
+        existing.max_per_solver = max_per_solver;
+        existing.enabled = enabled;
+    } else {
+        lst_config.accepted_tokens.push(LstTokenConfig {
+            denom: denom.clone(),
+            protocol: protocol.clone(),
+            exchange_rate_bps,
+            max_per_solver,
+            enabled,
+        });
+    }
+
+    LST_CONFIG.save(deps.storage, &lst_config)?;
+
+    Ok(Response::new()
+        .add_attribute("action", "add_or_update_lst_token")
+        .add_attribute("denom", denom)
+        .add_attribute("protocol", protocol)
+        .add_attribute("exchange_rate_bps", exchange_rate_bps.to_string())
+        .add_attribute("enabled", enabled.to_string()))
+}
+
+/// Remove an LST token from accepted list (admin only)
+pub fn execute_remove_lst_token(
+    deps: DepsMut,
+    info: MessageInfo,
+    denom: String,
+) -> Result<Response, ContractError> {
+    let config = CONFIG.load(deps.storage)?;
+
+    if info.sender != config.admin {
+        return Err(ContractError::Unauthorized {});
+    }
+
+    let mut lst_config = LST_CONFIG
+        .may_load(deps.storage)?
+        .unwrap_or_else(LstBondConfig::default);
+
+    let original_len = lst_config.accepted_tokens.len();
+    lst_config.accepted_tokens.retain(|t| t.denom != denom);
+
+    if lst_config.accepted_tokens.len() == original_len {
+        return Err(ContractError::InvalidBondAsset {
+            reason: format!("LST token {} not found in accepted list", denom),
+        });
+    }
+
+    LST_CONFIG.save(deps.storage, &lst_config)?;
+
+    Ok(Response::new()
+        .add_attribute("action", "remove_lst_token")
+        .add_attribute("denom", denom))
+}
+
+/// Block a validator for LSM bonding (admin only)
+pub fn execute_block_validator(
+    deps: DepsMut,
+    info: MessageInfo,
+    validator: String,
+) -> Result<Response, ContractError> {
+    let config = CONFIG.load(deps.storage)?;
+
+    if info.sender != config.admin {
+        return Err(ContractError::Unauthorized {});
+    }
+
+    let mut lsm_config = LSM_CONFIG
+        .may_load(deps.storage)?
+        .unwrap_or_else(LsmBondConfig::default);
+
+    if !lsm_config.blocked_validators.contains(&validator) {
+        lsm_config.blocked_validators.push(validator.clone());
+    }
+
+    LSM_CONFIG.save(deps.storage, &lsm_config)?;
+
+    Ok(Response::new()
+        .add_attribute("action", "block_validator")
+        .add_attribute("validator", validator))
+}
+
+/// Unblock a validator for LSM bonding (admin only)
+pub fn execute_unblock_validator(
+    deps: DepsMut,
+    info: MessageInfo,
+    validator: String,
+) -> Result<Response, ContractError> {
+    let config = CONFIG.load(deps.storage)?;
+
+    if info.sender != config.admin {
+        return Err(ContractError::Unauthorized {});
+    }
+
+    let mut lsm_config = LSM_CONFIG
+        .may_load(deps.storage)?
+        .unwrap_or_else(LsmBondConfig::default);
+
+    lsm_config.blocked_validators.retain(|v| v != &validator);
+
+    LSM_CONFIG.save(deps.storage, &lsm_config)?;
+
+    Ok(Response::new()
+        .add_attribute("action", "unblock_validator")
+        .add_attribute("validator", validator))
 }
