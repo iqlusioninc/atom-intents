@@ -41,7 +41,7 @@ The Settlement Contract maintains a whitelist of accepted collateral types, incl
 /// Configuration for an accepted Inflow vault share as collateral
 #[cw_serde]
 pub struct AcceptedVaultShare {
-    /// The vault share token denom (e.g., "factory/{vault_addr}/iATOM")
+    /// The vault share token denom (e.g., "factory/{vault_addr}/inflow_atom")
     pub share_denom: String,
 
     /// Address of the Inflow vault contract that issued these shares
@@ -55,7 +55,14 @@ pub struct AcceptedVaultShare {
     /// For cross-chain vaults: IBC connection ID to the vault's chain
     pub ibc_connection_id: Option<String>,
 
-    /// Collateral ratio (e.g., 80 means 80% of share value counts as collateral)
+    /// The base token denom that this vault's shares are valued in.
+    /// This is the denom ON THE SETTLEMENT CONTRACT'S CHAIN.
+    /// For example, if the vault holds ATOM and is on Neutron, but settlement
+    /// is on Cosmos Hub, this would be "uatom" (the Hub's native denom).
+    /// For cross-chain vaults, this may be an IBC denom (e.g., "ibc/...")
+    pub base_token_denom: String,
+
+    /// Collateral ratio (e.g., 8000 means 80% of share value counts as collateral)
     /// Applied as haircut to account for withdrawal delays and price volatility
     pub collateral_ratio_bps: u64,
 
@@ -115,6 +122,7 @@ pub enum ExecuteMsg {
         vault_contract: String,
         vault_chain_id: String,
         ibc_connection_id: Option<String>,
+        base_token_denom: String,
         collateral_ratio_bps: u64,
         name: String,
     },
@@ -189,47 +197,91 @@ When the Inflow vault contract is deployed on the same chain as the Settlement C
 
 #### Inflow Vault Query Interface
 
-The Inflow vault exposes these relevant queries:
+The Inflow vault exposes the `ControlCenterPoolInfo` query which returns the aggregate pool state:
 
 ```rust
 // From hydro/packages/interface/src/inflow_vault.rs
 pub enum QueryMsg {
-    /// Get current pool state
-    #[returns(PoolInfoResponse)]
-    PoolInfo {},
+    /// Get pool info in the format expected by the Control Center
+    /// Returns total shares issued and total pool value in base tokens
+    #[returns(ControlCenterPoolInfoResponse)]
+    ControlCenterPoolInfo {},
 
-    /// Get value of specific share amount in base tokens
-    #[returns(Uint128)]
-    SharesEquivalentValue { shares: Uint128 },
-
-    /// Get value of all shares held by an address
-    #[returns(Uint128)]
-    UserSharesEquivalentValue { address: String },
+    // ... other queries ...
 }
 
-pub struct PoolInfoResponse {
-    pub shares_issued: Uint128,
-    pub balance_base_tokens: Uint128,
-    pub adapter_deposits_base_tokens: Uint128,
-    pub withdrawal_queue_base_tokens: Uint128,
+/// Response for ControlCenterPoolInfo query
+/// This provides the essential data needed to compute share value
+pub struct ControlCenterPoolInfoResponse {
+    /// Total vault shares currently issued
+    pub total_shares_issued: Uint128,
+
+    /// Total pool value in base tokens
+    pub total_pool_value: Uint128,
 }
 ```
+
+#### Share Value Calculation
+
+Given the `ControlCenterPoolInfo` response, we compute the value of a specific share amount:
+
+```
+share_value = (share_amount * total_pool_value) / total_shares_issued
+```
+
+This gives us the value in the vault's base token denomination.
 
 #### Implementation
 
 ```rust
+/// Cached pool info from vault queries
+#[cw_serde]
+pub struct CachedVaultPoolInfo {
+    /// Total shares issued by the vault
+    pub total_shares_issued: Uint128,
+
+    /// Total pool value in base tokens
+    pub total_pool_value: Uint128,
+
+    /// When this cache entry was last updated
+    pub updated_at: u64,
+}
+
+/// Query the ControlCenterPoolInfo from a same-chain Inflow vault
+fn query_vault_pool_info_same_chain(
+    deps: Deps,
+    vault_contract: &str,
+) -> StdResult<ControlCenterPoolInfoResponse> {
+    deps.querier.query_wasm_smart(
+        vault_contract,
+        &InflowVaultQueryMsg::ControlCenterPoolInfo {},
+    )
+}
+
+/// Calculate the base token value of vault shares using pool info
+fn calculate_share_value(
+    share_amount: Uint128,
+    pool_info: &ControlCenterPoolInfoResponse,
+) -> StdResult<Uint128> {
+    if pool_info.total_shares_issued.is_zero() {
+        // No shares issued yet; 1:1 ratio
+        return Ok(share_amount);
+    }
+
+    // share_value = (share_amount * total_pool_value) / total_shares_issued
+    share_amount
+        .checked_multiply_ratio(pool_info.total_pool_value, pool_info.total_shares_issued)
+        .map_err(|e| StdError::generic_err(format!("overflow in share value calculation: {}", e)))
+}
+
 /// Query the value of vault shares from a same-chain Inflow vault
 fn query_vault_share_value_same_chain(
     deps: Deps,
     vault_contract: &str,
     share_amount: Uint128,
 ) -> StdResult<Uint128> {
-    let value: Uint128 = deps.querier.query_wasm_smart(
-        vault_contract,
-        &InflowVaultQueryMsg::SharesEquivalentValue { shares: share_amount },
-    )?;
-
-    Ok(value)
+    let pool_info = query_vault_pool_info_same_chain(deps, vault_contract)?;
+    calculate_share_value(share_amount, &pool_info)
 }
 
 /// Calculate total collateral value for a solver (same-chain vaults)
@@ -252,7 +304,7 @@ fn calculate_solver_collateral_value_same_chain(
         let config = ACCEPTED_VAULT_SHARES.load(deps.storage, &bond.share_denom)?;
 
         if config.vault_chain_id == CURRENT_CHAIN_ID {
-            // Same-chain: direct query
+            // Same-chain: direct query to get current pool info
             let raw_value = query_vault_share_value_same_chain(
                 deps,
                 &config.vault_contract,
@@ -274,76 +326,21 @@ fn calculate_solver_collateral_value_same_chain(
 
 ### 2.2 Cross-Chain Value Retrieval (ICQ)
 
-When the Inflow vault is on a different chain (e.g., vault on Neutron, settlement on Cosmos Hub), we use Interchain Queries (ICQ).
-
-#### Option A: Neutron ICQ (if Settlement is on Neutron)
-
-Neutron provides native ICQ support. We can register a KV query to read vault state.
+We can use IBC async queries to fetch `ControlCenterPoolInfo`.
 
 ```rust
-use neutron_sdk::interchain_queries::v045::queries::query_kv_result;
-
-/// Register an ICQ to monitor vault share value
-fn register_vault_share_icq(
-    deps: DepsMut<NeutronQuery>,
-    connection_id: String,
-    vault_contract: String,
-) -> Result<Response<NeutronMsg>, ContractError> {
-    // Register a KV query for the vault's pool info
-    // The key depends on the vault's storage layout
-    let register_msg = NeutronMsg::register_interchain_query(
-        QueryPayload::KV(vec![KVKey {
-            path: format!("wasm/contract/{}", vault_contract),
-            key: Binary::from(b"pool_info"),  // Simplified; actual key depends on cw-storage-plus
-        }]),
-        connection_id,
-        UPDATE_PERIOD,  // e.g., 100 blocks
-    );
-
-    Ok(Response::new()
-        .add_message(register_msg)
-        .add_attribute("action", "register_vault_icq"))
-}
-
-/// Callback handler for ICQ results
-fn sudo_kv_query_result(
-    deps: DepsMut<NeutronQuery>,
-    query_id: u64,
-    result: KVQueryResult,
-) -> Result<Response<NeutronMsg>, ContractError> {
-    // Parse the pool info from the query result
-    let pool_info: PoolInfoResponse = parse_pool_info_from_kv(result)?;
-
-    // Cache the result for use in collateral calculations
-    CACHED_POOL_INFO.save(deps.storage, query_id, &CachedPoolInfo {
-        shares_issued: pool_info.shares_issued,
-        total_value: pool_info.balance_base_tokens
-            .checked_add(pool_info.adapter_deposits_base_tokens)?
-            .checked_sub(pool_info.withdrawal_queue_base_tokens)?,
-        updated_at: env.block.time.seconds(),
-    })?;
-
-    Ok(Response::new())
-}
-```
-
-#### Option B: IBC Query (Generic)
-
-For chains without native ICQ, we can use IBC async queries via a custom protocol.
-
-```rust
-/// Request a vault share valuation via IBC
-fn request_vault_valuation_ibc(
+/// Request vault pool info via IBC for share valuation
+fn request_vault_pool_info_ibc(
     deps: DepsMut,
+    env: Env,
     channel_id: String,
     vault_contract: String,
-    share_amount: Uint128,
-    callback_id: String,
+    share_denom: String,
 ) -> Result<Response, ContractError> {
     let query_request = InflowQueryRequest {
         vault_contract,
-        query: InflowVaultQueryMsg::SharesEquivalentValue { shares: share_amount },
-        callback_id: callback_id.clone(),
+        query: InflowVaultQueryMsg::ControlCenterPoolInfo {},
+        callback_id: share_denom.clone(),
     };
 
     let ibc_msg = IbcMsg::SendPacket {
@@ -352,89 +349,50 @@ fn request_vault_valuation_ibc(
         timeout: IbcTimeout::with_timestamp(env.block.time.plus_seconds(300)),
     };
 
-    // Mark this valuation as pending
-    PENDING_VALUATIONS.save(deps.storage, &callback_id, &PendingValuation {
-        share_denom: share_amount.denom,
+    // Mark this query as pending
+    PENDING_POOL_INFO_QUERIES.save(deps.storage, &share_denom, &PendingQuery {
         requested_at: env.block.time.seconds(),
     })?;
 
     Ok(Response::new()
         .add_message(ibc_msg)
-        .add_attribute("action", "request_vault_valuation"))
+        .add_attribute("action", "request_vault_pool_info"))
 }
 
-/// Handle IBC acknowledgement with valuation result
+/// Handle IBC acknowledgement with ControlCenterPoolInfo result
 fn ibc_packet_ack(
     deps: DepsMut,
+    env: Env,
     ack: IbcPacketAckMsg,
 ) -> Result<Response, ContractError> {
-    let response: InflowQueryResponse = from_json(&ack.acknowledgement.data)?;
+    let response: ControlCenterPoolInfoResponse = from_json(&ack.acknowledgement.data)?;
+    let share_denom = ack.original_packet.callback_id;
 
-    // Update cached valuation
-    let pending = PENDING_VALUATIONS.load(deps.storage, &response.callback_id)?;
-
-    update_cached_share_value(
-        deps.storage,
-        &pending.share_denom,
-        response.value,
-        env.block.time.seconds(),
-    )?;
-
-    PENDING_VALUATIONS.remove(deps.storage, &response.callback_id);
-
-    Ok(Response::new())
-}
-```
-
-#### Option C: Oracle-Based Valuation
-
-For simplicity, an off-chain oracle can periodically submit valuations.
-
-```rust
-/// Submit a vault share valuation (oracle/relayer only)
-pub fn execute_submit_vault_valuation(
-    deps: DepsMut,
-    info: MessageInfo,
-    share_denom: String,
-    shares_issued: Uint128,
-    total_value_base_tokens: Uint128,
-) -> Result<Response, ContractError> {
-    // Only whitelisted oracles can submit
-    if !VALUATION_ORACLES.has(deps.storage, &info.sender) {
-        return Err(ContractError::Unauthorized {});
-    }
-
-    let config = ACCEPTED_VAULT_SHARES.load(deps.storage, &share_denom)?;
-
-    // Calculate price per share
-    let price_per_share = if shares_issued.is_zero() {
-        Decimal::one()
-    } else {
-        Decimal::from_ratio(total_value_base_tokens, shares_issued)
-    };
-
-    CACHED_VAULT_PRICES.save(deps.storage, &share_denom, &CachedVaultPrice {
-        price_per_share,
-        shares_issued,
-        total_value: total_value_base_tokens,
-        submitted_by: info.sender,
-        submitted_at: env.block.time.seconds(),
+    // Cache the pool info for ratio calculations
+    CACHED_VAULT_POOL_INFO.save(deps.storage, &share_denom, &CachedVaultPoolInfo {
+        total_shares_issued: response.total_shares_issued,
+        total_pool_value: response.total_pool_value,
+        updated_at: env.block.time.seconds(),
     })?;
 
+    PENDING_POOL_INFO_QUERIES.remove(deps.storage, &share_denom);
+
     Ok(Response::new()
-        .add_attribute("action", "submit_vault_valuation")
-        .add_attribute("share_denom", share_denom)
-        .add_attribute("price_per_share", price_per_share.to_string()))
+        .add_attribute("action", "pool_info_received")
+        .add_attribute("share_denom", share_denom))
 }
 ```
 
 ### 2.3 Valuation Staleness and Safety
 
-Regardless of retrieval method, we must handle stale valuations:
+Regardless of retrieval method, we must handle stale valuations. For cross-chain vaults, we use cached `ControlCenterPoolInfo` data and compute the share value using the same ratio calculation.
 
 ```rust
-/// Maximum age of a cached valuation before it's considered stale
-pub const MAX_VALUATION_AGE_SECONDS: u64 = 3600; // 1 hour
+/// Maximum age of a cached pool info before it's considered stale
+pub const MAX_POOL_INFO_AGE_SECONDS: u64 = 3600; // 1 hour
+
+/// Storage for cached pool info (cross-chain vaults)
+pub const CACHED_VAULT_POOL_INFO: Map<&str, CachedVaultPoolInfo> = Map::new("cached_vault_pool_info");
 
 /// Get the collateral value, with staleness checks
 fn get_vault_share_collateral_value(
@@ -445,39 +403,110 @@ fn get_vault_share_collateral_value(
 ) -> Result<Uint128, ContractError> {
     let config = ACCEPTED_VAULT_SHARES.load(deps.storage, share_denom)?;
 
-    // Try same-chain first
-    if config.vault_chain_id == CURRENT_CHAIN_ID {
-        return query_vault_share_value_same_chain(deps, &config.vault_contract, share_amount)
-            .map(|v| apply_haircut(v, config.collateral_ratio_bps));
-    }
+    // Get raw value in base tokens
+    let raw_value = if config.vault_chain_id == CURRENT_CHAIN_ID {
+        // Same-chain: direct query to vault contract
+        query_vault_share_value_same_chain(deps, &config.vault_contract, share_amount)?
+    } else {
+        // Cross-chain: use cached pool info
+        let cached = CACHED_VAULT_POOL_INFO
+            .load(deps.storage, share_denom)
+            .map_err(|_| ContractError::NoCachedPoolInfo {
+                share_denom: share_denom.to_string(),
+            })?;
 
-    // Cross-chain: use cached value
-    let cached = CACHED_VAULT_PRICES.load(deps.storage, share_denom)?;
+        // Check staleness
+        let age = env.block.time.seconds().saturating_sub(cached.updated_at);
+        if age > MAX_POOL_INFO_AGE_SECONDS {
+            return Err(ContractError::StalePoolInfo {
+                share_denom: share_denom.to_string(),
+                age_seconds: age,
+                max_age_seconds: MAX_POOL_INFO_AGE_SECONDS,
+            });
+        }
 
-    // Check staleness
-    let age = env.block.time.seconds().saturating_sub(cached.submitted_at);
-    if age > MAX_VALUATION_AGE_SECONDS {
-        return Err(ContractError::StaleValuation {
-            share_denom: share_denom.to_string(),
-            age_seconds: age,
-            max_age_seconds: MAX_VALUATION_AGE_SECONDS,
-        });
-    }
+        // Calculate value using the same formula as same-chain
+        // share_value = (share_amount * total_pool_value) / total_shares_issued
+        calculate_share_value_from_cached(share_amount, &cached)?
+    };
 
-    // Calculate value from cached price
-    let raw_value = cached.price_per_share
-        .checked_mul(Decimal::from_ratio(share_amount, Uint128::one()))?
-        .to_uint_floor();
-
+    // Apply collateral ratio haircut
     Ok(apply_haircut(raw_value, config.collateral_ratio_bps))
 }
 
+/// Calculate share value from cached pool info
+fn calculate_share_value_from_cached(
+    share_amount: Uint128,
+    cached: &CachedVaultPoolInfo,
+) -> StdResult<Uint128> {
+    if cached.total_shares_issued.is_zero() {
+        // No shares issued yet; 1:1 ratio
+        return Ok(share_amount);
+    }
+
+    share_amount
+        .checked_multiply_ratio(cached.total_pool_value, cached.total_shares_issued)
+        .map_err(|e| StdError::generic_err(format!("overflow in share value calculation: {}", e)))
+}
+
+/// Apply collateral ratio haircut to raw value
 fn apply_haircut(value: Uint128, ratio_bps: u64) -> Uint128 {
     value
         .checked_mul(Uint128::from(ratio_bps))
         .unwrap_or(Uint128::zero())
         .checked_div(Uint128::from(10000u64))
         .unwrap_or(Uint128::zero())
+}
+```
+
+### 2.4 Base Token Denomination Handling
+
+When computing collateral values, we need to ensure all values are expressed in a common denomination. The `base_token_denom` field in `AcceptedVaultShare` specifies what denomination the vault's base token maps to on the settlement chain.
+
+```rust
+/// Get the total collateral value in the settlement chain's native token (e.g., uatom)
+fn get_total_collateral_value_in_native(
+    deps: Deps,
+    env: &Env,
+    solver_collateral: &SolverCollateral,
+) -> Result<Uint128, ContractError> {
+    let mut total_value = Uint128::zero();
+
+    // Add native bonds (already in native denomination)
+    for coin in &solver_collateral.native_bonds {
+        if coin.denom == NATIVE_DENOM {  // e.g., "uatom"
+            total_value = total_value.checked_add(coin.amount)?;
+        }
+        // Other native tokens would need oracle conversion
+    }
+
+    // Add vault share bonds
+    for bond in &solver_collateral.vault_share_bonds {
+        let config = ACCEPTED_VAULT_SHARES.load(deps.storage, &bond.share_denom)?;
+
+        // Get value in the vault's base token
+        let value_in_base_token = get_vault_share_collateral_value(
+            deps,
+            env,
+            &bond.share_denom,
+            bond.share_amount,
+        )?;
+
+        // If base_token_denom matches native, use directly
+        // Otherwise, would need oracle conversion (future work)
+        if config.base_token_denom == NATIVE_DENOM {
+            total_value = total_value.checked_add(value_in_base_token)?;
+        } else {
+            // TODO: Convert via oracle
+            // For now, only accept vaults with native base token
+            return Err(ContractError::UnsupportedBaseToken {
+                share_denom: bond.share_denom.clone(),
+                base_token: config.base_token_denom,
+            });
+        }
+    }
+
+    Ok(total_value)
 }
 ```
 
@@ -602,33 +631,6 @@ Recommended ratios:
 If valuation is stale:
 - New registrations with that collateral type are rejected
 - Existing solvers can still operate but may face restrictions
-
-### 4.3 Minimum Native Bond
-
-Consider requiring a minimum native ATOM bond even when using vault shares:
-
-```rust
-pub struct Config {
-    // ... existing fields ...
-
-    /// Minimum native ATOM required regardless of vault share collateral
-    pub min_native_bond: Uint128,
-
-    /// Maximum percentage of bond that can be vault shares (e.g., 8000 = 80%)
-    pub max_vault_share_ratio_bps: u64,
-}
-```
-
-This ensures:
-- Immediate slashability (native tokens don't have withdrawal delays)
-- Protection against vault contract bugs or exploits
-
-### 4.4 Vault Contract Trust
-
-Only add vault shares from audited, trusted Inflow deployments:
-- Verify vault contract code hash matches known-good version
-- Require governance approval for new vault types
-- Monitor for vault contract upgrades
 
 ---
 
