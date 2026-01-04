@@ -878,6 +878,110 @@ pub struct SolverConfig {
 }
 ```
 
+### LSM Shares and LST Bonding
+
+Solvers can bond using not only native ATOM but also LSM (Liquid Staking Module) shares and LST (Liquid Staking Tokens). This provides solvers with more flexibility and capital efficiency.
+
+#### Accepted Bond Asset Types
+
+| Asset Type | Example Denoms | Valuation | Description |
+|------------|----------------|-----------|-------------|
+| **Native ATOM** | `uatom` | 1:1 | Standard ATOM tokens, fully liquid |
+| **LSM Shares** | `cosmosvaloper.../1` | 95% of face value | Tokenized delegations from Cosmos Hub LSM |
+| **stATOM** | `stuatom` | ~105% of ATOM | Stride liquid staking token |
+| **qATOM** | `uqatom` | ~103% of ATOM | Quicksilver liquid staking token |
+| **stkATOM** | `stk/uatom` | ~103% of ATOM | pSTAKE liquid staking token |
+
+#### LSM Share Valuation
+
+LSM shares represent tokenized delegated ATOM through Cosmos Hub's native Liquid Staking Module. They are valued with a discount to account for:
+- **Unbonding period risk** (21 days to redeem for ATOM)
+- **Liquidity constraints** (less liquid than native ATOM)
+- **Validator risk** (shares from jailed/tombstoned validators are not accepted)
+
+```
+LSM Value = LSM Amount × (valuation_discount_bps / 10000)
+Example: 1000 LSM shares × 0.95 = 950 ATOM equivalent
+```
+
+#### LST Valuation
+
+LSTs represent staked ATOM with accumulated rewards. They are valued at their exchange rate, which typically exceeds 1:1 due to staking yields:
+
+```
+LST Value = LST Amount × (exchange_rate_bps / 10000)
+Example: 1000 stATOM × 1.05 = 1050 ATOM equivalent
+```
+
+#### Bond Management
+
+Solvers can manage their bonds dynamically:
+
+```rust
+// Add additional bond assets
+ExecuteMsg::AddBond { solver_id }
+
+// Withdraw specific assets (must maintain minimum bond)
+ExecuteMsg::WithdrawBond {
+    solver_id,
+    withdrawals: vec![("stuatom", 100_000_000)]  // Withdraw 100 stATOM
+}
+```
+
+#### Multi-Asset Slashing
+
+When a solver is slashed, the penalty is applied **proportionally** across all bond assets:
+
+```
+Total Bond: 1000 ATOM equivalent
+├── 500 ATOM (native)     → 50% of slash from ATOM
+├── 300 ATOM eq (stATOM)  → 30% of slash from stATOM
+└── 200 ATOM eq (LSM)     → 20% of slash from LSM shares
+
+If slashed 100 ATOM equivalent:
+├── 50 ATOM slashed from native
+├── 28.57 stATOM slashed (30 ATOM eq at 1.05 rate)
+└── 21.05 LSM shares slashed (20 ATOM eq at 0.95 rate)
+```
+
+#### Configuration
+
+Administrators can configure LSM and LST bonding parameters:
+
+```rust
+// LSM Configuration
+ExecuteMsg::UpdateLsmConfig {
+    enabled: Some(true),
+    blocked_validators: Some(vec!["cosmosvaloper..."]),
+    max_lsm_per_solver: Some(Uint128::new(10_000_000_000)), // 10k ATOM eq
+    valuation_discount_bps: Some(9500),  // 95% valuation
+}
+
+// LST Configuration
+ExecuteMsg::UpdateLstConfig {
+    enabled: Some(true),
+    max_lst_per_solver: Some(Uint128::new(10_000_000_000)),
+}
+
+// Add/update accepted LST token
+ExecuteMsg::AddOrUpdateLstToken {
+    denom: "stuatom".to_string(),
+    protocol: "stride".to_string(),
+    exchange_rate_bps: 10500,  // 1.05 ATOM per stATOM
+    max_per_solver: None,
+    enabled: true,
+}
+```
+
+#### Benefits for Solvers
+
+| Benefit | Description |
+|---------|-------------|
+| **Capital Efficiency** | Earn staking yields while bonding |
+| **Flexibility** | Use existing staked positions instead of buying ATOM |
+| **Lower Opportunity Cost** | No need to unstake to become a solver |
+| **Diversification** | Mix of assets reduces single-asset risk |
+
 ### Summary
 
 | Aspect | Bond's Role |

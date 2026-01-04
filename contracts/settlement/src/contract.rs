@@ -5,23 +5,28 @@ use cosmwasm_std::{
 
 use crate::error::ContractError;
 use crate::handlers::{
+    execute_add_bond, execute_add_or_update_lst_token, execute_block_validator,
     execute_create_settlement, execute_decay_reputation, execute_deregister_solver,
     execute_handle_ibc_ack, execute_handle_timeout, execute_mark_completed, execute_mark_executing,
     execute_mark_failed, execute_mark_solver_locked, execute_mark_user_locked,
-    execute_register_solver, execute_settlement, execute_settlement_local, execute_slash_solver,
-    execute_update_config, execute_update_reputation,
+    execute_register_solver, execute_remove_lst_token, execute_settlement,
+    execute_settlement_local, execute_slash_solver, execute_unblock_validator,
+    execute_update_config, execute_update_lsm_config, execute_update_lst_config,
+    execute_update_reputation, execute_withdraw_bond,
 };
 use crate::msg::{
     ConfigUpdate, ExecuteMsg, InflightSettlementsResponse, InstantiateMsg, MigrateMsg,
     MigrationInfoResponse, QueryMsg, StuckSettlementAction,
 };
 use crate::queries::{
-    query_config, query_settlement, query_settlement_by_intent, query_settlements_by_solver,
-    query_solver, query_solver_reputation, query_solvers, query_solvers_by_reputation,
+    query_accepted_lst_tokens, query_config, query_lsm_config, query_lst_config,
+    query_settlement, query_settlement_by_intent, query_settlements_by_solver, query_solver,
+    query_solver_bond, query_solver_reputation, query_solvers, query_solvers_by_reputation,
     query_top_solvers,
 };
 use crate::state::{
-    Config, MigrationInfo, SettlementStatus, CONFIG, MIGRATION_INFO, SETTLEMENTS,
+    Config, LsmBondConfig, LstBondConfig, MigrationInfo, SettlementStatus, CONFIG, LSM_CONFIG,
+    LST_CONFIG, MIGRATION_INFO, SETTLEMENTS,
 };
 
 #[entry_point]
@@ -39,7 +44,18 @@ pub fn instantiate(
     };
     CONFIG.save(deps.storage, &config)?;
 
-    Ok(Response::new().add_attribute("action", "instantiate"))
+    // Initialize LSM bond configuration
+    let lsm_config = msg.lsm_config.unwrap_or_else(LsmBondConfig::default);
+    LSM_CONFIG.save(deps.storage, &lsm_config)?;
+
+    // Initialize LST bond configuration
+    let lst_config = msg.lst_config.unwrap_or_else(LstBondConfig::default);
+    LST_CONFIG.save(deps.storage, &lst_config)?;
+
+    Ok(Response::new()
+        .add_attribute("action", "instantiate")
+        .add_attribute("lsm_bonding_enabled", lsm_config.enabled.to_string())
+        .add_attribute("lst_bonding_enabled", lst_config.enabled.to_string()))
 }
 
 #[entry_point]
@@ -134,6 +150,51 @@ pub fn execute(
         ExecuteMsg::DecayReputation { start_after, limit } => {
             execute_decay_reputation(deps, env, start_after, limit)
         }
+        // LSM & LST Bond Management
+        ExecuteMsg::AddBond { solver_id } => execute_add_bond(deps, env, info, solver_id),
+        ExecuteMsg::WithdrawBond {
+            solver_id,
+            withdrawals,
+        } => execute_withdraw_bond(deps, env, info, solver_id, withdrawals),
+        ExecuteMsg::UpdateLsmConfig {
+            enabled,
+            blocked_validators,
+            max_lsm_per_solver,
+            valuation_discount_bps,
+        } => execute_update_lsm_config(
+            deps,
+            info,
+            enabled,
+            blocked_validators,
+            max_lsm_per_solver,
+            valuation_discount_bps,
+        ),
+        ExecuteMsg::UpdateLstConfig {
+            enabled,
+            max_lst_per_solver,
+        } => execute_update_lst_config(deps, info, enabled, max_lst_per_solver),
+        ExecuteMsg::AddOrUpdateLstToken {
+            denom,
+            protocol,
+            exchange_rate_bps,
+            max_per_solver,
+            enabled,
+        } => execute_add_or_update_lst_token(
+            deps,
+            info,
+            denom,
+            protocol,
+            exchange_rate_bps,
+            max_per_solver,
+            enabled,
+        ),
+        ExecuteMsg::RemoveLstToken { denom } => execute_remove_lst_token(deps, info, denom),
+        ExecuteMsg::BlockValidator { validator } => {
+            execute_block_validator(deps, info, validator)
+        }
+        ExecuteMsg::UnblockValidator { validator } => {
+            execute_unblock_validator(deps, info, validator)
+        }
     }
 }
 
@@ -172,6 +233,11 @@ pub fn query(deps: Deps, _env: Env, msg: QueryMsg) -> StdResult<Binary> {
         QueryMsg::InflightSettlements { start_after, limit } => {
             to_json_binary(&query_inflight_settlements(deps, start_after, limit)?)
         }
+        // LSM & LST Bond Queries
+        QueryMsg::SolverBond { solver_id } => to_json_binary(&query_solver_bond(deps, solver_id)?),
+        QueryMsg::LsmConfig {} => to_json_binary(&query_lsm_config(deps)?),
+        QueryMsg::LstConfig {} => to_json_binary(&query_lst_config(deps)?),
+        QueryMsg::AcceptedLstTokens {} => to_json_binary(&query_accepted_lst_tokens(deps)?),
     }
 }
 
