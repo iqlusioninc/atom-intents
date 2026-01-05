@@ -102,6 +102,7 @@ pub fn execute_deregister_solver(
         .add_attribute("bond_returned", solver.bond_amount))
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn execute_create_settlement(
     deps: DepsMut,
     env: Env,

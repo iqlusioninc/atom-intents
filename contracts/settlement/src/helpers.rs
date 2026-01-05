@@ -30,10 +30,8 @@ pub fn calculate_reputation_score(rep: &SolverReputation) -> u64 {
     // Speed component (0-2000 points, 20%)
     // Faster settlements get higher scores
     // Assume ideal settlement time is 60 seconds, max acceptable is 300 seconds
-    let speed_score = if rep.average_settlement_time == 0 {
-        2000
-    } else if rep.average_settlement_time <= 60 {
-        2000
+    let speed_score = if rep.average_settlement_time <= 60 {
+        2000 // Includes 0 (new solvers) and fast settlements
     } else if rep.average_settlement_time >= 300 {
         0
     } else {

@@ -7,7 +7,7 @@ use std::sync::{Arc, RwLock};
 ///
 /// Allows users to cancel intents that haven't been matched yet.
 /// Cancellation must be signed by the same key that signed the intent.
-
+///
 /// Cancellation request submitted by user
 #[cw_serde]
 pub struct CancellationRequest {

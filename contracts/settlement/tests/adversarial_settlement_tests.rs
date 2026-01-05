@@ -1,19 +1,21 @@
-/// Adversarial tests for the settlement contract
-///
-/// These tests simulate attacks where things could go horribly wrong:
-/// - State machine bypass attacks
-/// - Solver impersonation
-/// - Double-settlement attacks
-/// - IBC callback manipulation
-/// - Reputation system gaming
-/// - Slashing bypass attacks
+//! Adversarial tests for the settlement contract
+//!
+//! These tests simulate attacks where things could go horribly wrong:
+//! - State machine bypass attacks
+//! - Solver impersonation
+//! - Double-settlement attacks
+//! - IBC callback manipulation
+//! - Reputation system gaming
+//! - Slashing bypass attacks
 
 use cosmwasm_std::testing::{message_info, mock_dependencies, mock_env, MockApi};
-use cosmwasm_std::{from_json, Addr, Coin, Timestamp, Uint128};
+use cosmwasm_std::{Addr, Coin, Timestamp, Uint128};
 
-use atom_intents_settlement_contract::contract::{execute, instantiate, query};
+use atom_intents_types::collateral::CollateralAsset;
+
+use atom_intents_settlement_contract::contract::{execute, instantiate};
 use atom_intents_settlement_contract::error::ContractError;
-use atom_intents_settlement_contract::msg::{ExecuteMsg, InstantiateMsg, QueryMsg, SettlementResponse};
+use atom_intents_settlement_contract::msg::{ExecuteMsg, InstantiateMsg};
 
 // Helper to get test addresses
 struct TestAddrs {
@@ -22,6 +24,7 @@ struct TestAddrs {
     solver_operator: Addr,
     user: Addr,
     attacker: Addr,
+    #[allow(dead_code)]
     fake_solver: Addr,
 }
 
@@ -80,6 +83,35 @@ fn register_solver(
         info,
         ExecuteMsg::RegisterSolver {
             solver_id: solver_id.to_string(),
+        },
+    )
+    .unwrap();
+
+    // Also deposit collateral to bond pool for the new per-settlement locking system
+    deposit_collateral(deps, env, addrs, solver_id, bond);
+}
+
+fn deposit_collateral(
+    deps: &mut cosmwasm_std::OwnedDeps<
+        cosmwasm_std::MemoryStorage,
+        cosmwasm_std::testing::MockApi,
+        cosmwasm_std::testing::MockQuerier,
+    >,
+    env: &cosmwasm_std::Env,
+    addrs: &TestAddrs,
+    solver_id: &str,
+    amount: u128,
+) {
+    let info = message_info(&addrs.solver_operator, &[Coin::new(amount, "uatom")]);
+    execute(
+        deps.as_mut(),
+        env.clone(),
+        info,
+        ExecuteMsg::DepositCollateral {
+            solver_id: solver_id.to_string(),
+            asset: CollateralAsset::Native {
+                denom: "uatom".to_string(),
+            },
         },
     )
     .unwrap();
@@ -152,7 +184,7 @@ fn test_mark_completed_from_wrong_state() {
 
     // ATTACK: Try to mark completed directly (skip all intermediate states)
     let info = message_info(&addrs.admin, &[]);
-    let result = execute(
+    let _result = execute(
         deps.as_mut(),
         env,
         info,
@@ -201,7 +233,7 @@ fn test_state_cannot_go_backwards() {
 
     // ATTACK: Try to mark user locked again (go backwards)
     let info = message_info(&addrs.escrow, &[]);
-    let result = execute(
+    let _result = execute(
         deps.as_mut(),
         env,
         info,
