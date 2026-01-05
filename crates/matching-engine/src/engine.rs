@@ -230,6 +230,7 @@ impl MatchingEngine {
     ///
     /// For buy orders: we need to invert oracle_price to compare with limit_price
     /// For sell orders: oracle_price must be >= limit_price (user wants at least limit)
+    #[allow(dead_code)]
     fn validate_limit_price(
         intent: &Intent,
         oracle_price: Decimal,
@@ -332,12 +333,14 @@ impl MatchingEngine {
             Self::validate_amount(sell_amount)?;
 
             // Parse limit prices from intents
-            let buy_limit = buy.output.limit_price_decimal().map_err(|e| {
-                MatchingError::InvalidPrice(format!("Buy limit: {}", e))
-            })?;
-            let sell_limit = sell.output.limit_price_decimal().map_err(|e| {
-                MatchingError::InvalidPrice(format!("Sell limit: {}", e))
-            })?;
+            let buy_limit = buy
+                .output
+                .limit_price_decimal()
+                .map_err(|e| MatchingError::InvalidPrice(format!("Buy limit: {}", e)))?;
+            let sell_limit = sell
+                .output
+                .limit_price_decimal()
+                .map_err(|e| MatchingError::InvalidPrice(format!("Sell limit: {}", e)))?;
 
             // Buy limit is in output/input (ATOM/USDC for buy)
             // Sell limit is in output/input (USDC/ATOM for sell)
@@ -1005,7 +1008,10 @@ mod tests {
 
         // With midpoint pricing, this succeeds but produces no fills due to sanity check
         assert!(result.is_ok());
-        assert!(result.unwrap().internal_fills.is_empty(), "Oracle deviation >10% should prevent matching");
+        assert!(
+            result.unwrap().internal_fills.is_empty(),
+            "Oracle deviation >10% should prevent matching"
+        );
     }
 
     #[test]
@@ -1030,7 +1036,10 @@ mod tests {
 
         // With midpoint pricing, incompatible limits just means no match (not error)
         assert!(result.is_ok());
-        assert!(result.unwrap().internal_fills.is_empty(), "Incompatible limits should not match");
+        assert!(
+            result.unwrap().internal_fills.is_empty(),
+            "Incompatible limits should not match"
+        );
     }
 
     #[test]
@@ -1167,6 +1176,9 @@ mod tests {
 
         // With midpoint pricing, high oracle deviation means no matches (not error)
         assert!(result.is_ok());
-        assert!(result.unwrap().internal_fills.is_empty(), "High oracle deviation should prevent all matches");
+        assert!(
+            result.unwrap().internal_fills.is_empty(),
+            "High oracle deviation should prevent all matches"
+        );
     }
 }

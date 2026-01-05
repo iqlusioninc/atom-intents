@@ -7,13 +7,14 @@
 /// - IBC callback manipulation
 /// - Reputation system gaming
 /// - Slashing bypass attacks
-
 use cosmwasm_std::testing::{message_info, mock_dependencies, mock_env, MockApi};
 use cosmwasm_std::{from_json, Addr, Coin, Timestamp, Uint128};
 
 use atom_intents_settlement_contract::contract::{execute, instantiate, query};
 use atom_intents_settlement_contract::error::ContractError;
-use atom_intents_settlement_contract::msg::{ExecuteMsg, InstantiateMsg, QueryMsg, SettlementResponse};
+use atom_intents_settlement_contract::msg::{
+    ExecuteMsg, InstantiateMsg, QueryMsg, SettlementResponse,
+};
 
 // Helper to get test addresses
 struct TestAddrs {
@@ -140,7 +141,10 @@ fn test_execute_from_pending_fails() {
     );
 
     // Must fail - settlement not in SolverLocked state
-    assert!(matches!(result.unwrap_err(), ContractError::InvalidStateTransition { .. }));
+    assert!(matches!(
+        result.unwrap_err(),
+        ContractError::InvalidStateTransition { .. }
+    ));
 }
 
 /// Test that marking completed from wrong state fails
@@ -243,7 +247,10 @@ fn test_attacker_cannot_impersonate_solver() {
         },
     );
 
-    assert!(matches!(result.unwrap_err(), ContractError::Unauthorized {}));
+    assert!(matches!(
+        result.unwrap_err(),
+        ContractError::Unauthorized {}
+    ));
 }
 
 /// Test that unregistered solver cannot create settlement
@@ -271,7 +278,10 @@ fn test_unregistered_solver_cannot_create_settlement() {
         },
     );
 
-    assert!(matches!(result.unwrap_err(), ContractError::SolverNotRegistered { .. }));
+    assert!(matches!(
+        result.unwrap_err(),
+        ContractError::SolverNotRegistered { .. }
+    ));
 }
 
 /// Test that attacker cannot mark solver locked for someone else
@@ -305,7 +315,10 @@ fn test_attacker_cannot_mark_solver_locked() {
         },
     );
 
-    assert!(matches!(result.unwrap_err(), ContractError::Unauthorized {}));
+    assert!(matches!(
+        result.unwrap_err(),
+        ContractError::Unauthorized {}
+    ));
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -338,7 +351,10 @@ fn test_duplicate_settlement_id_rejected() {
         },
     );
 
-    assert!(matches!(result.unwrap_err(), ContractError::SettlementAlreadyExists { .. }));
+    assert!(matches!(
+        result.unwrap_err(),
+        ContractError::SettlementAlreadyExists { .. }
+    ));
 }
 
 /// Test marking completed twice - documents current behavior
@@ -410,7 +426,10 @@ fn test_double_completion_behavior() {
     );
 
     // With state machine guards, double completion is now properly rejected
-    assert!(result.is_err(), "State machine guards should prevent double completion");
+    assert!(
+        result.is_err(),
+        "State machine guards should prevent double completion"
+    );
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -436,7 +455,10 @@ fn test_non_admin_cannot_call_ibc_ack() {
         },
     );
 
-    assert!(matches!(result.unwrap_err(), ContractError::Unauthorized {}));
+    assert!(matches!(
+        result.unwrap_err(),
+        ContractError::Unauthorized {}
+    ));
 }
 
 /// Test that non-admin cannot call timeout handler
@@ -492,7 +514,10 @@ fn test_non_admin_cannot_call_timeout() {
         },
     );
 
-    assert!(matches!(result.unwrap_err(), ContractError::Unauthorized {}));
+    assert!(matches!(
+        result.unwrap_err(),
+        ContractError::Unauthorized {}
+    ));
 }
 
 /// Test timeout from wrong state fails
@@ -513,7 +538,10 @@ fn test_timeout_from_wrong_state() {
         },
     );
 
-    assert!(matches!(result.unwrap_err(), ContractError::InvalidStateTransition { .. }));
+    assert!(matches!(
+        result.unwrap_err(),
+        ContractError::InvalidStateTransition { .. }
+    ));
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -539,7 +567,10 @@ fn test_non_admin_cannot_slash() {
         },
     );
 
-    assert!(matches!(result.unwrap_err(), ContractError::Unauthorized {}));
+    assert!(matches!(
+        result.unwrap_err(),
+        ContractError::Unauthorized {}
+    ));
 }
 
 /// Test slashing non-existent solver fails
@@ -561,7 +592,10 @@ fn test_slash_nonexistent_solver() {
         },
     );
 
-    assert!(matches!(result.unwrap_err(), ContractError::SolverNotRegistered { .. }));
+    assert!(matches!(
+        result.unwrap_err(),
+        ContractError::SolverNotRegistered { .. }
+    ));
 }
 
 /// Test slashing for non-existent settlement fails
@@ -582,7 +616,10 @@ fn test_slash_nonexistent_settlement() {
         },
     );
 
-    assert!(matches!(result.unwrap_err(), ContractError::SettlementNotFound { .. }));
+    assert!(matches!(
+        result.unwrap_err(),
+        ContractError::SettlementNotFound { .. }
+    ));
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -605,7 +642,10 @@ fn test_insufficient_bond_rejected() {
         },
     );
 
-    assert!(matches!(result.unwrap_err(), ContractError::InsufficientBond { .. }));
+    assert!(matches!(
+        result.unwrap_err(),
+        ContractError::InsufficientBond { .. }
+    ));
 }
 
 /// Test attacker cannot deregister someone else's solver
@@ -625,7 +665,10 @@ fn test_attacker_cannot_deregister_solver() {
         },
     );
 
-    assert!(matches!(result.unwrap_err(), ContractError::Unauthorized {}));
+    assert!(matches!(
+        result.unwrap_err(),
+        ContractError::Unauthorized {}
+    ));
 }
 
 /// Test duplicate solver registration fails
@@ -718,7 +761,10 @@ fn test_execute_expired_settlement_fails() {
         },
     );
 
-    assert!(matches!(result.unwrap_err(), ContractError::SettlementExpired {}));
+    assert!(matches!(
+        result.unwrap_err(),
+        ContractError::SettlementExpired {}
+    ));
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -744,7 +790,10 @@ fn test_non_admin_cannot_update_config() {
         },
     );
 
-    assert!(matches!(result.unwrap_err(), ContractError::Unauthorized {}));
+    assert!(matches!(
+        result.unwrap_err(),
+        ContractError::Unauthorized {}
+    ));
 }
 
 /// Test non-admin cannot change escrow contract
@@ -767,7 +816,10 @@ fn test_non_admin_cannot_change_escrow() {
         },
     );
 
-    assert!(matches!(result.unwrap_err(), ContractError::Unauthorized {}));
+    assert!(matches!(
+        result.unwrap_err(),
+        ContractError::Unauthorized {}
+    ));
 }
 
 /// Test non-admin cannot reduce min solver bond
@@ -789,5 +841,8 @@ fn test_non_admin_cannot_reduce_bond() {
         },
     );
 
-    assert!(matches!(result.unwrap_err(), ContractError::Unauthorized {}));
+    assert!(matches!(
+        result.unwrap_err(),
+        ContractError::Unauthorized {}
+    ));
 }

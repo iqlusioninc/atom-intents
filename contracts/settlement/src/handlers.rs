@@ -98,6 +98,7 @@ pub fn execute_deregister_solver(
         .add_attribute("bond_returned", solver.bond_amount))
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn execute_create_settlement(
     deps: DepsMut,
     env: Env,
@@ -611,10 +612,16 @@ pub fn execute_settlement_local(
         .add_attribute("settlement_id", settlement_id)
         .add_attribute("settlement_type", "same_chain")
         .add_attribute("user", settlement.user.to_string())
-        .add_attribute("user_receives_amount", settlement.solver_output_amount.to_string())
+        .add_attribute(
+            "user_receives_amount",
+            settlement.solver_output_amount.to_string(),
+        )
         .add_attribute("user_receives_denom", settlement.solver_output_denom)
         .add_attribute("escrow_id", escrow_id)
-        .add_attribute("solver_receives_amount", settlement.user_input_amount.to_string())
+        .add_attribute(
+            "solver_receives_amount",
+            settlement.user_input_amount.to_string(),
+        )
         .add_attribute("solver_receives_denom", settlement.user_input_denom))
 }
 
@@ -954,6 +961,7 @@ pub fn execute_decay_reputation(
 ///
 /// Users call this when they can't or don't want to use the off-chain coordinator.
 /// Funds are locked in the contract until a solver fills the order or it expires.
+#[allow(clippy::too_many_arguments)]
 pub fn execute_submit_order(
     deps: DepsMut,
     env: Env,
@@ -980,7 +988,7 @@ pub fn execute_submit_order(
     }
 
     // Validate timeout (between 1 minute and 24 hours)
-    if timeout_seconds < 60 || timeout_seconds > 86400 {
+    if !(60..=86400).contains(&timeout_seconds) {
         return Err(ContractError::InvalidTimeout {
             min: 60,
             max: 86400,
@@ -1051,9 +1059,12 @@ pub fn execute_fill_order(
     order_id: String,
 ) -> Result<Response, ContractError> {
     // Load order
-    let mut order = ORDERS
-        .load(deps.storage, &order_id)
-        .map_err(|_| ContractError::OrderNotFound { id: order_id.clone() })?;
+    let mut order =
+        ORDERS
+            .load(deps.storage, &order_id)
+            .map_err(|_| ContractError::OrderNotFound {
+                id: order_id.clone(),
+            })?;
 
     // Check order is open
     match &order.status {
@@ -1187,9 +1198,12 @@ pub fn execute_refund_expired_order(
     _info: MessageInfo,
     order_id: String,
 ) -> Result<Response, ContractError> {
-    let mut order = ORDERS
-        .load(deps.storage, &order_id)
-        .map_err(|_| ContractError::OrderNotFound { id: order_id.clone() })?;
+    let mut order =
+        ORDERS
+            .load(deps.storage, &order_id)
+            .map_err(|_| ContractError::OrderNotFound {
+                id: order_id.clone(),
+            })?;
 
     // Check order is open (can only refund open orders)
     match &order.status {
@@ -1242,9 +1256,12 @@ pub fn execute_cancel_order(
     info: MessageInfo,
     order_id: String,
 ) -> Result<Response, ContractError> {
-    let mut order = ORDERS
-        .load(deps.storage, &order_id)
-        .map_err(|_| ContractError::OrderNotFound { id: order_id.clone() })?;
+    let mut order =
+        ORDERS
+            .load(deps.storage, &order_id)
+            .map_err(|_| ContractError::OrderNotFound {
+                id: order_id.clone(),
+            })?;
 
     // Only creator can cancel
     if info.sender != order.user {

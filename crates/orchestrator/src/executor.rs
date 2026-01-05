@@ -30,6 +30,7 @@ pub struct ExecutionCoordinator {
     solution_aggregator: Arc<SolutionAggregator>,
     // Store as trait object to avoid generic parameters
     settlement_manager: Arc<dyn SettlementManager>,
+    #[allow(dead_code)]
     timeout_config: TimeoutConfig,
 }
 

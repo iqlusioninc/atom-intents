@@ -8,7 +8,6 @@
 /// - MEV extraction
 /// - Price oracle manipulation for profit
 /// - Griefing attacks
-
 use atom_intents_matching_engine::MatchingEngine;
 use atom_intents_types::{
     Asset, ExecutionConstraints, FillConfig, FillStrategy, Intent, OutputSpec, SolverQuote,
@@ -68,12 +67,24 @@ fn test_frontrunning_defense_via_limit_price() {
 
     // Victim wants to buy ATOM with limit price 0.1 ATOM/USDC (max 10 USDC/ATOM)
     let victim_buy = make_test_intent(
-        "victim-buy", "victim", "uusdc", 10_000_000, "uatom", 1_000_000, "0.1",
+        "victim-buy",
+        "victim",
+        "uusdc",
+        10_000_000,
+        "uatom",
+        1_000_000,
+        "0.1",
     );
 
     // ATTACK: Frontrunner places buy order first at same price
     let frontrunner_buy = make_test_intent(
-        "frontrunner-buy", "frontrunner", "uusdc", 100_000_000, "uatom", 10_000_000, "0.1",
+        "frontrunner-buy",
+        "frontrunner",
+        "uusdc",
+        100_000_000,
+        "uatom",
+        10_000_000,
+        "0.1",
     );
 
     // Seller at 10 USDC/ATOM
@@ -122,15 +133,26 @@ fn test_midpoint_pricing_protects_against_oracle_manipulation() {
     // ATTACK: Oracle manipulated to 11 USDC/ATOM
     let manipulated_oracle = Decimal::from_str("11.0").unwrap();
 
-    let result = engine.run_batch_auction(pair.clone(), vec![user_buy, sell], vec![], manipulated_oracle);
+    let result = engine.run_batch_auction(
+        pair.clone(),
+        vec![user_buy, sell],
+        vec![],
+        manipulated_oracle,
+    );
 
     // With midpoint pricing, execution happens at midpoint of limits (10 USDC/ATOM)
     // NOT at the manipulated oracle price! User is protected.
-    assert!(result.is_ok(), "Midpoint pricing should execute at limit-derived price");
+    assert!(
+        result.is_ok(),
+        "Midpoint pricing should execute at limit-derived price"
+    );
     let auction = result.unwrap();
 
     // Verify trade executed despite oracle manipulation
-    assert!(!auction.internal_fills.is_empty(), "Trade should execute at fair midpoint price");
+    assert!(
+        !auction.internal_fills.is_empty(),
+        "Trade should execute at fair midpoint price"
+    );
 }
 
 /// Test that extreme oracle deviation triggers sanity check rejection
@@ -153,13 +175,21 @@ fn test_extreme_oracle_deviation_rejected() {
     // Deviation = |9 - 20| / 20 = 55% > 10% threshold
     let extremely_manipulated_oracle = Decimal::from_str("20.0").unwrap();
 
-    let result = engine.run_batch_auction(pair, vec![user_buy, sell], vec![], extremely_manipulated_oracle);
+    let result = engine.run_batch_auction(
+        pair,
+        vec![user_buy, sell],
+        vec![],
+        extremely_manipulated_oracle,
+    );
 
     // Sanity check should prevent execution when oracle deviates too much
     // This catches potential stale oracles or extreme manipulation
     assert!(result.is_ok()); // Run succeeds but...
     let auction = result.unwrap();
-    assert!(auction.internal_fills.is_empty(), "Extreme oracle deviation should prevent matching");
+    assert!(
+        auction.internal_fills.is_empty(),
+        "Extreme oracle deviation should prevent matching"
+    );
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -181,21 +211,45 @@ fn test_sandwich_attack_mitigation() {
     // This mitigates sandwich attacks
 
     let front_buy = make_test_intent(
-        "front-buy", "attacker", "uusdc", 50_000_000, "uatom", 5_000_000, "0.1",
+        "front-buy",
+        "attacker",
+        "uusdc",
+        50_000_000,
+        "uatom",
+        5_000_000,
+        "0.1",
     );
 
     let victim_buy = make_test_intent(
-        "victim-buy", "victim", "uusdc", 10_000_000, "uatom", 1_000_000, "0.1",
+        "victim-buy",
+        "victim",
+        "uusdc",
+        10_000_000,
+        "uatom",
+        1_000_000,
+        "0.1",
     );
 
     // Attacker's back-sell (they want to sell what they bought)
     let back_sell = make_test_intent(
-        "back-sell", "attacker", "uatom", 5_000_000, "uusdc", 50_000_000, "10.0",
+        "back-sell",
+        "attacker",
+        "uatom",
+        5_000_000,
+        "uusdc",
+        50_000_000,
+        "10.0",
     );
 
     // Liquidity provider
     let seller = make_test_intent(
-        "seller", "lp", "uatom", 10_000_000, "uusdc", 100_000_000, "10.0",
+        "seller",
+        "lp",
+        "uatom",
+        10_000_000,
+        "uusdc",
+        100_000_000,
+        "10.0",
     );
 
     let oracle = Decimal::from_str("10.0").unwrap();
@@ -229,7 +283,7 @@ fn test_solver_fee_extraction_blocked_by_min_output() {
         "user-sell",
         "user",
         "uatom",
-        1_000_000,  // Selling 1 ATOM
+        1_000_000, // Selling 1 ATOM
         "uusdc",
         10_000_000, // Wants at least 10 USDC
         "10.0",     // Limit price 10 USDC/ATOM
@@ -258,8 +312,7 @@ fn test_max_solver_fee_constraint() {
     // User can set max_solver_fee_bps in constraints
     // This limits how much a solver can charge
 
-    let constraints = ExecutionConstraints::new(9999999999)
-        .with_max_solver_fee_bps(50); // Max 0.5% fee
+    let constraints = ExecutionConstraints::new(9999999999).with_max_solver_fee_bps(50); // Max 0.5% fee
 
     assert_eq!(constraints.max_solver_fee_bps, Some(50));
 
@@ -315,7 +368,10 @@ fn test_oracle_aggregation_concept() {
     let median_price = prices[1];
 
     // Median is more resistant to single oracle manipulation
-    assert!((median_price - Decimal::from_str("10.0").unwrap()).abs() < Decimal::from_str("0.1").unwrap());
+    assert!(
+        (median_price - Decimal::from_str("10.0").unwrap()).abs()
+            < Decimal::from_str("0.1").unwrap()
+    );
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -359,12 +415,8 @@ fn test_zero_value_griefing() {
     let pair = TradingPair::new("uatom", "uusdc");
 
     // ATTACK: Orders with zero amounts
-    let zero_buy = make_test_intent(
-        "zero-buy", "griefer", "uusdc", 0, "uatom", 0, "0.1",
-    );
-    let zero_sell = make_test_intent(
-        "zero-sell", "griefer", "uatom", 0, "uusdc", 0, "10.0",
-    );
+    let zero_buy = make_test_intent("zero-buy", "griefer", "uusdc", 0, "uatom", 0, "0.1");
+    let zero_sell = make_test_intent("zero-sell", "griefer", "uatom", 0, "uusdc", 0, "10.0");
 
     let oracle = Decimal::from_str("10.0").unwrap();
 
@@ -437,8 +489,7 @@ fn test_solver_collusion_resistance() {
 #[test]
 fn test_cross_ecosystem_constraint() {
     // User can disable cross-ecosystem execution to limit attack surface
-    let constraints = ExecutionConstraints::new(9999999999)
-        .with_cross_ecosystem(false);
+    let constraints = ExecutionConstraints::new(9999999999).with_cross_ecosystem(false);
 
     assert!(!constraints.allow_cross_ecosystem);
 
@@ -454,8 +505,12 @@ fn test_venue_exclusion() {
         .exclude_venue("risky-dex")
         .exclude_venue("hacked-protocol");
 
-    assert!(constraints.excluded_venues.contains(&"risky-dex".to_string()));
-    assert!(constraints.excluded_venues.contains(&"hacked-protocol".to_string()));
+    assert!(constraints
+        .excluded_venues
+        .contains(&"risky-dex".to_string()));
+    assert!(constraints
+        .excluded_venues
+        .contains(&"hacked-protocol".to_string()));
 
     // The orchestrator should reject fills through excluded venues
 }

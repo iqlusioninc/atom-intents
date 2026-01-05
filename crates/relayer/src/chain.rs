@@ -488,6 +488,7 @@ impl CosmosChainClient {
     }
 
     /// Execute an operation with automatic reconnection on failure
+    #[allow(dead_code)]
     async fn with_retry<F, T, Fut>(&self, operation: F) -> Result<T, ChainError>
     where
         F: Fn() -> Fut,
@@ -506,9 +507,7 @@ impl CosmosChainClient {
         }
 
         // Try to reconnect
-        if let Err(e) = self.reconnect().await {
-            return Err(e);
-        }
+        self.reconnect().await?;
 
         // Retry once after reconnect
         operation().await
@@ -730,7 +729,7 @@ impl CosmosChainClient {
 
         // For now, return a simulated successful response
         Ok(TxResponse {
-            hash: hex::encode(&[0u8; 32]),
+            hash: hex::encode([0u8; 32]),
             height: 1,
             gas_used: self.config.default_gas,
             code: 0,

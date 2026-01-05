@@ -4,8 +4,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
 /// Main application configuration
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[derive(Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct AppConfig {
     /// Network configuration
     pub network: NetworkConfig,
@@ -308,7 +307,6 @@ fn default_solver_fee_bps() -> u64 {
 fn default_oracle_provider() -> String {
     "slinky".to_string()
 }
-
 
 impl Default for NetworkConfig {
     fn default() -> Self {

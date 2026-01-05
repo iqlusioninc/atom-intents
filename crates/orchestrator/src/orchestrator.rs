@@ -5,8 +5,7 @@ use atom_intents_settlement::{
 };
 use atom_intents_solver::SolutionAggregator;
 use atom_intents_types::{
-    Asset, ExecutionConstraints, FillConfig, Intent, OutputSpec, SolverQuote,
-    TradingPair,
+    Asset, ExecutionConstraints, FillConfig, Intent, OutputSpec, SolverQuote, TradingPair,
 };
 use cosmwasm_std::Uint128;
 use rust_decimal::Decimal;
@@ -157,7 +156,10 @@ where
     }
 
     /// Set the solution aggregator
-    pub fn with_solution_aggregator(mut self, solution_aggregator: Arc<SolutionAggregator>) -> Self {
+    pub fn with_solution_aggregator(
+        mut self,
+        solution_aggregator: Arc<SolutionAggregator>,
+    ) -> Self {
         self.solution_aggregator = Some(solution_aggregator);
         self
     }
@@ -204,29 +206,37 @@ where
             field: "validator".to_string(),
         })?;
 
-        let matching_engine = self.matching_engine.ok_or_else(|| BuilderError::MissingField {
-            field: "matching_engine".to_string(),
-        })?;
+        let matching_engine = self
+            .matching_engine
+            .ok_or_else(|| BuilderError::MissingField {
+                field: "matching_engine".to_string(),
+            })?;
 
-        let solution_aggregator = self.solution_aggregator.ok_or_else(|| BuilderError::MissingField {
-            field: "solution_aggregator".to_string(),
-        })?;
+        let solution_aggregator =
+            self.solution_aggregator
+                .ok_or_else(|| BuilderError::MissingField {
+                    field: "solution_aggregator".to_string(),
+                })?;
 
         let user_escrow = self.user_escrow.ok_or_else(|| BuilderError::MissingField {
             field: "user_escrow".to_string(),
         })?;
 
-        let solver_vault = self.solver_vault.ok_or_else(|| BuilderError::MissingField {
-            field: "solver_vault".to_string(),
-        })?;
+        let solver_vault = self
+            .solver_vault
+            .ok_or_else(|| BuilderError::MissingField {
+                field: "solver_vault".to_string(),
+            })?;
 
         let relayer = self.relayer.ok_or_else(|| BuilderError::MissingField {
             field: "relayer".to_string(),
         })?;
 
-        let relayer_service = self.relayer_service.ok_or_else(|| BuilderError::MissingField {
-            field: "relayer_service".to_string(),
-        })?;
+        let relayer_service = self
+            .relayer_service
+            .ok_or_else(|| BuilderError::MissingField {
+                field: "relayer_service".to_string(),
+            })?;
 
         // Use the new() method to construct the orchestrator
         Ok(IntentOrchestrator::new(
@@ -258,6 +268,7 @@ where
 pub struct IntentOrchestrator {
     matching_engine: Arc<Mutex<MatchingEngine>>,
     solution_aggregator: Arc<SolutionAggregator>,
+    #[allow(dead_code)]
     relayer: Arc<SolverRelayer>,
     executor: Arc<ExecutionCoordinator>,
     config: OrchestratorConfig,
@@ -283,6 +294,7 @@ impl IntentOrchestrator {
     }
 
     /// Create a new IntentOrchestrator (constructor for backwards compatibility)
+    #[allow(clippy::too_many_arguments)]
     pub fn new<E, V, R>(
         validator: Arc<IntentValidator>,
         matching_engine: MatchingEngine,
@@ -413,7 +425,9 @@ impl IntentOrchestrator {
                     output_amount: total_output,
                     execution_price,
                     solver_id: solver_fills.first().map(|f| f.solver_id.clone()),
-                    settlement_id: exec_settlement_id.clone().unwrap_or_else(|| intent_id.clone()),
+                    settlement_id: exec_settlement_id
+                        .clone()
+                        .unwrap_or_else(|| intent_id.clone()),
                     completed_at: current_time,
                 };
 
@@ -493,7 +507,7 @@ impl IntentOrchestrator {
         let mut pairs: HashMap<TradingPair, Vec<Intent>> = HashMap::new();
         for intent in intents {
             let pair = intent.pair();
-            pairs.entry(pair).or_insert_with(Vec::new).push(intent);
+            pairs.entry(pair).or_default().push(intent);
         }
 
         let mut all_results = Vec::new();

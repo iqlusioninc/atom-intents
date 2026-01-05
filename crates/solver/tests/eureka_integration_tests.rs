@@ -8,10 +8,7 @@ use atom_intents_types::{
 use cosmwasm_std::{Binary, Uint128};
 use std::sync::Arc;
 
-fn create_test_intent(
-    asset_pref: AssetPreference,
-    allow_cross_ecosystem: bool,
-) -> Intent {
+fn create_test_intent(asset_pref: AssetPreference, allow_cross_ecosystem: bool) -> Intent {
     Intent {
         id: "integration-test-1".to_string(),
         version: "1".to_string(),
@@ -161,8 +158,7 @@ fn test_supported_pairs() {
     assert!(!pairs.is_empty());
 
     // Should have Ethereum USDC to Cosmos USDC
-    let eth_usdc_pair =
-        TradingPair::new("0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48", "uusdc");
+    let eth_usdc_pair = TradingPair::new("0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48", "uusdc");
     assert!(pairs.contains(&eth_usdc_pair));
 }
 

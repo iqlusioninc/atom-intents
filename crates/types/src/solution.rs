@@ -273,12 +273,8 @@ mod tests {
         assert!(!metadata.is_native_output);
 
         // Test native output
-        let native = SolutionMetadata::eureka(
-            EurekaDirection::CosmosToEthereum,
-            None,
-            "usdc",
-            true,
-        );
+        let native =
+            SolutionMetadata::eureka(EurekaDirection::CosmosToEthereum, None, "usdc", true);
         assert!(native.is_native_output);
     }
 }

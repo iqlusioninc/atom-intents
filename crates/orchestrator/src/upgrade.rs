@@ -173,7 +173,7 @@ impl DrainModeManager {
             }
 
             // Log progress periodically
-            if start.elapsed().as_secs() % 10 == 0 && start.elapsed().as_secs() > 0 {
+            if start.elapsed().as_secs().is_multiple_of(10) && start.elapsed().as_secs() > 0 {
                 info!(
                     remaining = count,
                     elapsed_secs = start.elapsed().as_secs(),
@@ -778,13 +778,13 @@ mod tests {
         let manager = DrainModeManager::new(tracker.clone());
 
         // Start drain with no inflight
-        manager
-            .start_drain("test".to_string(), 60)
-            .await
-            .unwrap();
+        manager.start_drain("test".to_string(), 60).await.unwrap();
 
         // Should complete immediately
-        let result = manager.wait_for_drain(Duration::from_secs(5)).await.unwrap();
+        let result = manager
+            .wait_for_drain(Duration::from_secs(5))
+            .await
+            .unwrap();
 
         assert!(matches!(result, DrainResult::Completed { .. }));
     }

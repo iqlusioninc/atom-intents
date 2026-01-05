@@ -182,7 +182,10 @@ fn demonstrate_flow_determination(registry: &RouteRegistry) {
                 println!("    Flow: IBC Hooks with Wasm execution");
                 println!("    Contract: {}", contract);
             }
-            IbcFlowType::Eureka { direction, eth_address } => {
+            IbcFlowType::Eureka {
+                direction,
+                eth_address,
+            } => {
                 println!("    Flow: IBC Eureka (Ethereum bridge)");
                 println!("    Direction: {:?}", direction);
                 if let Some(addr) = eth_address {

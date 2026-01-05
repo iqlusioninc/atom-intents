@@ -7,10 +7,10 @@ use crate::error::ContractError;
 use crate::handlers::{
     execute_cancel_order, execute_create_settlement, execute_decay_reputation,
     execute_deregister_solver, execute_fill_order, execute_handle_ibc_ack, execute_handle_timeout,
-    execute_mark_completed, execute_mark_executing, execute_mark_failed, execute_mark_solver_locked,
-    execute_mark_user_locked, execute_refund_expired_order, execute_register_solver,
-    execute_settlement, execute_settlement_local, execute_slash_solver, execute_submit_order,
-    execute_update_config, execute_update_reputation,
+    execute_mark_completed, execute_mark_executing, execute_mark_failed,
+    execute_mark_solver_locked, execute_mark_user_locked, execute_refund_expired_order,
+    execute_register_solver, execute_settlement, execute_settlement_local, execute_slash_solver,
+    execute_submit_order, execute_update_config, execute_update_reputation,
 };
 use crate::msg::{
     ConfigUpdate, ExecuteMsg, InflightSettlementsResponse, InstantiateMsg, MigrateMsg,
@@ -21,9 +21,7 @@ use crate::queries::{
     query_settlement_by_intent, query_settlements_by_solver, query_solver, query_solver_reputation,
     query_solvers, query_solvers_by_reputation, query_top_solvers,
 };
-use crate::state::{
-    Config, MigrationInfo, SettlementStatus, CONFIG, MIGRATION_INFO, SETTLEMENTS,
-};
+use crate::state::{Config, MigrationInfo, SettlementStatus, CONFIG, MIGRATION_INFO, SETTLEMENTS};
 
 #[entry_point]
 pub fn instantiate(
@@ -234,7 +232,11 @@ pub fn migrate(deps: DepsMut, env: Env, msg: MigrateMsg) -> Result<Response, Con
 
     // 3. Check if migration is allowed with inflight settlements
     if inflight_count > 0 {
-        let preserve = msg.config.as_ref().map(|c| c.preserve_inflight).unwrap_or(true);
+        let preserve = msg
+            .config
+            .as_ref()
+            .map(|c| c.preserve_inflight)
+            .unwrap_or(true);
         if !preserve {
             return Err(ContractError::InflightSettlementsExist {
                 count: inflight_count,
@@ -244,7 +246,12 @@ pub fn migrate(deps: DepsMut, env: Env, msg: MigrateMsg) -> Result<Response, Con
 
     // 4. Handle stuck settlements based on configuration
     if let Some(ref config) = msg.config {
-        handle_stuck_settlements(deps.storage, &env, &config.stuck_settlement_action, &inflight)?;
+        handle_stuck_settlements(
+            deps.storage,
+            &env,
+            &config.stuck_settlement_action,
+            &inflight,
+        )?;
 
         // Extend timeouts if requested
         if let Some(extend_secs) = config.extend_timeout_secs {
@@ -304,7 +311,9 @@ fn get_inflight_settlement_ids(deps: Deps) -> StdResult<Vec<String>> {
 fn is_terminal_status(status: &SettlementStatus) -> bool {
     matches!(
         status,
-        SettlementStatus::Completed | SettlementStatus::Failed { .. } | SettlementStatus::Slashed { .. }
+        SettlementStatus::Completed
+            | SettlementStatus::Failed { .. }
+            | SettlementStatus::Slashed { .. }
     )
 }
 
@@ -413,7 +422,9 @@ fn query_inflight_settlements(
     limit: Option<u32>,
 ) -> StdResult<InflightSettlementsResponse> {
     let limit = limit.unwrap_or(100).min(500) as usize;
-    let start = start_after.as_deref().map(cw_storage_plus::Bound::exclusive);
+    let start = start_after
+        .as_deref()
+        .map(cw_storage_plus::Bound::exclusive);
 
     let settlement_ids: Vec<String> = SETTLEMENTS
         .range(deps.storage, start, None, Order::Ascending)
@@ -447,7 +458,7 @@ mod tests {
         ConfigResponse, MigrationConfig, SettlementResponse, SolverReputationResponse,
         SolverResponse, SolversResponse, TopSolversResponse,
     };
-    use crate::state::{SolverReputation, SettlementStatus, REPUTATIONS, SETTLEMENTS, SOLVERS};
+    use crate::state::{SettlementStatus, SolverReputation, REPUTATIONS, SETTLEMENTS, SOLVERS};
 
     // Helper to get test addresses using MockApi
     struct TestAddrs {
@@ -2292,10 +2303,8 @@ mod tests {
         assert_eq!(res.attributes[3].value, "0"); // no inflight
 
         // Query migration info
-        let info: MigrationInfoResponse = from_json(
-            query(deps.as_ref(), env, QueryMsg::MigrationInfo {}).unwrap(),
-        )
-        .unwrap();
+        let info: MigrationInfoResponse =
+            from_json(query(deps.as_ref(), env, QueryMsg::MigrationInfo {}).unwrap()).unwrap();
 
         assert_eq!(info.current_version, "2.0.0");
         assert!(info.previous_version.is_none());
@@ -2403,7 +2412,10 @@ mod tests {
         };
 
         let err = migrate(deps.as_mut(), env, msg).unwrap_err();
-        assert!(matches!(err, ContractError::InflightSettlementsExist { count: 1 }));
+        assert!(matches!(
+            err,
+            ContractError::InflightSettlementsExist { count: 1 }
+        ));
     }
 
     #[test]
@@ -2545,10 +2557,8 @@ mod tests {
         migrate(deps.as_mut(), env.clone(), msg2).unwrap();
 
         // Query migration info
-        let info: MigrationInfoResponse = from_json(
-            query(deps.as_ref(), env, QueryMsg::MigrationInfo {}).unwrap(),
-        )
-        .unwrap();
+        let info: MigrationInfoResponse =
+            from_json(query(deps.as_ref(), env, QueryMsg::MigrationInfo {}).unwrap()).unwrap();
 
         assert_eq!(info.current_version, "3.0.0");
         assert_eq!(info.previous_version, Some("2.0.0".to_string()));

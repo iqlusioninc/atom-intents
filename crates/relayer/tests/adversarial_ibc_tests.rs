@@ -7,7 +7,6 @@
 /// - Malicious relayer behavior
 /// - Cross-chain double-spend attempts
 /// - Timeout racing attacks
-
 use atom_intents_types::{
     Asset, ExecutionConstraints, FillConfig, FillStrategy, Intent, OutputSpec,
 };
@@ -65,12 +64,12 @@ fn make_test_intent(
 fn test_malformed_ibc_denom_handled() {
     // Malformed IBC denoms shouldn't crash
     let malformed_denoms = vec![
-        "ibc/",                   // No hash
-        "ibc/TOOSHORT",           // Hash too short
-        "ibc/xyz",                // Invalid hex
+        "ibc/",                                                                      // No hash
+        "ibc/TOOSHORT", // Hash too short
+        "ibc/xyz",      // Invalid hex
         "ibc/27394FB092D2ECCD56123C74F36E4C1F926001CEADA9CA97EA622B25F41E5EB2EXTRA", // Too long
-        "",                       // Empty
-        "ibc",                    // Missing slash
+        "",             // Empty
+        "ibc",          // Missing slash
         "IBC/27394FB092D2ECCD56123C74F36E4C1F926001CEADA9CA97EA622B25F41E5EB2", // Wrong case
     ];
 
@@ -177,8 +176,7 @@ fn test_timeout_fund_safety_concept() {
 #[test]
 fn test_max_bridge_time_constraint() {
     // User can set max acceptable bridge time
-    let constraints = ExecutionConstraints::new(9999999999)
-        .with_max_bridge_time_secs(300); // 5 minutes max
+    let constraints = ExecutionConstraints::new(9999999999).with_max_bridge_time_secs(300); // 5 minutes max
 
     assert_eq!(constraints.max_bridge_time_secs, Some(300));
 
@@ -287,12 +285,12 @@ fn test_pfm_memo_malformed_input() {
     // Malformed JSON should not cause panic
 
     let malformed_memos = vec![
-        "",                                    // Empty
-        "{}",                                  // Empty object
-        "{",                                   // Unclosed brace
-        "not json",                            // Not JSON
-        "{\"forward\": null}",                 // Null forward
-        "{\"forward\": {}}",                   // Empty forward
+        "",                                   // Empty
+        "{}",                                 // Empty object
+        "{",                                  // Unclosed brace
+        "not json",                           // Not JSON
+        "{\"forward\": null}",                // Null forward
+        "{\"forward\": {}}",                  // Empty forward
         "{\"forward\": {\"receiver\": 123}}", // Wrong type
     ];
 
@@ -332,16 +330,18 @@ fn test_delayed_relay_handling_concept() {
     // Protection: Use aggressive timeouts
 
     // Intent timeout should be shorter than price staleness threshold
-    let intent_timeout_secs = 300;  // 5 minutes
-    let price_staleness_threshold = 60;  // 1 minute
+    let intent_timeout_secs = 300; // 5 minutes
+    let price_staleness_threshold = 60; // 1 minute
 
     // If relay is delayed beyond intent timeout:
     // 1. Packet will timeout
     // 2. Funds return to user
     // 3. Settlement fails (solver not rewarded)
 
-    assert!(intent_timeout_secs > price_staleness_threshold,
-        "Intent timeout should allow for price updates");
+    assert!(
+        intent_timeout_secs > price_staleness_threshold,
+        "Intent timeout should allow for price updates"
+    );
 }
 
 /// Test multiple relayer race condition handling
@@ -384,8 +384,7 @@ fn test_escrow_state_consistency_concept() {
 #[test]
 fn test_cross_ecosystem_constraint() {
     // User can disable cross-ecosystem execution to limit attack surface
-    let constraints = ExecutionConstraints::new(9999999999)
-        .with_cross_ecosystem(false);
+    let constraints = ExecutionConstraints::new(9999999999).with_cross_ecosystem(false);
 
     assert!(!constraints.allow_cross_ecosystem);
 
@@ -401,8 +400,12 @@ fn test_venue_exclusion() {
         .exclude_venue("risky-dex")
         .exclude_venue("hacked-protocol");
 
-    assert!(constraints.excluded_venues.contains(&"risky-dex".to_string()));
-    assert!(constraints.excluded_venues.contains(&"hacked-protocol".to_string()));
+    assert!(constraints
+        .excluded_venues
+        .contains(&"risky-dex".to_string()));
+    assert!(constraints
+        .excluded_venues
+        .contains(&"hacked-protocol".to_string()));
 
     // The orchestrator should reject fills through excluded venues
 }
@@ -410,8 +413,7 @@ fn test_venue_exclusion() {
 /// Test max solver fee constraint
 #[test]
 fn test_max_solver_fee_constraint() {
-    let constraints = ExecutionConstraints::new(9999999999)
-        .with_max_solver_fee_bps(50); // Max 0.5% fee
+    let constraints = ExecutionConstraints::new(9999999999).with_max_solver_fee_bps(50); // Max 0.5% fee
 
     assert_eq!(constraints.max_solver_fee_bps, Some(50));
 

@@ -39,10 +39,7 @@ impl EurekaSolver {
                     "uusdt",
                 ),
                 // Cosmos USDC to Ethereum USDC
-                TradingPair::new(
-                    "uusdc",
-                    "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48",
-                ),
+                TradingPair::new("uusdc", "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48"),
                 // ATOM to Ethereum-bridged representations
                 TradingPair::new("uatom", "eureka/atom"),
             ],
@@ -235,7 +232,7 @@ impl Solver for EurekaSolver {
         Ok(SolverCapacity {
             max_immediate: Uint128::new(10_000_000_000_000), // 10M USDC (6 decimals)
             available_liquidity: Uint128::new(100_000_000_000_000), // 100M USDC
-            estimated_time_ms: 25_000, // 25 seconds for Eureka
+            estimated_time_ms: 25_000,                       // 25 seconds for Eureka
         })
     }
 
@@ -345,17 +342,13 @@ mod tests {
     #[test]
     fn test_infer_direction() {
         // Ethereum address as input -> EthereumToCosmos
-        let direction = EurekaSolver::infer_direction(
-            "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48",
-            "uusdc",
-        );
+        let direction =
+            EurekaSolver::infer_direction("0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48", "uusdc");
         assert!(matches!(direction, EurekaDirection::EthereumToCosmos));
 
         // Cosmos denom as input, Ethereum as output -> CosmosToEthereum
-        let direction = EurekaSolver::infer_direction(
-            "uusdc",
-            "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48",
-        );
+        let direction =
+            EurekaSolver::infer_direction("uusdc", "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48");
         assert!(matches!(direction, EurekaDirection::CosmosToEthereum));
 
         // Both Cosmos denoms -> defaults to EthereumToCosmos
@@ -418,8 +411,8 @@ mod tests {
         let solver = EurekaSolver::new("eureka-solver", skip_go);
 
         // Create intent with cross_ecosystem disabled (default)
-        let constraints = ExecutionConstraints::new(1000)
-            .with_asset_preference(AssetPreference::AnyEquivalent);
+        let constraints =
+            ExecutionConstraints::new(1000).with_asset_preference(AssetPreference::AnyEquivalent);
 
         let intent = create_test_intent_with_constraints(constraints);
         let ctx = SolveContext {
@@ -471,10 +464,7 @@ mod tests {
         let skip_go = Arc::new(SkipGoClient::mainnet());
         let solver = EurekaSolver::new("eureka-solver", skip_go);
 
-        let pair = TradingPair::new(
-            "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48",
-            "uusdc",
-        );
+        let pair = TradingPair::new("0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48", "uusdc");
 
         let capacity = solver.capacity(&pair).await.unwrap();
 
@@ -513,10 +503,7 @@ mod tests {
         assert!(!pairs.is_empty());
 
         // Should have Ethereum USDC to Cosmos USDC
-        let eth_usdc_pair = TradingPair::new(
-            "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48",
-            "uusdc",
-        );
+        let eth_usdc_pair = TradingPair::new("0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48", "uusdc");
         assert!(pairs.contains(&eth_usdc_pair));
     }
 }

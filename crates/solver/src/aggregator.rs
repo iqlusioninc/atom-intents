@@ -146,10 +146,7 @@ impl SolutionAggregator {
                             // Only use stale cache if it's within reasonable bounds (e.g., 10x TTL)
                             if cached.fetched_at.elapsed() < *ttl * 10 {
                                 // Stale cache has higher uncertainty (5%)
-                                return Ok((
-                                    cached.price,
-                                    Decimal::from_str("0.05").unwrap(),
-                                ));
+                                return Ok((cached.price, Decimal::from_str("0.05").unwrap()));
                             }
                         }
                         // No cache available, propagate error
