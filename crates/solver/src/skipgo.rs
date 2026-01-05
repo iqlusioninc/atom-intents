@@ -37,6 +37,11 @@ impl SkipGoClient {
             denom_registry: Arc::new(Mutex::new(registry)),
         }
     }
+
+    /// Check if a chain ID represents Ethereum
+    pub fn is_ethereum_chain(chain_id: &str) -> bool {
+        matches!(chain_id, "1" | "ethereum" | "eth-mainnet")
+    }
 }
 
 #[derive(Debug, Serialize)]
@@ -123,6 +128,43 @@ struct Asset {
     origin_chain_id: String,
     decimals: u32,
     symbol: Option<String>,
+}
+
+/// Eureka-specific route request for Ethereum ↔ Cosmos
+#[derive(Debug, Serialize)]
+pub struct EurekaRouteRequest {
+    pub amount_in: String,
+    pub source_asset_denom: String,
+    pub source_asset_chain_id: String,
+    pub dest_asset_denom: String,
+    pub dest_asset_chain_id: String,
+}
+
+/// Eureka route response
+#[derive(Debug, Deserialize)]
+pub struct EurekaRouteResponse {
+    pub amount_in: String,
+    pub amount_out: String,
+    pub operations: Vec<EurekaOperation>,
+    pub estimated_time_seconds: u64,
+    pub estimated_fees_usd: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct EurekaOperation {
+    pub op_type: String,
+    pub from_chain_id: String,
+    pub to_chain_id: String,
+}
+
+/// Quote from Eureka route
+#[derive(Debug, Clone)]
+pub struct EurekaQuote {
+    pub input_amount: u128,
+    pub output_amount: u128,
+    pub estimated_time_secs: u64,
+    pub estimated_cost_usd: String,
+    pub is_eureka: bool,
 }
 
 #[async_trait]
@@ -300,6 +342,61 @@ impl SkipGoClient {
             .map(|ca| ca.assets.clone())
             .unwrap_or_default())
     }
+
+    /// Get a quote for an Eureka transfer (Ethereum ↔ Cosmos)
+    pub async fn get_eureka_quote(
+        &self,
+        input_denom: &str,
+        output_denom: &str,
+        amount: u128,
+        source_chain: &str,
+        dest_chain: &str,
+    ) -> Result<EurekaQuote, DexError> {
+        let request = EurekaRouteRequest {
+            amount_in: amount.to_string(),
+            source_asset_denom: input_denom.to_string(),
+            source_asset_chain_id: source_chain.to_string(),
+            dest_asset_denom: output_denom.to_string(),
+            dest_asset_chain_id: dest_chain.to_string(),
+        };
+
+        let url = format!("{}/v2/fungible/route", self.base_url);
+
+        debug!("Querying Skip Go Eureka route: {} with {:?}", url, request);
+
+        let response = self
+            .client
+            .post(&url)
+            .json(&request)
+            .send()
+            .await
+            .map_err(|e| DexError::QueryFailed(e.to_string()))?;
+
+        if !response.status().is_success() {
+            let status = response.status();
+            let body = response.text().await.unwrap_or_default();
+            warn!("Skip Go Eureka API error: {} - {}", status, body);
+            return Err(DexError::QueryFailed(format!("HTTP {}: {}", status, body)));
+        }
+
+        let route: EurekaRouteResponse = response
+            .json()
+            .await
+            .map_err(|e| DexError::QueryFailed(format!("Failed to parse response: {}", e)))?;
+
+        let output_amount = route
+            .amount_out
+            .parse::<u128>()
+            .map_err(|e| DexError::QueryFailed(format!("Invalid amount_out: {}", e)))?;
+
+        Ok(EurekaQuote {
+            input_amount: amount,
+            output_amount,
+            estimated_time_secs: route.estimated_time_seconds,
+            estimated_cost_usd: route.estimated_fees_usd,
+            is_eureka: true,
+        })
+    }
 }
 
 #[cfg(test)]
@@ -321,5 +418,27 @@ mod tests {
                 println!("Route error (expected in test): {}", e);
             }
         }
+    }
+
+    #[test]
+    fn test_eureka_route_request() {
+        let request = EurekaRouteRequest {
+            amount_in: "1000000".to_string(),
+            source_asset_denom: "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48".to_string(),
+            source_asset_chain_id: "1".to_string(),
+            dest_asset_denom: "uusdc".to_string(),
+            dest_asset_chain_id: "noble-1".to_string(),
+        };
+
+        assert_eq!(request.source_asset_chain_id, "1");
+        assert_eq!(request.dest_asset_chain_id, "noble-1");
+    }
+
+    #[test]
+    fn test_is_ethereum_chain() {
+        assert!(SkipGoClient::is_ethereum_chain("1"));
+        assert!(SkipGoClient::is_ethereum_chain("ethereum"));
+        assert!(!SkipGoClient::is_ethereum_chain("cosmoshub-4"));
+        assert!(!SkipGoClient::is_ethereum_chain("osmosis-1"));
     }
 }
