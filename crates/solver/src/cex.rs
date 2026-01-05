@@ -653,6 +653,7 @@ impl Solver for CexBackstopSolver {
             execution: ExecutionPlan::CexHedge { exchange },
             valid_until: current_time + 3, // 3 second validity for CEX quotes
             bond: self.calculate_bond(ctx.remaining),
+            metadata: None, // No cross-ecosystem metadata for CEX-only solutions
         })
     }
 
