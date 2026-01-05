@@ -457,7 +457,8 @@ mod tests {
         ConfigResponse, MigrationConfig, SettlementResponse, SolverReputationResponse,
         SolverResponse, SolversResponse, TopSolversResponse,
     };
-    use crate::state::{SolverReputation, SettlementStatus, REPUTATIONS, SETTLEMENTS, SOLVERS};
+    use crate::state::{SolverReputation, SettlementStatus, REPUTATIONS, SETTLEMENTS};
+    use atom_intents_types::collateral::CollateralAsset;
 
     // Helper to get test addresses using MockApi
     struct TestAddrs {
@@ -526,6 +527,36 @@ mod tests {
             info,
             ExecuteMsg::RegisterSolver {
                 solver_id: solver_id.to_string(),
+            },
+        )
+        .unwrap();
+
+        // Also deposit collateral to bond pool for the new per-settlement locking system
+        // Deposit enough to cover multiple settlements (1.5x multiplier per settlement)
+        deposit_collateral(deps, env, addrs, solver_id, bond);
+    }
+
+    fn deposit_collateral(
+        deps: &mut cosmwasm_std::OwnedDeps<
+            cosmwasm_std::MemoryStorage,
+            cosmwasm_std::testing::MockApi,
+            cosmwasm_std::testing::MockQuerier,
+        >,
+        env: &Env,
+        addrs: &TestAddrs,
+        solver_id: &str,
+        amount: u128,
+    ) {
+        let info = message_info(&addrs.solver_operator, &[Coin::new(amount, "uatom")]);
+        execute(
+            deps.as_mut(),
+            env.clone(),
+            info,
+            ExecuteMsg::DepositCollateral {
+                solver_id: solver_id.to_string(),
+                asset: CollateralAsset::Native {
+                    denom: "uatom".to_string(),
+                },
             },
         )
         .unwrap();
@@ -1241,10 +1272,29 @@ mod tests {
 
     #[test]
     fn test_slash_solver_success() {
+        use crate::msg::BondPoolResponse;
+
         let (mut deps, env, addrs) = setup_contract();
-        // Use 100 ATOM bond (100_000_000 uatom) to absorb MIN_SLASH_AMOUNT (10 ATOM)
+        // Use 100 ATOM bond (100_000_000 uatom) to cover collateral requirements
         register_solver(&mut deps, &env, &addrs, "solver-1", 100_000_000);
         create_settlement(&mut deps, &env, &addrs, "settlement-1", "solver-1");
+
+        // Get initial bond pool state
+        let initial_pool: BondPoolResponse = from_json(
+            query(
+                deps.as_ref(),
+                env.clone(),
+                QueryMsg::BondPool {
+                    solver_id: "solver-1".to_string(),
+                },
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        let initial_total = initial_pool.deposits[0].total_amount;
+        let initial_locked = initial_pool.deposits[0].locked_amount;
+        // Settlement with 100_000 input requires 1.5x = 150_000 locked collateral
+        assert_eq!(initial_locked, Uint128::new(150_000));
 
         let info = message_info(&addrs.admin, &[]);
         let res = execute(
@@ -1260,21 +1310,37 @@ mod tests {
 
         assert_eq!(res.attributes[0].value, "slash_solver");
 
-        let solver: SolverResponse = from_json(
+        // With the new per-settlement collateral system, slashing seizes from the bond pool
+        // The locked collateral (150_000) is removed from the pool
+        let pool: BondPoolResponse = from_json(
             query(
                 deps.as_ref(),
-                env,
-                QueryMsg::Solver {
+                env.clone(),
+                QueryMsg::BondPool {
                     solver_id: "solver-1".to_string(),
                 },
             )
             .unwrap(),
         )
         .unwrap();
-        // Calculated: 2% of 100_000 = 2000, but MIN_SLASH_AMOUNT = 10_000_000 (10 ATOM)
-        // Actual slash: max(2000, 10_000_000) = 10_000_000
-        // Remaining bond: 100_000_000 - 10_000_000 = 90_000_000
-        assert_eq!(solver.bond_amount, Uint128::new(90_000_000));
+
+        // Verify the slashed collateral was removed from the pool
+        let final_total = pool.deposits[0].total_amount;
+        assert_eq!(final_total, initial_total - initial_locked);
+
+        // Verify the settlement is now slashed
+        let settlement: SettlementResponse = from_json(
+            query(
+                deps.as_ref(),
+                env,
+                QueryMsg::Settlement {
+                    settlement_id: "settlement-1".to_string(),
+                },
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        assert!(settlement.status.starts_with("slashed"));
     }
 
     #[test]
