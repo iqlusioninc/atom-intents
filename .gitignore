@@ -25,6 +25,7 @@ artifacts/
 .env.local
 wallet.key
 *.key
+demo/testnet/testnet.env
 
 # Node.js
 **/node_modules/
