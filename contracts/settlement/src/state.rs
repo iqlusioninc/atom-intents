@@ -154,3 +154,67 @@ pub struct MigrationInfo {
 }
 
 pub const MIGRATION_INFO: Item<MigrationInfo> = Item::new("migration_info");
+
+// ═══════════════════════════════════════════════════════════════════════════
+// ON-CHAIN ORDER FALLBACK
+// ═══════════════════════════════════════════════════════════════════════════
+
+/// On-chain order for censorship-resistant fallback
+/// Users can submit orders directly to the contract when the off-chain
+/// coordinator is unavailable or censoring.
+#[cw_serde]
+pub struct Order {
+    /// Unique order ID (hash of order details)
+    pub id: String,
+    /// User who submitted the order
+    pub user: Addr,
+    /// Input amount locked in contract
+    pub input_amount: Uint128,
+    /// Input denomination
+    pub input_denom: String,
+    /// Minimum output amount user will accept
+    pub min_output_amount: Uint128,
+    /// Output denomination
+    pub output_denom: String,
+    /// Destination chain ID (empty for same-chain)
+    pub destination_chain: String,
+    /// Recipient address on destination chain (can differ from user)
+    pub recipient: String,
+    /// Order status
+    pub status: OrderStatus,
+    /// Creation timestamp
+    pub created_at: u64,
+    /// Expiration timestamp
+    pub expires_at: u64,
+    /// Settlement ID if order was filled
+    pub settlement_id: Option<String>,
+}
+
+#[cw_serde]
+pub enum OrderStatus {
+    /// Order is open and can be filled
+    Open,
+    /// Order has been filled by a solver
+    Filled { solver_id: String },
+    /// Order expired and was refunded
+    Expired,
+    /// Order was cancelled by user (before fill)
+    Cancelled,
+}
+
+impl OrderStatus {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            OrderStatus::Open => "Open",
+            OrderStatus::Filled { .. } => "Filled",
+            OrderStatus::Expired => "Expired",
+            OrderStatus::Cancelled => "Cancelled",
+        }
+    }
+}
+
+/// Storage for on-chain orders
+pub const ORDERS: Map<&str, Order> = Map::new("orders");
+
+/// Index: user address -> order IDs
+pub const USER_ORDERS: Map<(&Addr, &str), ()> = Map::new("user_orders");

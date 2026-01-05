@@ -71,13 +71,44 @@ The recommended architecture prioritizes **off-chain order submission** for UX a
 
 | Component | Real Go Fast | Go Fast Simulator |
 |-----------|-------------|-------------------|
-| **Order Submission** | On-chain `submitOrder` | Off-chain API (on-chain fallback planned) |
+| **Order Submission** | On-chain `submitOrder` | Off-chain API + on-chain fallback |
 | **Escrow** | Built into Go Fast contract | Separate CosmWasm escrow contract |
-| **Solver Discovery** | Monitor chain events | WebSocket subscription |
+| **Solver Discovery** | Monitor chain events | WebSocket subscription + on-chain events |
 | **Order Matching** | Solvers compete on-chain | Server-side batch auction |
 | **Fulfillment** | On-chain `fillOrder` call | Server executes settlement |
 | **Settlement** | `initiateSettlement` + Hyperlane | CosmWasm settlement contract |
 | **Cross-chain** | Hyperlane messaging | IBC (planned) |
+
+### On-Chain Order Fallback (Implemented)
+
+The settlement contract now supports direct on-chain order submission as a censorship-resistant fallback:
+
+```rust
+// User submits order with funds locked in contract
+ExecuteMsg::SubmitOrder {
+    min_output_amount: Uint128,
+    output_denom: String,
+    destination_chain: String,
+    recipient: String,
+    timeout_seconds: u64,
+}
+
+// Solver fills order (sends output funds)
+ExecuteMsg::FillOrder { order_id: String }
+
+// User cancels unfilled order
+ExecuteMsg::CancelOrder { order_id: String }
+
+// Anyone can refund expired orders
+ExecuteMsg::RefundExpiredOrder { order_id: String }
+```
+
+**Order lifecycle:**
+1. User calls `SubmitOrder` with input tokens attached
+2. Contract generates order ID (SHA256 hash) and locks funds
+3. Solvers query `OpenOrders` to find fillable orders
+4. Solver calls `FillOrder` with output tokens to complete trade
+5. If timeout expires, anyone can call `RefundExpiredOrder`
 
 ### Deployed Contracts
 
@@ -177,7 +208,7 @@ Despite implementation differences, both systems share these core concepts:
 
 Future work could align the simulator more closely with Go Fast:
 
-1. **On-chain order fallback** - Add `SubmitOrder` to settlement contract for censorship-resistant submission
+1. ~~**On-chain order fallback**~~ ✅ - `SubmitOrder`, `FillOrder`, `CancelOrder`, `RefundExpiredOrder` implemented
 2. **Solver event monitoring** - Solvers watch both API and on-chain events
 3. **Hyperlane integration** - Add Hyperlane for cross-chain messaging verification
 4. **IBC settlement** - Enable cross-chain asset movement via IBC

@@ -1,11 +1,16 @@
 use cosmwasm_std::{Deps, StdResult};
+use cw_storage_plus::Bound;
 
 use crate::helpers::{reputation_to_response, settlement_to_response, solver_to_response};
 use crate::msg::{
-    ConfigResponse, SettlementResponse, SettlementsResponse, SolverReputationResponse,
-    SolverResponse, SolversByReputationResponse, SolversResponse, TopSolversResponse,
+    ConfigResponse, OrderResponse, OrdersResponse, SettlementResponse, SettlementsResponse,
+    SolverReputationResponse, SolverResponse, SolversByReputationResponse, SolversResponse,
+    TopSolversResponse,
 };
-use crate::state::{SolverReputation, CONFIG, INTENT_SETTLEMENTS, REPUTATIONS, SETTLEMENTS, SOLVERS};
+use crate::state::{
+    Order, OrderStatus, SolverReputation, CONFIG, INTENT_SETTLEMENTS, ORDERS, REPUTATIONS,
+    SETTLEMENTS, SOLVERS, USER_ORDERS,
+};
 
 pub fn query_config(deps: Deps) -> StdResult<ConfigResponse> {
     let config = CONFIG.load(deps.storage)?;
@@ -119,4 +124,84 @@ pub fn query_solvers_by_reputation(
         .collect();
 
     Ok(SolversByReputationResponse { solvers })
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// ON-CHAIN ORDER QUERIES
+// ═══════════════════════════════════════════════════════════════════════════
+
+fn order_to_response(order: Order) -> OrderResponse {
+    OrderResponse {
+        id: order.id,
+        user: order.user.to_string(),
+        input_amount: order.input_amount,
+        input_denom: order.input_denom,
+        min_output_amount: order.min_output_amount,
+        output_denom: order.output_denom,
+        destination_chain: order.destination_chain,
+        recipient: order.recipient,
+        status: order.status.as_str().to_string(),
+        created_at: order.created_at,
+        expires_at: order.expires_at,
+        settlement_id: order.settlement_id,
+    }
+}
+
+pub fn query_order(deps: Deps, order_id: String) -> StdResult<OrderResponse> {
+    let order = ORDERS.load(deps.storage, &order_id)?;
+    Ok(order_to_response(order))
+}
+
+pub fn query_open_orders(
+    deps: Deps,
+    start_after: Option<String>,
+    limit: Option<u32>,
+) -> StdResult<OrdersResponse> {
+    let limit = limit.unwrap_or(30).min(100) as usize;
+
+    let start = start_after.as_deref().map(Bound::exclusive);
+
+    let orders: Vec<OrderResponse> = ORDERS
+        .range(deps.storage, start, None, cosmwasm_std::Order::Ascending)
+        .filter_map(|r| r.ok())
+        .filter(|(_, order)| matches!(order.status, OrderStatus::Open))
+        .take(limit)
+        .map(|(_, order)| order_to_response(order))
+        .collect();
+
+    let total = orders.len() as u64;
+
+    Ok(OrdersResponse { orders, total })
+}
+
+pub fn query_orders_by_user(
+    deps: Deps,
+    user: String,
+    start_after: Option<String>,
+    limit: Option<u32>,
+) -> StdResult<OrdersResponse> {
+    let limit = limit.unwrap_or(30).min(100) as usize;
+    let user_addr = deps.api.addr_validate(&user)?;
+
+    let start = start_after.as_deref().map(Bound::exclusive);
+
+    // Get order IDs from the user index
+    let order_ids: Vec<String> = USER_ORDERS
+        .prefix(&user_addr)
+        .range(deps.storage, start, None, cosmwasm_std::Order::Ascending)
+        .take(limit)
+        .filter_map(|r| r.ok())
+        .map(|(order_id, _)| order_id)
+        .collect();
+
+    // Load each order
+    let orders: Vec<OrderResponse> = order_ids
+        .into_iter()
+        .filter_map(|order_id| ORDERS.load(deps.storage, &order_id).ok())
+        .map(order_to_response)
+        .collect();
+
+    let total = orders.len() as u64;
+
+    Ok(OrdersResponse { orders, total })
 }
