@@ -311,88 +311,282 @@ pub enum QueryMsg {
 }
 ```
 
-## Proof Mechanisms
+## Proof Mechanism: IBC Eureka with Fulfillment Contract (Recommended)
 
-### Option 1: Hyperlane (Recommended for MVP)
+Since IBC Eureka supports **bidirectional** packets (both to and from Ethereum), the cleanest approach is:
 
-Hyperlane provides cross-chain messaging with validator signatures.
+1. Solver calls a fulfillment contract on Ethereum
+2. Contract transfers tokens to user AND sends an IBC packet back to Hub
+3. Hub receives the IBC packet as proof of fulfillment
+4. Hub releases escrow to solver
+
+**The IBC packet IS the proof** - no separate proof verification needed.
+
+### Architecture
+
+```
+┌─────────────────────────────────────────────────────────────────────────┐
+│                           COSMOS HUB                                     │
+│                                                                          │
+│  1. User escrows ATOM ───────────────► OutboundEscrow (Pending)         │
+│                                                                          │
+│  4. IBC packet received ─────────────► OutboundEscrow (Filled)          │
+│     (contains intent_id,               Auto-release ATOM to solver      │
+│      solver, recipient, amount)                                          │
+│                                                                          │
+└─────────────────────────────────────────────────────────────────────────┘
+                    ▲                              │
+                    │                              │
+                    │ IBC Eureka                   │ Intent registered
+                    │ (fulfillment packet)        │ (off-chain or event)
+                    │                              │
+                    │                              ▼
+┌─────────────────────────────────────────────────────────────────────────┐
+│                           ETHEREUM                                       │
+│                                                                          │
+│  IntentFulfillment Contract:                                            │
+│                                                                          │
+│  2. Solver calls fulfillIntent(intentId, recipient, token, amount)      │
+│     └──► Transfers tokens to recipient                                  │
+│     └──► Sends IBC packet to Hub via Eureka                            │
+│                                                                          │
+│  3. User receives USDC ✓                                                │
+│                                                                          │
+└─────────────────────────────────────────────────────────────────────────┘
+```
+
+### Ethereum Fulfillment Contract
+
+```solidity
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.20;
+
+import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+
+interface IIBCEureka {
+    function sendPacket(
+        string calldata channelId,
+        bytes calldata data,
+        uint64 timeoutTimestamp
+    ) external;
+}
+
+contract IntentFulfillment {
+    IIBCEureka public immutable eureka;
+    string public hubChannel;
+
+    event IntentFulfilled(
+        bytes32 indexed intentId,
+        address indexed solver,
+        address indexed recipient,
+        address token,
+        uint256 amount
+    );
+
+    constructor(address _eureka, string memory _hubChannel) {
+        eureka = IIBCEureka(_eureka);
+        hubChannel = _hubChannel;
+    }
+
+    /// @notice Fulfill an outbound intent from Cosmos Hub
+    /// @param intentId The intent ID from the Hub escrow
+    /// @param recipient User's Ethereum address to receive tokens
+    /// @param token ERC20 token to transfer (e.g., USDC)
+    /// @param amount Amount to transfer
+    function fulfillIntent(
+        bytes32 intentId,
+        address recipient,
+        address token,
+        uint256 amount
+    ) external {
+        // Transfer tokens from solver to user
+        IERC20(token).transferFrom(msg.sender, recipient, amount);
+
+        // Encode fulfillment data for IBC packet
+        bytes memory packetData = abi.encode(
+            intentId,
+            msg.sender,      // solver address
+            recipient,
+            token,
+            amount,
+            block.number
+        );
+
+        // Send IBC packet back to Hub via Eureka
+        // Timeout: 1 hour from now
+        eureka.sendPacket(
+            hubChannel,
+            packetData,
+            uint64(block.timestamp + 3600)
+        );
+
+        emit IntentFulfilled(intentId, msg.sender, recipient, token, amount);
+    }
+}
+```
+
+### Hub IBC Receive Handler
+
+The escrow contract receives the fulfillment packet via standard IBC:
+
+```rust
+/// IBC packet receive callback - called when fulfillment packet arrives from Ethereum
+#[entry_point]
+pub fn ibc_packet_receive(
+    deps: DepsMut,
+    env: Env,
+    msg: IbcPacketReceiveMsg,
+) -> Result<IbcReceiveResponse, ContractError> {
+    let packet = msg.packet;
+
+    // Decode fulfillment data from packet
+    let fulfillment: OutboundFulfillment = from_json(&packet.data)?;
+
+    // Load the outbound escrow
+    let mut escrow = OUTBOUND_ESCROWS.load(deps.storage, &fulfillment.intent_id)?;
+
+    // Verify escrow is in correct state (Pending or Accepted)
+    if !matches!(escrow.status, OutboundEscrowStatus::Pending | OutboundEscrowStatus::Accepted) {
+        return Err(ContractError::InvalidOutboundEscrowStatus { ... });
+    }
+
+    // Verify solver matches (if escrow was accepted by specific solver)
+    if let Some(ref solver_info) = escrow.solver {
+        if solver_info.solver_dest_address != fulfillment.solver_address {
+            return Err(ContractError::SolverMismatch { ... });
+        }
+    }
+
+    // Verify recipient matches
+    if escrow.destination_address != fulfillment.recipient {
+        return Err(ContractError::RecipientMismatch { ... });
+    }
+
+    // Verify amount is sufficient
+    if fulfillment.amount < escrow.expected_output {
+        return Err(ContractError::InsufficientFillAmount { ... });
+    }
+
+    // Update escrow status
+    escrow.status = OutboundEscrowStatus::Filled;
+    escrow.fill_proof = Some(FillProof {
+        proof_type: ProofType::IbcEureka,
+        packet_sequence: packet.sequence,
+        source_channel: packet.src.channel_id,
+        block_number: fulfillment.block_number,
+        filled_at: env.block.time.seconds(),
+    });
+
+    OUTBOUND_ESCROWS.save(deps.storage, &fulfillment.intent_id, &escrow)?;
+
+    // Release escrowed funds to solver
+    let solver_hub_address = escrow.solver
+        .map(|s| s.solver_hub_address)
+        .unwrap_or_else(|| deps.api.addr_validate(&fulfillment.solver_hub_address)?);
+
+    let release_msg = BankMsg::Send {
+        to_address: solver_hub_address.to_string(),
+        amount: vec![Coin {
+            denom: escrow.escrowed_denom,
+            amount: escrow.escrowed_amount,
+        }],
+    };
+
+    Ok(IbcReceiveResponse::new()
+        .add_message(release_msg)
+        .add_attribute("action", "outbound_escrow_filled")
+        .add_attribute("intent_id", fulfillment.intent_id)
+        .add_attribute("solver", solver_hub_address)
+        .add_attribute("amount_released", escrow.escrowed_amount)
+        .set_ack(ack_success()))
+}
+
+#[cw_serde]
+struct OutboundFulfillment {
+    intent_id: String,
+    solver_address: String,      // Ethereum address
+    solver_hub_address: String,  // Cosmos address for receiving escrow
+    recipient: String,           // User's Ethereum address
+    token: String,               // ERC20 token address
+    amount: Uint128,
+    block_number: u64,
+}
+```
+
+### Benefits of IBC-Native Approach
+
+| Benefit | Description |
+|---------|-------------|
+| **Same infrastructure** | Eureka handles both directions |
+| **IBC packet = proof** | No separate proof verification logic |
+| **Explicit intent linking** | Intent ID in packet, no amount-matching hacks |
+| **Standard IBC flow** | Uses existing IBC middleware, acks, timeouts |
+| **Trustless** | ZK proofs verify Ethereum state |
+| **Atomic** | Packet delivery guarantees or timeout refund |
+
+### Simplified State Machine
+
+With IBC packets as proof, the state machine simplifies:
+
+```
+┌─────────┐  RegisterOutboundEscrowIntent   ┌─────────┐
+│ (none)  │ ──────────────────────────────► │ Pending │
+└─────────┘   (user locks ATOM on Hub)      └────┬────┘
+                                                 │
+                              (Optional: SolverAcceptOutbound)
+                                                 │
+                                                 ▼
+                    ┌────────────────────────────────────────────┐
+                    │                                            │
+                    │   Solver calls fulfillIntent on Ethereum   │
+                    │   Contract sends IBC packet to Hub         │
+                    │                                            │
+                    └────────────────────────────────────────────┘
+                                                 │
+                              IBC packet received (ibc_packet_receive)
+                              Automatic verification + release
+                                                 │
+                                                 ▼
+                                          ┌──────────┐
+                                          │ Released │
+                                          └──────────┘
+
+                    ─── OR (timeout path) ───
+
+                                           ┌────────┐
+                         Timeout expires ► │ Failed │ ──► Refund to user
+                                           └────────┘
+```
+
+### Alternative: Fallback Proof Mechanisms
+
+For chains without IBC Eureka or as backup:
+
+#### Option A: Hyperlane
 
 ```
 Ethereum                              Cosmos Hub
     │                                     │
-    │  Solver sends USDC to user          │
+    │  Solver sends tokens + Hyperlane    │
     │  ────────────────────────►          │
     │                                     │
-    │  Hyperlane validators attest        │
-    │  ────────────────────────►          │
-    │                                     │
-    │                          Verify Hyperlane message
+    │                          Verify Hyperlane signatures
     │                          Release escrow to solver
-    │                                     │
 ```
 
-**Pros:**
-- Already integrated with Skip Go Fast
-- Fast finality (~minutes)
-- Battle-tested
-
-**Cons:**
-- Requires Hyperlane deployment on both chains
-- Trust in Hyperlane validator set
-
-### Option 2: IBC Eureka Reverse
-
-If Eureka supports bidirectional proofs:
+#### Option B: Optimistic with Challenge
 
 ```
 Ethereum                              Cosmos Hub
-    │                                     │
-    │  Solver sends USDC to user          │
-    │  ────────────────────────►          │
-    │                                     │
-    │  ZK proof of ETH state              │
-    │  ────────────────────────►          │
-    │                                     │
-    │                          Verify ZK proof
-    │                          Release escrow to solver
-    │                                     │
-```
-
-**Pros:**
-- Trustless (ZK proofs)
-- Consistent with inbound flow
-
-**Cons:**
-- May not be available yet
-- Higher latency for proof generation
-
-### Option 3: Optimistic with Challenge
-
-For lower latency with security backstop:
-
-```
-Ethereum                              Cosmos Hub
-    │                                     │
-    │  Solver sends USDC to user          │
-    │  ────────────────────────►          │
     │                                     │
     │  Solver submits proof               │
     │  ────────────────────────►          │
     │                                     │
     │                          Start challenge period (1hr)
-    │                                     │
-    │  (no challenge)                     │
-    │                          Release escrow to solver
-    │                                     │
+    │                          Release if no challenge
 ```
 
-**Pros:**
-- Fast for honest solvers
-- Can use any proof type
-
-**Cons:**
-- Challenge period delays settlement
-- Need fraud proof system
+These are fallbacks - the IBC Eureka approach is preferred for its trustlessness and consistency with the inbound flow.
 
 ## Risk Comparison
 
