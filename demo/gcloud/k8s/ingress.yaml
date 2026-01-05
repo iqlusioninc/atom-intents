@@ -18,7 +18,7 @@ spec:
             pathType: ImplementationSpecific
             backend:
               service:
-                name: skip-select
+                name: go-fast
                 port:
                   number: 8080
           # WebSocket route
@@ -26,7 +26,7 @@ spec:
             pathType: Exact
             backend:
               service:
-                name: skip-select
+                name: go-fast
                 port:
                   number: 8080
           # Health check
@@ -34,7 +34,7 @@ spec:
             pathType: Exact
             backend:
               service:
-                name: skip-select
+                name: go-fast
                 port:
                   number: 8080
           # Web UI (catch-all)
@@ -50,7 +50,7 @@ spec:
 apiVersion: cloud.google.com/v1
 kind: BackendConfig
 metadata:
-  name: skip-select-config
+  name: go-fast-config
   namespace: atom-intents
 spec:
   timeoutSec: 86400

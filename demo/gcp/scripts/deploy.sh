@@ -91,12 +91,12 @@ build_images() {
     # Configure Docker for GCR
     gcloud auth configure-docker "$REGION-docker.pkg.dev" --quiet
 
-    # Build Skip Select Simulator
-    log_info "Building Skip Select Simulator..."
+    # Build Go Fast Simulator
+    log_info "Building Go Fast Simulator..."
     docker build \
-        -t "$REGISTRY/skip-select-simulator:latest" \
-        -f "$PROJECT_ROOT/demo/skip-select-simulator/Dockerfile" \
-        "$PROJECT_ROOT/demo/skip-select-simulator"
+        -t "$REGISTRY/go-fast-simulator:latest" \
+        -f "$PROJECT_ROOT/demo/go-fast-simulator/Dockerfile" \
+        "$PROJECT_ROOT/demo/go-fast-simulator"
 
     # Build Web UI
     log_info "Building Web UI..."
@@ -107,7 +107,7 @@ build_images() {
 
     # Push images
     log_info "Pushing images to registry..."
-    docker push "$REGISTRY/skip-select-simulator:latest"
+    docker push "$REGISTRY/go-fast-simulator:latest"
     docker push "$REGISTRY/atom-intents-web-ui:latest"
 }
 
@@ -139,14 +139,14 @@ deploy_kubernetes() {
     # Apply manifests
     kubectl apply -f "$TEMP_DIR/namespace.yaml"
     kubectl apply -f "$TEMP_DIR/configmap.yaml"
-    kubectl apply -f "$TEMP_DIR/skip-select-deployment.yaml"
+    kubectl apply -f "$TEMP_DIR/go-fast-deployment.yaml"
     kubectl apply -f "$TEMP_DIR/web-ui-deployment.yaml"
     kubectl apply -f "$TEMP_DIR/ingress.yaml"
     kubectl apply -f "$TEMP_DIR/monitoring.yaml"
 
     # Wait for deployments
     log_info "Waiting for deployments..."
-    kubectl rollout status deployment/skip-select -n atom-intents --timeout=300s
+    kubectl rollout status deployment/go-fast -n atom-intents --timeout=300s
     kubectl rollout status deployment/web-ui -n atom-intents --timeout=300s
 
     log_info "Deployment complete!"

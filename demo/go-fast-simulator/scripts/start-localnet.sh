@@ -1,5 +1,5 @@
 #!/bin/bash
-# Start Skip Select Simulator in Localnet Mode
+# Start Go Fast Simulator in Localnet Mode
 #
 # This script starts the demo server connected to local docker chains.
 # Requires the localnet docker-compose to be running.
@@ -12,7 +12,7 @@ LOCALNET_DIR="$PROJECT_DIR/../localnet"
 PORT="${PORT:-8080}"
 
 echo "=========================================="
-echo "  Skip Select Simulator - Localnet Mode"
+echo "  Go Fast Simulator - Localnet Mode"
 echo "=========================================="
 echo ""
 
@@ -81,7 +81,7 @@ cd "$PROJECT_DIR"
 cargo build --release 2>&1 | tail -5
 
 echo ""
-echo "Starting Skip Select Simulator..."
+echo "Starting Go Fast Simulator..."
 echo "=========================================="
 echo ""
 

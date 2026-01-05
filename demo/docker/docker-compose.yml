@@ -1,19 +1,19 @@
 version: '3.8'
 
 services:
-  # Skip Select Simulator (Coordination Layer)
+  # Go Fast Simulator (Coordination Layer)
   # Running in TESTNET mode with real smart contracts
-  skip-select:
+  go-fast:
     build:
-      context: ../skip-select-simulator
-      dockerfile: ../docker/Dockerfile.skip-select
+      context: ../go-fast-simulator
+      dockerfile: ../docker/Dockerfile.go-fast
     ports:
       - "8080:8080"
     environment:
       - SKIP_SELECT_PORT=8080
       - AUCTION_INTERVAL_MS=500
       - ENABLE_ANALYTICS=true
-      - RUST_LOG=info,skip_select_simulator=debug
+      - RUST_LOG=info,go_fast_simulator=debug
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
       interval: 10s
@@ -30,9 +30,9 @@ services:
     ports:
       - "3000:80"
     depends_on:
-      - skip-select
+      - go-fast
     environment:
-      - API_URL=http://skip-select:8080
+      - API_URL=http://go-fast:8080
     networks:
       - atom-intents
 

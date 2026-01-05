@@ -1,4 +1,4 @@
-//! Data models for the Skip Select Simulator
+//! Data models for the Go Fast Simulator
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};

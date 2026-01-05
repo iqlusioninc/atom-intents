@@ -10,5 +10,5 @@ environment = "dev"
 # domain = "demo.atom-intents.example.com"
 
 # Optional: Override container images
-# skip_select_image = "us-central1-docker.pkg.dev/your-project/atom-intents-demo/skip-select:latest"
+# go_fast_image = "us-central1-docker.pkg.dev/your-project/atom-intents-demo/go-fast:latest"
 # web_ui_image = "us-central1-docker.pkg.dev/your-project/atom-intents-demo/web-ui:latest"

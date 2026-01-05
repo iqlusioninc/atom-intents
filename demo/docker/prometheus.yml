@@ -14,9 +14,9 @@ scrape_configs:
     static_configs:
       - targets: ['localhost:9090']
 
-  - job_name: 'skip-select'
+  - job_name: 'go-fast'
     static_configs:
-      - targets: ['skip-select:8080']
+      - targets: ['go-fast:8080']
     metrics_path: '/metrics'
     scrape_interval: 5s
 

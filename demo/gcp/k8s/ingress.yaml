@@ -17,14 +17,14 @@ spec:
             pathType: Prefix
             backend:
               service:
-                name: skip-select
+                name: go-fast
                 port:
                   number: 8080
           - path: /ws
             pathType: Exact
             backend:
               service:
-                name: skip-select
+                name: go-fast
                 port:
                   number: 8080
           - path: /

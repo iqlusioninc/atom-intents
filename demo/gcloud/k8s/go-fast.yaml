@@ -2,23 +2,23 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: skip-select
+  name: go-fast
   namespace: atom-intents
   labels:
-    app: skip-select
+    app: go-fast
 spec:
   replicas: 2
   selector:
     matchLabels:
-      app: skip-select
+      app: go-fast
   template:
     metadata:
       labels:
-        app: skip-select
+        app: go-fast
     spec:
-      serviceAccountName: skip-select
+      serviceAccountName: go-fast
       containers:
-        - name: skip-select
+        - name: go-fast
           image: SKIP_SELECT_IMAGE
           imagePullPolicy: Always
           ports:
@@ -34,7 +34,7 @@ spec:
             - name: ENABLE_ANALYTICS
               value: "true"
             - name: RUST_LOG
-              value: "info,skip_select_simulator=debug"
+              value: "info,go_fast_simulator=debug"
           resources:
             requests:
               cpu: "100m"
@@ -58,11 +58,11 @@ spec:
 apiVersion: v1
 kind: Service
 metadata:
-  name: skip-select
+  name: go-fast
   namespace: atom-intents
 spec:
   selector:
-    app: skip-select
+    app: go-fast
   ports:
     - name: http
       port: 8080
@@ -72,19 +72,19 @@ spec:
 apiVersion: v1
 kind: ServiceAccount
 metadata:
-  name: skip-select
+  name: go-fast
   namespace: atom-intents
 ---
 apiVersion: autoscaling/v2
 kind: HorizontalPodAutoscaler
 metadata:
-  name: skip-select
+  name: go-fast
   namespace: atom-intents
 spec:
   scaleTargetRef:
     apiVersion: apps/v1
     kind: Deployment
-    name: skip-select
+    name: go-fast
   minReplicas: 2
   maxReplicas: 10
   metrics:

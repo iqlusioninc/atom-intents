@@ -36,7 +36,7 @@ RUN addgroup -g 1000 app && \
 WORKDIR /app
 
 # Copy binary
-COPY --from=builder /app/target/release/skip-select-simulator /app/skip-select-simulator
+COPY --from=builder /app/target/release/go-fast-simulator /app/go-fast-simulator
 
 # Copy migrations for runtime migration
 COPY --from=builder /app/migrations /app/migrations
@@ -48,6 +48,6 @@ USER app
 
 EXPOSE 8080 9090
 
-ENV RUST_LOG=skip_select_simulator=info,tower_http=info
+ENV RUST_LOG=go_fast_simulator=info,tower_http=info
 
-CMD ["/app/skip-select-simulator"]
+CMD ["/app/go-fast-simulator"]

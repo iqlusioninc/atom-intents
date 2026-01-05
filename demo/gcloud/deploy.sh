@@ -107,14 +107,14 @@ REGISTRY_URL="${REGION}-docker.pkg.dev/${PROJECT_ID}/atom-intents-demo"
 # Build and push images
 log_info "Building and pushing container images..."
 
-# Build Skip Select
-log_info "Building Skip Select Simulator..."
+# Build Go Fast
+log_info "Building Go Fast Simulator..."
 docker build \
-    -f "$SCRIPT_DIR/../docker/Dockerfile.skip-select" \
-    -t "${REGISTRY_URL}/skip-select:latest" \
-    "$SCRIPT_DIR/../skip-select-simulator"
+    -f "$SCRIPT_DIR/../docker/Dockerfile.go-fast" \
+    -t "${REGISTRY_URL}/go-fast:latest" \
+    "$SCRIPT_DIR/../go-fast-simulator"
 
-docker push "${REGISTRY_URL}/skip-select:latest"
+docker push "${REGISTRY_URL}/go-fast:latest"
 
 # Build Web UI
 log_info "Building Web UI..."
@@ -152,7 +152,7 @@ cd "$SCRIPT_DIR/k8s"
 kubectl apply -f namespace.yaml
 
 # Update image references and apply
-sed "s|SKIP_SELECT_IMAGE|${REGISTRY_URL}/skip-select:latest|g" skip-select.yaml | kubectl apply -f -
+sed "s|SKIP_SELECT_IMAGE|${REGISTRY_URL}/go-fast:latest|g" go-fast.yaml | kubectl apply -f -
 sed "s|WEB_UI_IMAGE|${REGISTRY_URL}/web-ui:latest|g" web-ui.yaml | kubectl apply -f -
 
 # Update ingress with correct IP name
@@ -160,7 +160,7 @@ sed "s|atom-intents-ip-dev|atom-intents-ip-${ENVIRONMENT}|g" ingress.yaml | kube
 
 # Wait for deployment
 log_info "Waiting for deployments to be ready..."
-kubectl rollout status deployment/skip-select -n atom-intents --timeout=300s
+kubectl rollout status deployment/go-fast -n atom-intents --timeout=300s
 kubectl rollout status deployment/web-ui -n atom-intents --timeout=300s
 
 # Get external IP
@@ -181,5 +181,5 @@ fi
 echo ""
 log_info "Useful commands:"
 log_info "  kubectl get pods -n atom-intents"
-log_info "  kubectl logs -f deployment/skip-select -n atom-intents"
+log_info "  kubectl logs -f deployment/go-fast -n atom-intents"
 log_info "  kubectl get ingress -n atom-intents"

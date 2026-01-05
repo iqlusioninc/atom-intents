@@ -1,5 +1,5 @@
 #!/bin/bash
-# Start Skip Select Simulator in Testnet Mode
+# Start Go Fast Simulator in Testnet Mode
 #
 # This script starts the demo server connected to real Cosmos testnets.
 # It verifies connectivity before starting and provides helpful error messages.
@@ -12,7 +12,7 @@ CONFIG_FILE="${1:-$PROJECT_DIR/config/testnet.toml}"
 PORT="${PORT:-8080}"
 
 echo "=========================================="
-echo "  Skip Select Simulator - Testnet Mode"
+echo "  Go Fast Simulator - Testnet Mode"
 echo "=========================================="
 echo ""
 
@@ -80,7 +80,7 @@ cd "$PROJECT_DIR"
 cargo build --release 2>&1 | tail -5
 
 echo ""
-echo "Starting Skip Select Simulator..."
+echo "Starting Go Fast Simulator..."
 echo "=========================================="
 echo ""
 

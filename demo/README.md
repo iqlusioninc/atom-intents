@@ -49,8 +49,8 @@ A complete end-to-end simulation, demonstration, and testnet system for the ATOM
 
 ## Components
 
-### 1. Skip Select Simulator (`skip-select-simulator/`)
-A simplified Rust implementation of the Skip Select coordination layer:
+### 1. Go Fast Simulator (`go-fast-simulator/`)
+A simplified Rust implementation of the Go Fast coordination layer:
 - REST API for submitting intents
 - WebSocket for real-time updates
 - Batch auction engine

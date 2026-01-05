@@ -1,34 +1,34 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: skip-select
+  name: go-fast
   namespace: atom-intents
   labels:
-    app.kubernetes.io/name: skip-select-simulator
+    app.kubernetes.io/name: go-fast-simulator
     app.kubernetes.io/component: backend
 spec:
   replicas: 1  # Single replica required - in-memory state doesn't sync between pods
   selector:
     matchLabels:
-      app.kubernetes.io/name: skip-select-simulator
+      app.kubernetes.io/name: go-fast-simulator
   template:
     metadata:
       labels:
-        app.kubernetes.io/name: skip-select-simulator
+        app.kubernetes.io/name: go-fast-simulator
         app.kubernetes.io/component: backend
       annotations:
         prometheus.io/scrape: "true"
         prometheus.io/port: "9090"
         prometheus.io/path: "/metrics"
     spec:
-      serviceAccountName: skip-select
+      serviceAccountName: go-fast
       securityContext:
         runAsNonRoot: true
         runAsUser: 1000
         fsGroup: 1000
       containers:
-        - name: skip-select
-          image: us-central1-docker.pkg.dev/atom-intents-demo-20251225/atom-intents/skip-select-simulator:v1.0.0
+        - name: go-fast
+          image: us-central1-docker.pkg.dev/atom-intents-demo-20251225/atom-intents/go-fast-simulator:v1.0.0
           imagePullPolicy: Always
           args:
             - "--mode"
@@ -44,22 +44,22 @@ spec:
               protocol: TCP
           envFrom:
             - configMapRef:
-                name: skip-select-config
+                name: go-fast-config
           env:
             - name: DATABASE_URL
               valueFrom:
                 secretKeyRef:
-                  name: skip-select-secrets
+                  name: go-fast-secrets
                   key: database-url
             - name: REDIS_URL
               valueFrom:
                 secretKeyRef:
-                  name: skip-select-secrets
+                  name: go-fast-secrets
                   key: redis-url
             - name: PROVIDER_PRIVATE_KEY
               valueFrom:
                 secretKeyRef:
-                  name: skip-select-secrets
+                  name: go-fast-secrets
                   key: provider-private-key
           volumeMounts:
             - name: testnet-config
@@ -101,7 +101,7 @@ spec:
               podAffinityTerm:
                 labelSelector:
                   matchLabels:
-                    app.kubernetes.io/name: skip-select-simulator
+                    app.kubernetes.io/name: go-fast-simulator
                 topologyKey: kubernetes.io/hostname
       topologySpreadConstraints:
         - maxSkew: 1
@@ -109,7 +109,7 @@ spec:
           whenUnsatisfiable: ScheduleAnyway
           labelSelector:
             matchLabels:
-              app.kubernetes.io/name: skip-select-simulator
+              app.kubernetes.io/name: go-fast-simulator
       volumes:
         - name: testnet-config
           configMap:
@@ -119,10 +119,10 @@ spec:
 apiVersion: v1
 kind: Service
 metadata:
-  name: skip-select
+  name: go-fast
   namespace: atom-intents
   labels:
-    app.kubernetes.io/name: skip-select-simulator
+    app.kubernetes.io/name: go-fast-simulator
 spec:
   type: ClusterIP
   ports:
@@ -135,33 +135,33 @@ spec:
       targetPort: metrics
       protocol: TCP
   selector:
-    app.kubernetes.io/name: skip-select-simulator
+    app.kubernetes.io/name: go-fast-simulator
 
 ---
 apiVersion: v1
 kind: ServiceAccount
 metadata:
-  name: skip-select
+  name: go-fast
   namespace: atom-intents
   annotations:
     iam.gke.io/gcp-service-account: atom-intents-demo-app@PROJECT_ID.iam.gserviceaccount.com
   labels:
-    app.kubernetes.io/name: skip-select-simulator
+    app.kubernetes.io/name: go-fast-simulator
 
-# NOTE: HPA disabled for skip-select - single replica required for transaction sequence consistency
+# NOTE: HPA disabled for go-fast - single replica required for transaction sequence consistency
 # The backend uses in-memory state and a transaction mutex that only works within a single process.
 # If horizontal scaling is needed, implement distributed locking (Redis) for sequence numbers.
 # ---
 # apiVersion: autoscaling/v2
 # kind: HorizontalPodAutoscaler
 # metadata:
-#   name: skip-select
+#   name: go-fast
 #   namespace: atom-intents
 # spec:
 #   scaleTargetRef:
 #     apiVersion: apps/v1
 #     kind: Deployment
-#     name: skip-select
+#     name: go-fast
 #   minReplicas: 1
 #   maxReplicas: 1
 
@@ -169,10 +169,10 @@ metadata:
 apiVersion: policy/v1
 kind: PodDisruptionBudget
 metadata:
-  name: skip-select
+  name: go-fast
   namespace: atom-intents
 spec:
   minAvailable: 1
   selector:
     matchLabels:
-      app.kubernetes.io/name: skip-select-simulator
+      app.kubernetes.io/name: go-fast-simulator

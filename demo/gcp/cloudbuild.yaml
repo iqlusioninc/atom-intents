@@ -11,18 +11,18 @@ options:
   machineType: E2_HIGHCPU_8
 
 steps:
-  # Step 1: Build Skip Select Simulator
-  - id: build-skip-select
+  # Step 1: Build Go Fast Simulator
+  - id: build-go-fast
     name: gcr.io/cloud-builders/docker
     args:
       - build
       - -t
-      - ${_REGISTRY}/skip-select-simulator:${SHORT_SHA}
+      - ${_REGISTRY}/go-fast-simulator:${SHORT_SHA}
       - -t
-      - ${_REGISTRY}/skip-select-simulator:latest
+      - ${_REGISTRY}/go-fast-simulator:latest
       - -f
-      - demo/skip-select-simulator/Dockerfile
-      - demo/skip-select-simulator
+      - demo/go-fast-simulator/Dockerfile
+      - demo/go-fast-simulator
     waitFor: ["-"]
 
   # Step 2: Build Web UI
@@ -39,15 +39,15 @@ steps:
       - demo/web-ui
     waitFor: ["-"]
 
-  # Step 3: Push Skip Select image
-  - id: push-skip-select
+  # Step 3: Push Go Fast image
+  - id: push-go-fast
     name: gcr.io/cloud-builders/docker
     args:
       - push
       - --all-tags
-      - ${_REGISTRY}/skip-select-simulator
+      - ${_REGISTRY}/go-fast-simulator
     waitFor:
-      - build-skip-select
+      - build-go-fast
 
   # Step 4: Push Web UI image
   - id: push-web-ui
@@ -70,7 +70,7 @@ steps:
       - --region
       - ${_REGION}
     waitFor:
-      - push-skip-select
+      - push-go-fast
       - push-web-ui
 
   # Step 6: Update image tags in manifests
@@ -96,7 +96,7 @@ steps:
       - -f
       - demo/gcp/k8s/configmap.yaml
       - -f
-      - demo/gcp/k8s/skip-select-deployment.yaml
+      - demo/gcp/k8s/go-fast-deployment.yaml
       - -f
       - demo/gcp/k8s/web-ui-deployment.yaml
       - -f
@@ -129,7 +129,7 @@ steps:
     args:
       - rollout
       - status
-      - deployment/skip-select
+      - deployment/go-fast
       - deployment/web-ui
       - -n
       - atom-intents

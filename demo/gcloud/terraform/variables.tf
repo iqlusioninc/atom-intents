@@ -34,8 +34,8 @@ variable "domain" {
   default     = ""
 }
 
-variable "skip_select_image" {
-  description = "Container image for Skip Select Simulator"
+variable "go_fast_image" {
+  description = "Container image for Go Fast Simulator"
   type        = string
   default     = ""
 }

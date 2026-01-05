@@ -167,7 +167,7 @@ Review metrics for latency and success rate.
 
 ### Component Overview
 ```
-User Intent → Skip Select → Batch Auction → Settlement
+User Intent → Go Fast → Batch Auction → Settlement
                   ↓              ↓
              [Solvers]      [Winner]
               - DEX Router     ↓

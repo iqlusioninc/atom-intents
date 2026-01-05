@@ -3,14 +3,14 @@
 apiVersion: monitoring.coreos.com/v1
 kind: ServiceMonitor
 metadata:
-  name: skip-select
+  name: go-fast
   namespace: atom-intents
   labels:
-    app.kubernetes.io/name: skip-select-simulator
+    app.kubernetes.io/name: go-fast-simulator
 spec:
   selector:
     matchLabels:
-      app.kubernetes.io/name: skip-select-simulator
+      app.kubernetes.io/name: go-fast-simulator
   endpoints:
     - port: metrics
       interval: 15s
@@ -20,62 +20,62 @@ spec:
 apiVersion: monitoring.coreos.com/v1
 kind: PrometheusRule
 metadata:
-  name: skip-select-alerts
+  name: go-fast-alerts
   namespace: atom-intents
   labels:
-    app.kubernetes.io/name: skip-select-simulator
+    app.kubernetes.io/name: go-fast-simulator
 spec:
   groups:
-    - name: skip-select
+    - name: go-fast
       rules:
         # High error rate
-        - alert: SkipSelectHighErrorRate
+        - alert: GoFastHighErrorRate
           expr: |
-            sum(rate(http_requests_total{service="skip-select",status=~"5.."}[5m]))
-            / sum(rate(http_requests_total{service="skip-select"}[5m])) > 0.05
+            sum(rate(http_requests_total{service="go-fast",status=~"5.."}[5m]))
+            / sum(rate(http_requests_total{service="go-fast"}[5m])) > 0.05
           for: 5m
           labels:
             severity: warning
           annotations:
-            summary: "High error rate in Skip Select Simulator"
+            summary: "High error rate in Go Fast Simulator"
             description: "Error rate is above 5% for the last 5 minutes"
 
         # High latency
-        - alert: SkipSelectHighLatency
+        - alert: GoFastHighLatency
           expr: |
-            histogram_quantile(0.95, sum(rate(http_request_duration_seconds_bucket{service="skip-select"}[5m])) by (le))
+            histogram_quantile(0.95, sum(rate(http_request_duration_seconds_bucket{service="go-fast"}[5m])) by (le))
             > 2
           for: 5m
           labels:
             severity: warning
           annotations:
-            summary: "High latency in Skip Select Simulator"
+            summary: "High latency in Go Fast Simulator"
             description: "95th percentile latency is above 2 seconds"
 
         # Pod not ready
-        - alert: SkipSelectPodNotReady
+        - alert: GoFastPodNotReady
           expr: |
-            kube_pod_status_ready{namespace="atom-intents",pod=~"skip-select.*"} == 0
+            kube_pod_status_ready{namespace="atom-intents",pod=~"go-fast.*"} == 0
           for: 5m
           labels:
             severity: critical
           annotations:
-            summary: "Skip Select pod is not ready"
+            summary: "Go Fast pod is not ready"
             description: "Pod {{ $labels.pod }} has been not ready for 5 minutes"
 
         # Low replica count
-        - alert: SkipSelectLowReplicas
+        - alert: GoFastLowReplicas
           expr: |
-            kube_deployment_status_replicas_available{namespace="atom-intents",deployment="skip-select"} < 2
+            kube_deployment_status_replicas_available{namespace="atom-intents",deployment="go-fast"} < 2
           for: 5m
           labels:
             severity: warning
           annotations:
-            summary: "Skip Select has low replica count"
+            summary: "Go Fast has low replica count"
             description: "Available replicas dropped below 2"
 
         # Auction processing time
-        - alert: SkipSelectSlowAuctions
+        - alert: GoFastSlowAuctions
           expr: |
             histogram_quantile(0.95, sum(rate(auction_processing_duration_seconds_bucket[5m])) by (le)) > 1
           for: 10m
@@ -86,7 +86,7 @@ spec:
             description: "95th percentile auction processing time is above 1 second"
 
         # Settlement failures
-        - alert: SkipSelectSettlementFailures
+        - alert: GoFastSettlementFailures
           expr: |
             sum(rate(settlements_total{status="failed"}[15m])) > 0
           for: 5m

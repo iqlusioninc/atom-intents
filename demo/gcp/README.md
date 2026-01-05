@@ -18,7 +18,7 @@ This directory contains infrastructure and deployment configuration for running 
                                     │  ┌─────────────────────────────────┐   │
                                     │  │         GKE Autopilot           │   │
                                     │  │  ┌───────────┐ ┌─────────────┐  │   │
-                                    │  │  │  Web UI   │ │Skip Select  │  │   │
+                                    │  │  │  Web UI   │ │Go Fast  │  │   │
                                     │  │  │  (nginx)  │ │ Simulator   │  │   │
                                     │  │  └───────────┘ └──────┬──────┘  │   │
                                     │  └───────────────────────┼─────────┘   │
@@ -115,16 +115,16 @@ terraform apply tfplan
 # Configure Docker
 gcloud auth configure-docker us-central1-docker.pkg.dev
 
-# Build Skip Select Simulator
-docker build -t us-central1-docker.pkg.dev/PROJECT/atom-intents/skip-select-simulator:latest \
-  -f demo/skip-select-simulator/Dockerfile demo/skip-select-simulator
+# Build Go Fast Simulator
+docker build -t us-central1-docker.pkg.dev/PROJECT/atom-intents/go-fast-simulator:latest \
+  -f demo/go-fast-simulator/Dockerfile demo/go-fast-simulator
 
 # Build Web UI
 docker build -t us-central1-docker.pkg.dev/PROJECT/atom-intents/atom-intents-web-ui:latest \
   -f demo/web-ui/Dockerfile demo/web-ui
 
 # Push images
-docker push us-central1-docker.pkg.dev/PROJECT/atom-intents/skip-select-simulator:latest
+docker push us-central1-docker.pkg.dev/PROJECT/atom-intents/go-fast-simulator:latest
 docker push us-central1-docker.pkg.dev/PROJECT/atom-intents/atom-intents-web-ui:latest
 ```
 
@@ -188,7 +188,7 @@ gcloud builds submit --config=demo/gcp/cloudbuild.yaml .
 ### Dashboards
 
 Access the Grafana dashboard at:
-- GKE → Workloads → skip-select → Metrics
+- GKE → Workloads → go-fast → Metrics
 
 Key metrics:
 - Request rate and latency
@@ -208,8 +208,8 @@ Configured alerts (see `monitoring.yaml`):
 ### Logs
 
 ```bash
-# View Skip Select logs
-kubectl logs -l app.kubernetes.io/name=skip-select-simulator -n atom-intents -f
+# View Go Fast logs
+kubectl logs -l app.kubernetes.io/name=go-fast-simulator -n atom-intents -f
 
 # View in Cloud Logging
 gcloud logging read 'resource.type="k8s_container" resource.labels.namespace_name="atom-intents"' --limit=100
@@ -233,12 +233,12 @@ gcloud logging read 'resource.type="k8s_container" resource.labels.namespace_nam
 
 ### Horizontal Pod Autoscaler
 
-Skip Select and Web UI automatically scale based on:
+Go Fast and Web UI automatically scale based on:
 - CPU utilization (target: 70%)
 - Memory utilization (target: 80%)
 
 Limits:
-- Skip Select: 2-10 replicas
+- Go Fast: 2-10 replicas
 - Web UI: 2-5 replicas
 
 ### Database Scaling
@@ -254,14 +254,14 @@ For higher load:
 
 **Pods not starting:**
 ```bash
-kubectl describe pod -l app.kubernetes.io/name=skip-select-simulator -n atom-intents
-kubectl logs -l app.kubernetes.io/name=skip-select-simulator -n atom-intents --previous
+kubectl describe pod -l app.kubernetes.io/name=go-fast-simulator -n atom-intents
+kubectl logs -l app.kubernetes.io/name=go-fast-simulator -n atom-intents --previous
 ```
 
 **Database connection issues:**
 ```bash
 # Check Cloud SQL proxy
-kubectl logs -l app.kubernetes.io/name=skip-select-simulator -n atom-intents | grep -i database
+kubectl logs -l app.kubernetes.io/name=go-fast-simulator -n atom-intents | grep -i database
 ```
 
 **SSL certificate pending:**
@@ -273,7 +273,7 @@ kubectl describe managedcertificate atom-intents-cert -n atom-intents
 ### Rollback
 
 ```bash
-kubectl rollout undo deployment/skip-select -n atom-intents
+kubectl rollout undo deployment/go-fast -n atom-intents
 kubectl rollout undo deployment/web-ui -n atom-intents
 ```
 

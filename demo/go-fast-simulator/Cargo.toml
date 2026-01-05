@@ -1,8 +1,8 @@
 [package]
-name = "skip-select-simulator"
+name = "go-fast-simulator"
 version = "0.1.0"
 edition = "2021"
-description = "Simplified Skip Select coordination layer for ATOM Intents demo"
+description = "Skip Go Fast intent/solver protocol simulator for ATOM Intents demo"
 license = "Apache-2.0"
 
 [workspace]
@@ -90,5 +90,5 @@ async-trait = "0.1"
 tokio-test = "0.4"
 
 [[bin]]
-name = "skip-select-simulator"
+name = "go-fast-simulator"
 path = "src/main.rs"

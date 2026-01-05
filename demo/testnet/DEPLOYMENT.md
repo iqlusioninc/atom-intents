@@ -63,7 +63,7 @@ Mnemonic stored in: `~/.atom-intents/testnet-wallet.txt`
 **Status:** Not deployed (optional)
 
 > **Note:** Osmosis deployment is deferred. The demo system works without it - the
-> skip-select-simulator uses mock solvers for liquidity. Osmosis can be added later
+> go-fast-simulator uses mock solvers for liquidity. Osmosis can be added later
 > for real DEX routing and cross-chain swap testing.
 >
 > To deploy when ready:
@@ -77,7 +77,7 @@ Mnemonic stored in: `~/.atom-intents/testnet-wallet.txt`
 
 ```bash
 # Start demo with real testnet contracts
-cd demo/skip-select-simulator
+cd demo/go-fast-simulator
 ./scripts/start-testnet.sh
 ```
 

@@ -817,11 +817,11 @@ Removing unnecessary oracle dependency:
 
 ---
 
-## 5.2 [CRITICAL] Centralized Coordination Layer (Skip Select)
+## 5.2 [CRITICAL] Centralized Coordination Layer (Go Fast)
 
 **Location:** Spec Section 5, `SPECIFICATION.md:102-128`
 
-**Description:** The entire system routes through a centralized coordination layer called "Skip Select":
+**Description:** The entire system routes through a centralized coordination layer called "Go Fast":
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────┐
@@ -844,16 +844,16 @@ Removing unnecessary oracle dependency:
 
 | Component | Trust Required | Failure Impact |
 |-----------|---------------|----------------|
-| Skip Select API | Full custody of intent data | Complete data exposure |
-| Skip Select Matching | Fair price discovery | Systematic user losses |
-| Skip Select Auction | Unbiased winner selection | Solver collusion enabled |
-| Skip Select WebSocket | Timely delivery to solvers | Solver disadvantage |
+| Go Fast API | Full custody of intent data | Complete data exposure |
+| Go Fast Matching | Fair price discovery | Systematic user losses |
+| Go Fast Auction | Unbiased winner selection | Solver collusion enabled |
+| Go Fast WebSocket | Timely delivery to solvers | Solver disadvantage |
 
 ### Comparison to Alternatives
 
 | System | Coordination | Decentralization |
 |--------|-------------|------------------|
-| **This System** | Skip Select (centralized) | Low |
+| **This System** | Go Fast (centralized) | Low |
 | UniswapX | Dutch auction on-chain | Medium |
 | CoW Protocol | Solver competition off-chain | Medium |
 | 0x RFQ | Decentralized relayer network | Medium-High |
@@ -945,7 +945,7 @@ pub fn atomic_lock(user_funds: Coin, solver_bond: Coin) -> Result<LockPair> {
 
 ```
 T+0ms      User signs intent
-T+50ms     Skip Select receives
+T+50ms     Go Fast receives
 T+500ms    Auction completes
 T+1000ms   Settlement tx submitted
 T+6000ms   Block inclusion (1 block)
@@ -1204,7 +1204,7 @@ If spreads compress (competition), solvers become unprofitable and exit.
 
 # Part VI: TEE Implementation Analysis (Intel TDX)
 
-Based on the architectural concerns around Skip Select centralization (5.2), this section analyzes implementing the coordination layer within an Intel TDX Trust Domain.
+Based on the architectural concerns around Go Fast centralization (5.2), this section analyzes implementing the coordination layer within an Intel TDX Trust Domain.
 
 ## 6.1 Why Intel TDX
 
@@ -1217,7 +1217,7 @@ Intel TDX (Trust Domain Extensions) is the recommended TEE platform for this use
 | AMD SEV-SNP | Good VM isolation | Less tooling ecosystem |
 | AWS Nitro | Easy deployment | AWS lock-in, limited attestation |
 
-**TDX advantages for Skip Select:**
+**TDX advantages for Go Fast:**
 - Full VM isolation (no partitioning required)
 - Native Linux environment
 - Available on Azure, GCP, and dedicated infrastructure
@@ -1335,7 +1335,7 @@ This removes single-TD trust assumption via distributed key generation.
 ## 6.5 Modified Intent Flow with TDX
 
 ```
-1. User connects to Skip Select API
+1. User connects to Go Fast API
 2. User requests TDX attestation quote
 3. User verifies quote against published MRTD
 4. User encrypts intent to TD's public key
@@ -1387,7 +1387,7 @@ This removes single-TD trust assumption via distributed key generation.
 
 ### Phase 1: Development Environment (4-6 weeks)
 - Set up TDX development environment (Azure Confidential VMs)
-- Port Skip Select core to run as Linux VM in TD
+- Port Go Fast core to run as Linux VM in TD
 - Implement basic attestation flow
 - Unit test within TD environment
 

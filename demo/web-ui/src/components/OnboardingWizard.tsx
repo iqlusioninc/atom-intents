@@ -31,7 +31,7 @@ const slides: Slide[] = [
         </p>
         <div className="mt-6 p-4 bg-cosmos-900/30 rounded-lg border border-cosmos-700/50">
           <p className="text-sm text-cosmos-300">
-            Built on <strong>Skip Select</strong> — bringing MEV protection and optimal execution to Cosmos Hub.
+            Built on <strong>Go Fast</strong> — bringing MEV protection and optimal execution to Cosmos Hub.
           </p>
         </div>
       </div>

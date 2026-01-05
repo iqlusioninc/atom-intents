@@ -152,7 +152,7 @@ The flow is trustless because:
 
 ### Phase 0: Intent Submission & Solver Selection
 
-User submits intent via Skip Select, solver wins auction:
+User submits intent via Go Fast, solver wins auction:
 
 ```rust
 Intent {

@@ -1,4 +1,4 @@
-# Skip Select Simulator - Testnet Configuration
+# Go Fast Simulator - Testnet Configuration
 #
 # This configuration connects to real Cosmos testnets.
 # Update the contract addresses after deploying with ./scripts/deploy-contracts.sh

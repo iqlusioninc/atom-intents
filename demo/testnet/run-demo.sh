@@ -105,8 +105,8 @@ if [[ "$MODE" == "docker" ]]; then
 else
     log_info "Starting local development server..."
 
-    # Start Skip Select Simulator
-    cd "$PROJECT_ROOT/demo/skip-select-simulator"
+    # Start Go Fast Simulator
+    cd "$PROJECT_ROOT/demo/go-fast-simulator"
     cargo run &
     SKIP_SELECT_PID=$!
 

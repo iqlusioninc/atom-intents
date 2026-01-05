@@ -37,7 +37,7 @@ RUN apt-get update && apt-get install -y \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy binary from builder (must be at /app/ to match k8s deployment command)
-COPY --from=builder /app/target/release/skip-select-simulator /app/skip-select-simulator
+COPY --from=builder /app/target/release/go-fast-simulator /app/go-fast-simulator
 
 # Copy config files
 COPY config /app/config
@@ -51,4 +51,4 @@ EXPOSE 8080
 ENV RUST_LOG=info
 
 # Default to testnet mode with real smart contracts
-CMD ["skip-select-simulator", "--mode", "testnet", "--config", "/app/config/testnet.toml"]
+CMD ["go-fast-simulator", "--mode", "testnet", "--config", "/app/config/testnet.toml"]

@@ -46,7 +46,7 @@ This document specifies an intent-based trading system for Cosmos Hub that achie
 4. [Partial Fill Support](#4-partial-fill-support)
 
 ## Part III: Coordination Layer
-5. [Skip Select Integration](#5-skip-select-integration)
+5. [Go Fast Integration](#5-go-fast-integration)
 6. [Matching Engine](#6-matching-engine)
 7. [Auction Mechanism](#7-auction-mechanism)
 
@@ -165,7 +165,7 @@ This document specifies an intent-based trading system for Cosmos Hub that achie
 T+0ms       User signs intent
                │
                ▼
-T+50ms      Skip Select receives
+T+50ms      Go Fast receives
                │
                ├──────────────────────┐
                │                      │
@@ -265,7 +265,7 @@ FULLY TRUSTLESS                                                    FULLY TRUSTED
       ▼                                                                  ▼
 ┌─────────────────────────────────────────────────────────────────────────────────┐
 │                                                                                  │
-│  On-Chain          Settlement        Skip Select       Solver          CEX      │
+│  On-Chain          Settlement        Go Fast       Solver          CEX      │
 │  Fallback          Contracts         Coordination      Execution       APIs     │
 │                                                                                  │
 │     ◄──────────────────────────────────────────────────────────────────────►    │
@@ -277,7 +277,7 @@ FULLY TRUSTLESS                                                    FULLY TRUSTED
 │                                                                                  │
 └─────────────────────────────────────────────────────────────────────────────────┘
 
-DEFAULT PATH: Skip Select (semi-trusted) → Settlement Contract (trustless)
+DEFAULT PATH: Go Fast (semi-trusted) → Settlement Contract (trustless)
 FALLBACK:     Direct on-chain submission (fully trustless, slower)
 ```
 
@@ -518,11 +518,11 @@ impl Default for FillConfig {
 
 ---
 
-# 5. Skip Select Integration
+# 5. Go Fast Integration
 
 ## 5.1 Overview
 
-Skip Select provides off-chain coordination with on-chain settlement guarantees:
+Go Fast provides off-chain coordination with on-chain settlement guarantees:
 
 | Feature | Benefit |
 |---------|---------|
@@ -1616,7 +1616,7 @@ Economic incentives naturally solve "who runs relayers?" problem
 
 | Component | Trust Level | Failure Mode | Mitigation |
 |-----------|-------------|--------------|------------|
-| Skip Select | Semi-trusted | Censorship | On-chain fallback |
+| Go Fast | Semi-trusted | Censorship | On-chain fallback |
 | Solvers | Untrusted | Failed fills | Bond + slashing |
 | Settlement Contracts | Trustless | Bugs | Audits |
 | IBC | Trustless | Timeout | Auto refund |
@@ -1825,7 +1825,7 @@ pub struct ExecutionConstraints {
 User intent (allow_cross_ecosystem: true)
     │
     ▼
-Skip Select auction
+Go Fast auction
     │
     ├── Cosmos solvers quote: 104,000 USDC
     │

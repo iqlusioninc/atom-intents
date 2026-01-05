@@ -1,6 +1,6 @@
-//! Skip Select Simulator - Main entry point
+//! Go Fast Simulator - Main entry point
 //!
-//! A simplified version of the Skip Select coordination layer for the ATOM Intents demo.
+//! A simulator for Skip's Go Fast intent/solver protocol for the ATOM Intents demo.
 //! Provides REST API, WebSocket, and batch auction functionality.
 //!
 //! Supports three execution modes:
@@ -38,7 +38,7 @@ use crate::backend::simulated::SimulatedBackend;
 use crate::backend::testnet::TestnetBackend;
 use crate::state::AppState;
 
-/// Skip Select Simulator CLI
+/// Go Fast Simulator CLI
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
 struct Args {
@@ -69,7 +69,7 @@ async fn main() -> anyhow::Result<()> {
     tracing_subscriber::registry()
         .with(
             tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| "skip_select_simulator=debug,tower_http=debug".into()),
+                .unwrap_or_else(|_| "go_fast_simulator=debug,tower_http=debug".into()),
         )
         .with(tracing_subscriber::fmt::layer())
         .init();
@@ -77,7 +77,7 @@ async fn main() -> anyhow::Result<()> {
     // Parse CLI arguments
     let args = Args::parse();
 
-    info!("Starting Skip Select Simulator");
+    info!("Starting Go Fast Simulator");
     info!("  Mode: {}", args.mode);
     info!("  Port: {}", args.port);
 
@@ -193,7 +193,7 @@ async fn main() -> anyhow::Result<()> {
 
     // Start server
     let addr = SocketAddr::from(([0, 0, 0, 0], config.api_port));
-    info!("Skip Select Simulator listening on {}", addr);
+    info!("Go Fast Simulator listening on {}", addr);
 
     let listener = tokio::net::TcpListener::bind(addr).await?;
     axum::serve(listener, app).await?;

@@ -92,10 +92,10 @@ pub struct SolverAdvantageProfile {
 
 ## Implementation Files
 
-1. `demo/skip-select-simulator/src/models.rs` — Add advantage_reason to SolverQuote
-2. `demo/skip-select-simulator/src/state.rs` — Add advantage profiles to solvers
-3. `demo/skip-select-simulator/src/auction.rs` — Implement scoring and spread logic
-4. `demo/skip-select-simulator/src/solver.rs` — Intent Matcher counter-order logic
+1. `demo/go-fast-simulator/src/models.rs` — Add advantage_reason to SolverQuote
+2. `demo/go-fast-simulator/src/state.rs` — Add advantage profiles to solvers
+3. `demo/go-fast-simulator/src/auction.rs` — Implement scoring and spread logic
+4. `demo/go-fast-simulator/src/solver.rs` — Intent Matcher counter-order logic
 5. `demo/web-ui/src/components/SolverDashboard.tsx` — Display advantage tags
 6. `demo/web-ui/src/components/AuctionView.tsx` — Show tag on winning quote
 7. `demo/web-ui/src/types/index.ts` — Add advantage_reason to types

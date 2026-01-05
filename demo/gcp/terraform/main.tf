@@ -376,7 +376,7 @@ resource "google_project_iam_member" "app_monitoring" {
 resource "google_service_account_iam_member" "workload_identity" {
   service_account_id = google_service_account.app.name
   role               = "roles/iam.workloadIdentityUser"
-  member             = "serviceAccount:${var.project_id}.svc.id.goog[atom-intents/skip-select]"
+  member             = "serviceAccount:${var.project_id}.svc.id.goog[atom-intents/go-fast]"
 }
 
 # Static IP for Load Balancer

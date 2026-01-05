@@ -4,11 +4,11 @@ metadata:
   name: testnet-config
   namespace: atom-intents
   labels:
-    app.kubernetes.io/name: skip-select-simulator
+    app.kubernetes.io/name: go-fast-simulator
     app.kubernetes.io/component: testnet-config
 data:
   testnet.toml: |
-    # Skip Select Simulator - Testnet Configuration
+    # Go Fast Simulator - Testnet Configuration
     #
     # This configuration connects to real Cosmos testnets.
     # Deployed contracts on provider testnet

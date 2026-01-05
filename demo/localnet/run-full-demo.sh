@@ -43,8 +43,8 @@ else
     log_info "Skipping contract deployment (contracts not found)"
 fi
 
-# Step 4: Start Skip Select Simulator connected to local chains
-log_step "4. Starting Skip Select Simulator..."
+# Step 4: Start Go Fast Simulator connected to local chains
+log_step "4. Starting Go Fast Simulator..."
 export COSMOS_RPC_URL="http://localhost:26657"
 export OSMOSIS_RPC_URL="http://localhost:26667"
 export USE_LOCAL_TESTNET=true
@@ -55,7 +55,7 @@ if [ -f "$SCRIPT_DIR/deployment.json" ]; then
     export ESCROW_CONTRACT=$(jq -r '.contracts.escrow.address' "$SCRIPT_DIR/deployment.json")
 fi
 
-cd "$DEMO_DIR/skip-select-simulator"
+cd "$DEMO_DIR/go-fast-simulator"
 cargo run &
 SIMULATOR_PID=$!
 

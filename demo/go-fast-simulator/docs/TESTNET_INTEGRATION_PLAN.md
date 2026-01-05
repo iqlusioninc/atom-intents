@@ -2,7 +2,7 @@
 
 ## Overview
 
-This document describes the testnet integration for the Skip Select Simulator demo, enabling real smart contract execution on Cosmos testnets instead of pure in-memory simulation.
+This document describes the testnet integration for the Go Fast Simulator demo, enabling real smart contract execution on Cosmos testnets instead of pure in-memory simulation.
 
 ## Problem Statement
 
@@ -91,7 +91,7 @@ We introduced an `ExecutionBackend` trait that abstracts the execution layer:
 ## File Structure
 
 ```
-demo/skip-select-simulator/
+demo/go-fast-simulator/
 ├── src/
 │   ├── backend/
 │   │   ├── mod.rs           # ExecutionBackend trait, BackendError, events

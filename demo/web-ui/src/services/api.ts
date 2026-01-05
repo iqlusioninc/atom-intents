@@ -1,4 +1,4 @@
-// API service for communicating with Skip Select Simulator
+// API service for communicating with Go Fast Simulator
 
 import type {
   Intent,
