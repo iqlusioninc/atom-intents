@@ -8,6 +8,8 @@ pub struct Config {
     pub admin: Addr,
     /// Settlement contract address
     pub settlement_contract: Addr,
+    /// IBC Hooks sender address authorized to call LockFromIbc
+    pub ibc_hook_sender: Addr,
 }
 
 #[cw_serde]

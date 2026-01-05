@@ -1,3 +1,4 @@
+pub mod admin;
 pub mod executor;
 pub mod orchestrator;
 pub mod recovery;
@@ -25,3 +26,4 @@ pub use upgrade::{
     InflightError, InflightIntent, InflightPhase, InflightTracker, ShutdownResult,
 };
 pub use validator::{IntentValidator, ValidationError};
+pub use admin::{AdminServer, AdminServerError};

@@ -1,12 +1,13 @@
 use atom_intents_matching_engine::MatchingEngine;
 use atom_intents_relayer::SolverRelayer;
 use atom_intents_settlement::{
-    EscrowContract, RelayerService, SolverVaultContract, TimeoutConfig, TwoPhaseSettlement,
+    EscrowContract, RelayerService, RouteRegistry, SolverVaultContract, TimeoutConfig,
+    TwoPhaseSettlement,
 };
 use atom_intents_solver::SolutionAggregator;
 use atom_intents_types::{
-    Asset, ExecutionConstraints, FillConfig, Intent, OutputSpec, SolverQuote,
-    TradingPair,
+    Asset, CancellationRegistry, CancellationRequest, ExecutionConstraints, FillConfig, Intent,
+    OutputSpec, SolverQuote, TradingPair,
 };
 use cosmwasm_std::Uint128;
 use rust_decimal::Decimal;
@@ -39,8 +40,15 @@ where
     R: RelayerService,
 {
     fn new(user_escrow: E, solver_vault: V, relayer: R, config: TimeoutConfig) -> Self {
+        let route_registry = RouteRegistry::with_mainnet_routes();
         Self {
-            settlement: TwoPhaseSettlement::new(user_escrow, solver_vault, relayer, config),
+            settlement: TwoPhaseSettlement::new(
+                user_escrow,
+                solver_vault,
+                relayer,
+                config,
+                route_registry,
+            ),
         }
     }
 }
@@ -263,6 +271,10 @@ pub struct IntentOrchestrator {
     config: OrchestratorConfig,
     /// Track intent status
     intent_statuses: Arc<RwLock<HashMap<String, IntentStatus>>>,
+    /// Track intent auth material for cancellation checks
+    intent_auth: Arc<RwLock<HashMap<String, (String, cosmwasm_std::Binary)>>>,
+    /// Registry of cancelled intents
+    cancellation_registry: CancellationRegistry,
     /// Track active settlements
     active_settlements: Arc<RwLock<HashMap<String, SettlementState>>>,
     /// Track inflight intents for graceful shutdown
@@ -329,6 +341,8 @@ impl IntentOrchestrator {
             executor,
             config,
             intent_statuses: Arc::new(RwLock::new(HashMap::new())),
+            intent_auth: Arc::new(RwLock::new(HashMap::new())),
+            cancellation_registry: CancellationRegistry::new(),
             active_settlements: Arc::new(RwLock::new(HashMap::new())),
             inflight_tracker,
             drain_manager,
@@ -353,6 +367,14 @@ impl IntentOrchestrator {
         let intent_id = intent.id.clone();
         info!(intent_id = %intent_id, "Processing intent");
 
+        if self.cancellation_registry.is_cancelled(&intent_id) {
+            self.update_status(&intent_id, IntentStatus::Cancelled).await;
+            return Err(OrchestratorError::IntentCancelled {
+                intent_id,
+                reason: "Intent was cancelled before processing".to_string(),
+            });
+        }
+
         // Check if we're in drain mode
         if !self.drain_manager.is_accepting().await {
             warn!(intent_id = %intent_id, "Rejecting intent - system is draining");
@@ -375,6 +397,12 @@ impl IntentOrchestrator {
             );
             return Err(OrchestratorError::DrainModeActive);
         }
+
+        // Cache auth material for cancellation checks
+        self.intent_auth.write().await.insert(
+            intent_id.clone(),
+            (intent.user.clone(), intent.public_key.clone()),
+        );
 
         // Update status to matching
         self.update_status(&intent_id, IntentStatus::Matching).await;
@@ -487,11 +515,36 @@ impl IntentOrchestrator {
             });
         }
 
-        info!(batch_size = intents.len(), "Processing batch auction");
+        let mut active_intents = Vec::new();
+        for intent in intents {
+            let intent_id = intent.id.clone();
+            self.intent_auth.write().await.insert(
+                intent_id.clone(),
+                (intent.user.clone(), intent.public_key.clone()),
+            );
+
+            if self.cancellation_registry.is_cancelled(&intent_id) {
+                self.update_status(&intent_id, IntentStatus::Cancelled).await;
+                continue;
+            }
+
+            active_intents.push(intent);
+        }
+
+        if active_intents.is_empty() {
+            return Ok(BatchResult {
+                results: Vec::new(),
+                internal_crosses: 0,
+                solver_fills: 0,
+                failed: Vec::new(),
+            });
+        }
+
+        info!(batch_size = active_intents.len(), "Processing batch auction");
 
         // Group intents by trading pair
         let mut pairs: HashMap<TradingPair, Vec<Intent>> = HashMap::new();
-        for intent in intents {
+        for intent in active_intents {
             let pair = intent.pair();
             pairs.entry(pair).or_insert_with(Vec::new).push(intent);
         }
@@ -604,31 +657,50 @@ impl IntentOrchestrator {
             })
     }
 
-    /// Cancel a pending intent
-    pub async fn cancel_intent(&self, intent_id: &str) -> Result<(), OrchestratorError> {
+    /// Cancel a pending intent with a signed cancellation request
+    pub async fn cancel_intent(
+        &self,
+        request: CancellationRequest,
+    ) -> Result<(), OrchestratorError> {
+        let intent_id = request.intent_id.clone();
         info!(intent_id = %intent_id, "Cancelling intent");
 
+        if !request.verify().map_err(|err| OrchestratorError::CancellationVerification {
+            intent_id: intent_id.clone(),
+            error: err.to_string(),
+        })? {
+            return Err(OrchestratorError::InvalidCancellationSignature { intent_id });
+        }
+
+        let auth = self.intent_auth.read().await;
+        let (user, public_key) = auth.get(&intent_id).ok_or_else(|| {
+            OrchestratorError::IntentNotFound {
+                intent_id: intent_id.clone(),
+            }
+        })?;
+
+        if *user != request.user || *public_key != request.public_key {
+            return Err(OrchestratorError::CancellationUnauthorized { intent_id });
+        }
+
         // Check current status
-        let status = self.get_status(intent_id).await?;
+        let status = self.get_status(&intent_id).await?;
 
         match status {
             IntentStatus::Pending | IntentStatus::Matching => {
-                // Can cancel
-                self.update_status(intent_id, IntentStatus::Cancelled).await;
+                self.cancellation_registry.register(&intent_id);
+                self.update_status(&intent_id, IntentStatus::Cancelled).await;
                 Ok(())
             }
             IntentStatus::Executing { .. } => Err(OrchestratorError::CannotCancel {
-                intent_id: intent_id.to_string(),
+                intent_id,
                 reason: "Intent is currently executing".to_string(),
             }),
             IntentStatus::Completed { .. } => Err(OrchestratorError::CannotCancel {
-                intent_id: intent_id.to_string(),
+                intent_id,
                 reason: "Intent already completed".to_string(),
             }),
-            IntentStatus::Failed { .. } | IntentStatus::Cancelled => {
-                // Already in terminal state
-                Ok(())
-            }
+            IntentStatus::Failed { .. } | IntentStatus::Cancelled => Ok(()),
         }
     }
 
@@ -698,7 +770,7 @@ impl IntentOrchestrator {
                 deadline: current_timestamp() + 3600,
                 max_hops: Some(3),
                 excluded_venues: vec![],
-                max_solver_fee_bps: Some(50),
+                max_solver_fee_bps: None,
                 allow_cross_ecosystem: false,
                 max_bridge_time_secs: None,
             },
@@ -820,8 +892,20 @@ pub enum OrchestratorError {
     #[error("intent not found: {intent_id}")]
     IntentNotFound { intent_id: String },
 
+    #[error("intent {intent_id} was cancelled: {reason}")]
+    IntentCancelled { intent_id: String, reason: String },
+
     #[error("cannot cancel intent {intent_id}: {reason}")]
     CannotCancel { intent_id: String, reason: String },
+
+    #[error("cancellation verification failed for intent {intent_id}: {error}")]
+    CancellationVerification { intent_id: String, error: String },
+
+    #[error("invalid cancellation signature for intent {intent_id}")]
+    InvalidCancellationSignature { intent_id: String },
+
+    #[error("cancellation not authorized for intent {intent_id}")]
+    CancellationUnauthorized { intent_id: String },
 
     #[error("settlement not found: {settlement_id}")]
     SettlementNotFound { settlement_id: String },

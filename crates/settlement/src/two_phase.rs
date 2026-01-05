@@ -2,7 +2,7 @@ use async_trait::async_trait;
 use atom_intents_types::{IbcTransferInfo, Intent, Settlement, SettlementStatus, Solution};
 use cosmwasm_std::Uint128;
 
-use crate::{IbcTransferBuilder, SettlementError};
+use crate::{build_route_pfm_memo, IbcTransferBuilder, RouteRegistry, SettlementError};
 
 /// Two-phase commit settlement to prevent solver losses
 pub struct TwoPhaseSettlement<E, V, R>
@@ -15,6 +15,7 @@ where
     solver_vault: V,
     relayer: R,
     config: TimeoutConfig,
+    route_registry: RouteRegistry,
 }
 
 /// Timeout configuration ensuring safety
@@ -128,12 +129,19 @@ where
     V: SolverVaultContract,
     R: RelayerService,
 {
-    pub fn new(user_escrow: E, solver_vault: V, relayer: R, config: TimeoutConfig) -> Self {
+    pub fn new(
+        user_escrow: E,
+        solver_vault: V,
+        relayer: R,
+        config: TimeoutConfig,
+        route_registry: RouteRegistry,
+    ) -> Self {
         Self {
             user_escrow,
             solver_vault,
             relayer,
             config,
+            route_registry,
         }
     }
 
@@ -145,6 +153,40 @@ where
         current_time: u64,
     ) -> Result<Settlement, SettlementError> {
         self.config.validate()?;
+
+        let route = self
+            .route_registry
+            .find_route(&intent.input.chain_id, &intent.output.chain_id)
+            .ok_or_else(|| {
+                SettlementError::RouteNotFound(
+                    intent.input.chain_id.clone(),
+                    intent.output.chain_id.clone(),
+                )
+            })?;
+
+        let hop_count = route.hops.len() as u32;
+        if let Some(max_hops) = intent.constraints.max_hops {
+            if hop_count > max_hops {
+                return Err(SettlementError::ConstraintViolation(format!(
+                    "route requires {} hops (max {})",
+                    hop_count, max_hops
+                )));
+            }
+        }
+
+        let estimated_time = if route.estimated_time_seconds > 0 {
+            route.estimated_time_seconds
+        } else {
+            RouteRegistry::calculate_route_time(&route)
+        };
+        if let Some(max_time) = intent.constraints.max_bridge_time_secs {
+            if estimated_time > max_time {
+                return Err(SettlementError::ConstraintViolation(format!(
+                    "route estimated time {}s exceeds max_bridge_time_secs {}",
+                    estimated_time, max_time
+                )));
+            }
+        }
 
         // ═══════════════════════════════════════════════════════════════════
         // PHASE 1: COMMIT - Both parties lock funds
@@ -184,25 +226,48 @@ where
         // ═══════════════════════════════════════════════════════════════════
 
         // Build IBC transfer for output to user
-        let output_transfer = IbcTransferBuilder::new(
+        let (channel, memo, needs_relayer) = if route.hops.is_empty() {
+            ("local".to_string(), None, false)
+        } else {
+            let memo = if route.hops.len() > 1 {
+                Some(build_route_pfm_memo(
+                    &route.hops,
+                    &intent.output.recipient,
+                ))
+            } else {
+                None
+            };
+            (route.hops[0].channel_id.clone(), memo, true)
+        };
+
+        let mut output_builder = IbcTransferBuilder::new(
             &intent.input.chain_id,
             &intent.output.chain_id,
-            "channel-0", // Would be looked up from channel map
+            channel,
         )
         .denom(&intent.output.denom)
         .amount(solution.fill.output_amount)
         .sender(&solution.solver_id)
         .receiver(&intent.output.recipient)
-        .timeout_secs(self.config.ibc_timeout_secs)
-        .build(current_time);
+        .timeout_secs(self.config.ibc_timeout_secs);
 
-        // Track with relayer for priority handling
-        self.relayer
-            .track_settlement(&intent.id, &[output_transfer.clone()])
-            .await?;
+        if let Some(memo) = memo {
+            output_builder = output_builder.memo(memo);
+        }
 
-        // Wait for IBC confirmation
-        let result = self.relayer.wait_for_ibc(&output_transfer).await?;
+        let output_transfer = output_builder.build(current_time);
+
+        let result = if needs_relayer {
+            // Track with relayer for priority handling
+            self.relayer
+                .track_settlement(&intent.id, &[output_transfer.clone()])
+                .await?;
+
+            // Wait for IBC confirmation
+            self.relayer.wait_for_ibc(&output_transfer).await?
+        } else {
+            IbcResult::Success { ack: Vec::new() }
+        };
 
         match result {
             IbcResult::Success { .. } => {

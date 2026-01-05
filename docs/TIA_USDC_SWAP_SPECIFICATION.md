@@ -401,13 +401,13 @@ pub struct Escrow {
     pub owner: String,
 
     /// Chain where owner address exists
-    pub owner_chain_id: String,
+    pub owner_chain_id: Option<String>,
 
     /// IBC channel used for inbound transfer (for refunds)
-    pub source_channel: String,
+    pub source_channel: Option<String>,
 
     /// Original denom on source chain (for refund routing)
-    pub source_denom: String,
+    pub source_denom: Option<String>,
 
     pub amount: Uint128,
     pub denom: String,  // This is the ibc/... denom on Hub
@@ -416,6 +416,8 @@ pub struct Escrow {
     pub status: EscrowStatus,
 }
 ```
+
+Implementation note: the current escrow contract stores cross-chain fields as optional values and does not derive `source_denom` automatically.
 
 ### Lock via IBC Hooks
 
@@ -780,8 +782,7 @@ fn execute_lock_from_ibc(
     info: MessageInfo,
     msg: LockFromIbcMsg,
 ) -> Result<Response, ContractError> {
-    // Verify caller is the IBC transfer module
-    // IBC Hooks calls the contract with the transfer module as sender
+    // Verify caller matches configured IBC Hooks sender
     let config = CONFIG.load(deps.storage)?;
 
     // The actual sender in IBC Hooks is the derived address
@@ -870,6 +871,7 @@ Escrow timeout must be longer than IBC timeout + safety buffer:
 - [ ] Update `SettlementManager` to route to Hub escrow for non-wasm chains
 - [ ] Implement IBC memo construction for wasm hooks
 - [ ] Add cross-chain refund handling
+  - Note: routing and memo helpers exist in `crates/settlement`, but are not wired into the orchestrator yet.
 
 ### Solver Integration
 
@@ -882,6 +884,7 @@ Escrow timeout must be longer than IBC timeout + safety buffer:
 - [ ] Add Celestia chain config with IBC channel mappings
 - [ ] Configure TIA denom traces
 - [ ] Set up channel registry for Celestia ↔ Hub
+- [ ] Configure `ibc_hook_sender` for the Escrow contract
 
 ---
 

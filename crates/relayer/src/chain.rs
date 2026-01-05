@@ -488,6 +488,7 @@ impl CosmosChainClient {
     }
 
     /// Execute an operation with automatic reconnection on failure
+    #[allow(dead_code)]
     async fn with_retry<F, T, Fut>(&self, operation: F) -> Result<T, ChainError>
     where
         F: Fn() -> Fut,

@@ -165,10 +165,11 @@ POST /api/v1/intents
 
 **Real Go Fast:** Solvers monitor events and submit competing `fillOrder` transactions on-chain.
 
-**Our Simulator:** Solvers receive intents via WebSocket and submit quotes via API:
+**Our Simulator:** Solvers are mocked in the backend. Quotes are broadcast via WebSocket and are queryable per auction:
 ```typescript
 WebSocket /ws -> Receive: { type: "new_intent", intent: {...} }
-POST /api/v1/quotes -> { intent_id, output_amount, execution_time_ms }
+WebSocket /ws -> Receive: { type: "quote_received", quote: {...} }
+GET /api/v1/auctions/:id/quotes
 ```
 
 ### Settlement
@@ -182,17 +183,7 @@ function initiateSettlement(
 ) external;
 ```
 
-**Our Simulator:** Server-side settlement via CosmWasm escrow contract:
-```rust
-// ExecuteMsg::SettleEscrow
-{
-  "settle_escrow": {
-    "escrow_id": "...",
-    "recipient": "cosmos1...",
-    "amount": "1000000"
-  }
-}
-```
+**Our Simulator:** Server-side settlement via the Settlement contract (CreateSettlement + ExecuteSettlement/ExecuteSettlementLocal), which releases Escrow funds on success.
 
 ## Shared Concepts
 

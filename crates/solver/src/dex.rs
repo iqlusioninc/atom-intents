@@ -151,6 +151,16 @@ impl Solver for DexRoutingSolver {
         let output_to_user_dec = Decimal::from(output_to_user);
         let effective_price = output_to_user_dec / remaining_dec;
 
+        if let Some(max_fee_bps) = intent.constraints.max_solver_fee_bps {
+            if !output_amount_dec.is_zero() {
+                let fee_bps =
+                    (solver_fee_dec / output_amount_dec) * Decimal::from(10_000u32);
+                if fee_bps > Decimal::from(max_fee_bps) {
+                    return Err(SolveError::NoViableRoute);
+                }
+            }
+        }
+
         let current_time = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()

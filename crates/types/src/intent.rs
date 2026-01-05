@@ -410,13 +410,8 @@ impl UnsignedIntent {
     /// This is a lower-level method when you already have a signature.
     /// For most use cases, prefer `sign_with_key()`.
     pub fn sign(self, signature: Binary, public_key: Binary) -> Intent {
-        use sha2::Digest;
-        let mut hasher = Sha256::new();
-        hasher.update(self.version.as_bytes());
-        hasher.update(self.nonce.to_le_bytes());
-        hasher.update(self.user.as_bytes());
-        let hash: [u8; 32] = hasher.finalize().into();
-        let id = hex::encode(&hash[..16]);
+        let signing_hash = self.signing_hash();
+        let id = hex::encode(&signing_hash[..16]);
 
         Intent {
             id,

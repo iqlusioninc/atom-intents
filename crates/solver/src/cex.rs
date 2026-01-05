@@ -513,6 +513,7 @@ impl CexBackstopSolver {
     }
 
     /// Update inventory tracking (legacy - used in tests)
+    #[allow(dead_code)]
     fn update_inventory(&self, input_denom: &str, output_denom: &str, amount: i128) {
         if let Ok(mut inventory) = self.inventory.write() {
             inventory.update(input_denom, -amount); // Sold

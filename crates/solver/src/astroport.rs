@@ -64,6 +64,7 @@ impl AstroportClient {
     }
 
     /// Build asset info for Astroport API
+    #[allow(dead_code)]
     fn build_asset_info(&self, denom: &str) -> AssetInfo {
         if denom.starts_with("ibc/") || denom.starts_with("u") {
             AssetInfo::NativeToken {
@@ -324,6 +325,7 @@ enum AssetInfo {
     NativeToken { denom: String },
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Deserialize)]
 struct SimulateSwapResponse {
     return_amount: String,
@@ -350,6 +352,7 @@ struct AstroSwap {
     ask_asset_info: AssetInfo,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Deserialize)]
 struct PairResponse {
     pair_address: String,
@@ -380,6 +383,7 @@ struct PoolAsset {
     amount: String,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Deserialize)]
 struct PairInfoResponse {
     asset_infos: Vec<AssetInfo>,

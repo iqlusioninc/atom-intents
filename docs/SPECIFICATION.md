@@ -299,7 +299,7 @@ pub struct Intent {
     // IDENTIFICATION
     // ═══════════════════════════════════════════════════════════════════════════
     
-    /// Unique identifier (hash of contents + nonce)
+    /// Unique identifier (truncated signing hash of intent contents)
     pub id: String,
     
     /// Protocol version for compatibility
@@ -386,6 +386,8 @@ pub struct OutputSpec {
 }
 ```
 
+Implementation note: current Rust types serialize `limit_price` and `min_fill_pct` as strings for JSON compatibility.
+
 ## 3.2 Execution Constraints
 
 ```rust
@@ -406,6 +408,9 @@ pub struct ExecutionConstraints {
     
     /// Allow cross-ecosystem execution (NEAR, etc.)
     pub allow_cross_ecosystem: bool,
+
+    /// Maximum bridge latency acceptable (seconds)
+    pub max_bridge_time_secs: Option<u64>,
 }
 
 impl Default for ExecutionConstraints {
@@ -416,10 +421,13 @@ impl Default for ExecutionConstraints {
             excluded_venues: vec![],
             max_solver_fee_bps: Some(50),           // 0.5% max
             allow_cross_ecosystem: false,           // Cosmos-only by default
+            max_bridge_time_secs: None,
         }
     }
 }
 ```
+
+**Implementation note:** The current core implementation enforces `allow_cross_ecosystem` and `excluded_venues` during solution aggregation. `max_solver_fee_bps` is enforced by solvers that compute explicit fees. `max_hops` and `max_bridge_time_secs` are enforced during settlement routing; other execution paths should mirror these checks as they mature.
 
 ---
 
@@ -509,8 +517,10 @@ impl Default for FillConfig {
                                    │                   │
                                    │      Settled      │
                                    │                   │
-                                   └───────────────────┘
+└───────────────────┘
 ```
+
+Implementation note: the current orchestrator tracks `Pending`, `Matching`, `Executing`, `Completed`, `Failed`, and `Cancelled` states. Partial fill finalization remains planned.
 
 ---
 
@@ -533,6 +543,8 @@ Go Fast provides off-chain coordination with on-chain settlement guarantees:
 | On-chain fallback | Trustless alternative |
 
 ## 5.2 API Overview
+
+Planned API surface for production implementations. The demo server exposes `/api/v1/*` endpoints and does not currently implement all routes below.
 
 ```yaml
 # User API
@@ -1447,10 +1459,23 @@ pub struct TwoPhaseSettlement {
     solver_vault: SolverVaultContract,
     relayer: Arc<SolverRelayer>,
     timeouts: TimeoutConfig,
+    route_registry: RouteRegistry,
 }
 
 impl TwoPhaseSettlement {
     pub async fn execute(&self, intent: &Intent, solution: &Solution) -> Result<(), Error> {
+        // Select route and enforce constraints
+        let route = self
+            .route_registry
+            .find_route(&intent.input.chain_id, &intent.output.chain_id)
+            .ok_or(Error::RouteNotFound)?;
+        if let Some(max_hops) = intent.constraints.max_hops {
+            ensure!(route.hops.len() as u32 <= max_hops, Error::ConstraintViolation);
+        }
+        if let Some(max_time) = intent.constraints.max_bridge_time_secs {
+            ensure!(route.estimated_time_seconds <= max_time, Error::ConstraintViolation);
+        }
+
         // ═══════════════════════════════════════════════════════════════════
         // PHASE 1: COMMIT - Both parties lock funds
         // ═══════════════════════════════════════════════════════════════════
@@ -1471,7 +1496,7 @@ impl TwoPhaseSettlement {
         // ═══════════════════════════════════════════════════════════════════
         
         // 2a. Send output to user via IBC
-        let output_tx = self.send_output(&solver_lock, &intent.output).await?;
+        let output_tx = self.send_output(&route, &solver_lock, &intent.output).await?;
         
         // Track with our relayer (priority handling)
         self.relayer.track_settlement(&settlement).await;

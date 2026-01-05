@@ -1,4 +1,6 @@
-use atom_intents_types::{Intent, OptimalFillPlan, Solution, SolveContext, TradingPair};
+use atom_intents_types::{
+    ExecutionPlan, Intent, OptimalFillPlan, Solution, SolveContext, TradingPair,
+};
 use cosmwasm_std::Uint128;
 use rust_decimal::Decimal;
 use std::collections::HashMap;
@@ -24,7 +26,6 @@ pub enum OraclePriceRequirement {
 #[derive(Debug, Clone)]
 struct CachedPrice {
     price: Decimal,
-    pair: TradingPair,
     fetched_at: Instant,
 }
 
@@ -120,7 +121,6 @@ impl SolutionAggregator {
                     pair_symbol,
                     CachedPrice {
                         price,
-                        pair: pair.clone(),
                         fetched_at: Instant::now(),
                     },
                 );
@@ -197,7 +197,11 @@ impl SolutionAggregator {
 
         let results = futures::future::join_all(solve_futures).await;
 
-        let mut solutions: Vec<Solution> = results.into_iter().filter_map(|r| r.ok()).collect();
+        let mut solutions: Vec<Solution> = results
+            .into_iter()
+            .filter_map(|r| r.ok())
+            .filter(|solution| Self::solution_respects_constraints(intent, solution))
+            .collect();
 
         if solutions.is_empty() {
             return Err(SolveError::NoViableRoute);
@@ -229,6 +233,35 @@ impl SolutionAggregator {
             selected,
             total_input,
         })
+    }
+
+    fn solution_respects_constraints(intent: &Intent, solution: &Solution) -> bool {
+        let constraints = &intent.constraints;
+
+        if !constraints.allow_cross_ecosystem
+            && matches!(solution.execution, ExecutionPlan::CrossEcosystem { .. })
+        {
+            return false;
+        }
+
+        if !constraints.excluded_venues.is_empty() {
+            let excluded: std::collections::HashSet<String> = constraints
+                .excluded_venues
+                .iter()
+                .map(|venue| venue.to_ascii_lowercase())
+                .collect();
+
+            if let ExecutionPlan::DexRoute { ref steps } = solution.execution {
+                if steps
+                    .iter()
+                    .any(|step| excluded.contains(&step.venue.to_ascii_lowercase()))
+                {
+                    return false;
+                }
+            }
+        }
+
+        true
     }
 
     /// Check if oracle is healthy (has returned a valid price recently)

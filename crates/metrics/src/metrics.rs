@@ -47,6 +47,38 @@ lazy_static! {
     .unwrap();
 
     // ═══════════════════════════════════════════════════════════════════════════
+    // UPGRADE METRICS
+    // ═══════════════════════════════════════════════════════════════════════════
+
+    /// Current number of inflight intents
+    pub static ref INFLIGHT_COUNT: IntGauge = register_int_gauge!(
+        "atom_intents_inflight_count",
+        "Current number of inflight intents"
+    )
+    .unwrap();
+
+    /// Current drain mode state (0=active, 1=draining, 2=drained, 3=upgrading)
+    pub static ref DRAIN_MODE_STATE: IntGauge = register_int_gauge!(
+        "atom_intents_drain_mode_state",
+        "Current drain mode state (0=active, 1=draining, 2=drained, 3=upgrading)"
+    )
+    .unwrap();
+
+    /// Unix timestamp for when drain started (0 when not draining)
+    pub static ref DRAIN_STARTED_AT: IntGauge = register_int_gauge!(
+        "atom_intents_drain_started_at",
+        "Drain start unix timestamp (0 when inactive)"
+    )
+    .unwrap();
+
+    /// Total number of completed drains
+    pub static ref DRAIN_COMPLETED_TOTAL: IntCounter = register_int_counter!(
+        "atom_intents_drain_completed_total",
+        "Total number of completed drains"
+    )
+    .unwrap();
+
+    // ═══════════════════════════════════════════════════════════════════════════
     // SETTLEMENT METRICS
     // ═══════════════════════════════════════════════════════════════════════════
 

@@ -293,7 +293,7 @@ impl FeeEstimator {
     pub fn estimate_ibc_fee(
         &self,
         source_chain: &str,
-        dest_chain: &str,
+        _dest_chain: &str,
         priority: FeePriority,
     ) -> Result<FeeEstimate, FeeError> {
         // Fee is paid on source chain

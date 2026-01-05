@@ -1,7 +1,7 @@
 use atom_intents_matching_engine::MatchingEngine;
 use atom_intents_settlement::{SettlementError, TimeoutConfig};
 use atom_intents_solver::SolutionAggregator;
-use atom_intents_types::{Intent, OptimalFillPlan, Solution};
+use atom_intents_types::{FillStrategy, Intent, OptimalFillPlan, Solution};
 use cosmwasm_std::Uint128;
 use std::sync::Arc;
 use thiserror::Error;
@@ -232,7 +232,31 @@ impl ExecutionCoordinator {
 
         // Check if fill meets minimum requirements
         let total_filled = fill_plan.total_input;
-        if intent.fill_config.allow_partial {
+        let mut requires_full_fill = !intent.fill_config.allow_partial;
+        let mut required_pct: Option<f64> = None;
+
+        match &intent.fill_config.strategy {
+            FillStrategy::AllOrNothing => {
+                requires_full_fill = true;
+            }
+            FillStrategy::MinimumThenEager { min_pct } => {
+                let parsed: f64 = min_pct.parse().map_err(|_| ExecutionError::InvalidConfiguration {
+                    reason: "Invalid strategy min_pct".to_string(),
+                })?;
+                required_pct = Some(parsed);
+            }
+            FillStrategy::Eager | FillStrategy::SolverDiscretion => {}
+        }
+
+        if requires_full_fill {
+            if total_filled < intent.input.amount {
+                return Err(ExecutionError::InsufficientFill {
+                    intent_id: intent.id.clone(),
+                    filled: total_filled,
+                    minimum: intent.input.amount,
+                });
+            }
+        } else {
             // Check minimum fill amount
             if total_filled < intent.fill_config.min_fill_amount {
                 return Err(ExecutionError::InsufficientFill {
@@ -242,29 +266,20 @@ impl ExecutionCoordinator {
                 });
             }
 
-            // Check minimum fill percentage
-            let fill_pct: f64 = intent.fill_config.min_fill_pct.parse().map_err(|_| {
+            let base_pct: f64 = intent.fill_config.min_fill_pct.parse().map_err(|_| {
                 ExecutionError::InvalidConfiguration {
                     reason: "Invalid min_fill_pct".to_string(),
                 }
             })?;
 
+            let required_pct = required_pct.map(|pct| pct.max(base_pct)).unwrap_or(base_pct);
             let actual_pct = total_filled.u128() as f64 / intent.input.amount.u128() as f64;
 
-            if actual_pct < fill_pct {
+            if actual_pct < required_pct {
                 return Err(ExecutionError::InsufficientFill {
                     intent_id: intent.id.clone(),
                     filled: total_filled,
-                    minimum: Uint128::new((intent.input.amount.u128() as f64 * fill_pct) as u128),
-                });
-            }
-        } else {
-            // Full fill required
-            if total_filled < intent.input.amount {
-                return Err(ExecutionError::InsufficientFill {
-                    intent_id: intent.id.clone(),
-                    filled: total_filled,
-                    minimum: intent.input.amount,
+                    minimum: Uint128::new((intent.input.amount.u128() as f64 * required_pct) as u128),
                 });
             }
         }

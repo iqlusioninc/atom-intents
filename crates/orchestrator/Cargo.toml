@@ -13,6 +13,7 @@ atom-intents-matching-engine = { workspace = true }
 atom-intents-settlement = { workspace = true }
 atom-intents-solver = { workspace = true }
 atom-intents-relayer = { workspace = true }
+atom-intents-metrics = { workspace = true }
 
 # Core
 async-trait = { workspace = true }
@@ -20,6 +21,7 @@ tokio = { workspace = true }
 futures = { workspace = true }
 thiserror = { workspace = true }
 anyhow = { workspace = true }
+axum = "0.7"
 
 # Cosmos/CosmWasm
 cosmwasm-std = { workspace = true }

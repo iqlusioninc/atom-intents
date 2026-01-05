@@ -235,7 +235,7 @@ ESCROW_INIT_MSG=$(cat <<EOF
 {
   "admin": "$DEPLOYER_ADDRESS",
   "settlement_contract": "$SETTLEMENT_CONTRACT_ADDRESS",
-  "escrow_timeout": 300
+  "ibc_hook_sender": "$DEPLOYER_ADDRESS"
 }
 EOF
 )

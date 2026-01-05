@@ -16,6 +16,9 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
+use atom_intents_metrics::metrics::{
+    DRAIN_COMPLETED_TOTAL, DRAIN_MODE_STATE, DRAIN_STARTED_AT, INFLIGHT_COUNT,
+};
 use cosmwasm_std::Uint128;
 use thiserror::Error;
 use tokio::sync::{broadcast, RwLock};
@@ -71,6 +74,7 @@ pub struct DrainModeManager {
 impl DrainModeManager {
     pub fn new(inflight_tracker: Arc<InflightTracker>) -> Self {
         let (mode_tx, _) = broadcast::channel(16);
+        update_drain_metrics(&DrainMode::Active);
         Self {
             mode: Arc::new(RwLock::new(DrainMode::Active)),
             inflight_tracker,
@@ -115,7 +119,9 @@ impl DrainModeManager {
                 );
 
                 *mode = new_mode.clone();
-                let _ = self.mode_tx.send(new_mode);
+                let _ = self.mode_tx.send(new_mode.clone());
+                self.inflight_tracker.set_draining(true);
+                update_drain_metrics(&new_mode);
                 Ok(())
             }
             DrainMode::Draining { .. } => {
@@ -145,7 +151,9 @@ impl DrainModeManager {
                     completed_at: current_timestamp(),
                 };
                 *mode = new_mode.clone();
-                let _ = self.mode_tx.send(new_mode);
+                let _ = self.mode_tx.send(new_mode.clone());
+                DRAIN_COMPLETED_TOTAL.inc();
+                update_drain_metrics(&new_mode);
 
                 info!(
                     elapsed_secs = start.elapsed().as_secs(),
@@ -200,7 +208,10 @@ impl DrainModeManager {
             completed_at: current_timestamp(),
         };
         *mode = new_mode.clone();
-        let _ = self.mode_tx.send(new_mode);
+        let _ = self.mode_tx.send(new_mode.clone());
+        self.inflight_tracker.set_draining(true);
+        DRAIN_COMPLETED_TOTAL.inc();
+        update_drain_metrics(&new_mode);
 
         Ok(())
     }
@@ -214,7 +225,9 @@ impl DrainModeManager {
                 info!("Resuming normal operation");
                 let new_mode = DrainMode::Active;
                 *mode = new_mode.clone();
-                let _ = self.mode_tx.send(new_mode);
+                let _ = self.mode_tx.send(new_mode.clone());
+                self.inflight_tracker.set_draining(false);
+                update_drain_metrics(&new_mode);
                 Ok(())
             }
             DrainMode::Active => {
@@ -234,7 +247,9 @@ impl DrainModeManager {
                 info!("Cancelling drain, resuming normal operation");
                 let new_mode = DrainMode::Active;
                 *mode = new_mode.clone();
-                let _ = self.mode_tx.send(new_mode);
+                let _ = self.mode_tx.send(new_mode.clone());
+                self.inflight_tracker.set_draining(false);
+                update_drain_metrics(&new_mode);
                 Ok(())
             }
             DrainMode::Active => {
@@ -399,7 +414,8 @@ impl InflightTracker {
         };
 
         active.insert(settlement_id.to_string(), intent);
-        self.count.fetch_add(1, Ordering::SeqCst);
+        let new_count = self.count.fetch_add(1, Ordering::SeqCst) + 1;
+        INFLIGHT_COUNT.set(new_count as i64);
 
         Ok(())
     }
@@ -482,7 +498,9 @@ impl InflightTracker {
 
         match active.remove(settlement_id) {
             Some(intent) => {
-                self.count.fetch_sub(1, Ordering::SeqCst);
+                let previous = self.count.fetch_sub(1, Ordering::SeqCst);
+                let new_count = previous.saturating_sub(1);
+                INFLIGHT_COUNT.set(new_count as i64);
                 self.completed_count.fetch_add(1, Ordering::SeqCst);
                 Ok(intent)
             }
@@ -692,6 +710,26 @@ pub enum InflightError {
 // ═══════════════════════════════════════════════════════════════════════════
 // HELPERS
 // ═══════════════════════════════════════════════════════════════════════════
+
+fn update_drain_metrics(mode: &DrainMode) {
+    let value = match mode {
+        DrainMode::Active => 0,
+        DrainMode::Draining { .. } => 1,
+        DrainMode::Drained { .. } => 2,
+        DrainMode::Upgrading { .. } => 3,
+    };
+
+    DRAIN_MODE_STATE.set(value);
+
+    match mode {
+        DrainMode::Draining { started_at, .. } | DrainMode::Upgrading { started_at, .. } => {
+            DRAIN_STARTED_AT.set(*started_at as i64);
+        }
+        _ => {
+            DRAIN_STARTED_AT.set(0);
+        }
+    }
+}
 
 fn current_timestamp() -> u64 {
     std::time::SystemTime::now()

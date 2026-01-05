@@ -315,14 +315,14 @@ MigrateMsg {
 # Inflight count
 atom_intents_inflight_count
 
-# Drain mode state (0=active, 1=draining, 2=drained)
-atom_intents_drain_mode
+# Drain mode state (0=active, 1=draining, 2=drained, 3=upgrading)
+atom_intents_drain_mode_state
 
 # Settlements completed since drain started
 atom_intents_drain_completed_total
 
 # Time since drain started
-time() - atom_intents_drain_start_timestamp
+time() - atom_intents_drain_started_at
 ```
 
 ### Alerts
@@ -330,7 +330,7 @@ time() - atom_intents_drain_start_timestamp
 ```yaml
 # Alert if drain takes too long
 - alert: UpgradeDrainTimeout
-  expr: atom_intents_drain_mode == 1 and (time() - atom_intents_drain_start_timestamp) > 1800
+  expr: atom_intents_drain_mode_state == 1 and (time() - atom_intents_drain_started_at) > 1800
   for: 5m
   labels:
     severity: warning
@@ -339,7 +339,7 @@ time() - atom_intents_drain_start_timestamp
 
 # Alert if inflight count not decreasing
 - alert: UpgradeInflightStuck
-  expr: atom_intents_drain_mode == 1 and delta(atom_intents_inflight_count[10m]) >= 0
+  expr: atom_intents_drain_mode_state == 1 and delta(atom_intents_inflight_count[10m]) >= 0
   for: 10m
   labels:
     severity: critical
@@ -514,8 +514,12 @@ wasmd query wasm contract-state smart $CONTRACT_ADDR '{"config": {}}'
 | `/admin/drain/status` | GET | Get drain status |
 | `/admin/drain/cancel` | POST | Cancel drain, resume |
 | `/admin/drain/force` | POST | Force drain (dangerous) |
+| `/admin/drain/resume` | POST | Resume accepting intents |
 | `/admin/inflight` | GET | List inflight intents |
+| `/admin/inflight/:id` | GET | Get inflight intent details |
 | `/admin/upgrade/start` | POST | Start upgrade process |
+| `/admin/upgrade/status` | GET | Get upgrade status |
+| `/admin/upgrade/abort` | POST | Abort upgrade (cancel drain) |
 
 ### Contract Queries
 

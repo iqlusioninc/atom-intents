@@ -102,7 +102,7 @@ log_info "Settlement contract address: $SETTLEMENT_CONTRACT"
 
 # Instantiate escrow contract
 log_info "Instantiating escrow contract..."
-ESCROW_INIT="{\"admin\":\"$VALIDATOR_ADDR\",\"settlement_contract\":\"$SETTLEMENT_CONTRACT\",\"escrow_timeout\":300}"
+ESCROW_INIT="{\"admin\":\"$VALIDATOR_ADDR\",\"settlement_contract\":\"$SETTLEMENT_CONTRACT\",\"ibc_hook_sender\":\"$VALIDATOR_ADDR\"}"
 
 docker exec atom-intents-hub gaiad tx wasm instantiate $ESCROW_CODE_ID "$ESCROW_INIT" \
     --from validator \

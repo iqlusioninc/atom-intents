@@ -19,6 +19,7 @@ use atom_intents_escrow::msg::{EscrowResponse, ExecuteMsg, InstantiateMsg, Query
 struct TestAddrs {
     admin: Addr,
     settlement: Addr,
+    ibc_hook_sender: Addr,
     user: Addr,
     recipient: Addr,
     attacker: Addr,
@@ -29,6 +30,7 @@ fn test_addrs(api: &MockApi) -> TestAddrs {
     TestAddrs {
         admin: api.addr_make("admin"),
         settlement: api.addr_make("settlement"),
+        ibc_hook_sender: api.addr_make("ibc_hook_sender"),
         user: api.addr_make("user"),
         recipient: api.addr_make("recipient"),
         attacker: api.addr_make("attacker"),
@@ -52,6 +54,7 @@ fn setup_contract() -> (
     let msg = InstantiateMsg {
         admin: addrs.admin.to_string(),
         settlement_contract: addrs.settlement.to_string(),
+        ibc_hook_sender: addrs.ibc_hook_sender.to_string(),
     };
     let info = message_info(&addrs.admin, &[]);
 
@@ -417,6 +420,7 @@ fn test_non_admin_cannot_update_config() {
         ExecuteMsg::UpdateConfig {
             admin: Some(addrs.attacker.to_string()),
             settlement_contract: None,
+            ibc_hook_sender: None,
         },
     );
 
@@ -437,6 +441,7 @@ fn test_attacker_cannot_change_settlement_contract() {
         ExecuteMsg::UpdateConfig {
             admin: None,
             settlement_contract: Some(addrs.fake_settlement.to_string()),
+            ibc_hook_sender: None,
         },
     );
 
@@ -458,6 +463,7 @@ fn test_admin_transfer_successful() {
         ExecuteMsg::UpdateConfig {
             admin: Some(new_admin.to_string()),
             settlement_contract: None,
+            ibc_hook_sender: None,
         },
     )
     .unwrap();
@@ -471,6 +477,7 @@ fn test_admin_transfer_successful() {
         ExecuteMsg::UpdateConfig {
             admin: Some(addrs.admin.to_string()),
             settlement_contract: None,
+            ibc_hook_sender: None,
         },
     );
     assert!(matches!(result.unwrap_err(), ContractError::Unauthorized {}));
@@ -484,6 +491,7 @@ fn test_admin_transfer_successful() {
         ExecuteMsg::UpdateConfig {
             admin: None,
             settlement_contract: Some(addrs.fake_settlement.to_string()),
+            ibc_hook_sender: None,
         },
     );
     assert!(result.is_ok());
@@ -658,7 +666,10 @@ fn test_lock_from_ibc_success() {
 
     // Send IBC funds (denom starts with "ibc/")
     let ibc_denom = "ibc/27394FB092D2ECCD56123C74F36E4C1F926001CEADA9CA97EA622B25F41E5EB2";
-    let info = message_info(&addrs.user, &[Coin::new(1_000_000u128, ibc_denom)]);
+    let info = message_info(
+        &addrs.ibc_hook_sender,
+        &[Coin::new(1_000_000u128, ibc_denom)],
+    );
 
     let result = execute(
         deps.as_mut(),
@@ -700,7 +711,7 @@ fn test_lock_from_ibc_requires_ibc_denom() {
     let (mut deps, env, addrs) = setup_contract();
 
     // ATTACK: Try to use LockFromIbc with non-IBC funds
-    let info = message_info(&addrs.user, &[Coin::new(1_000_000u128, "uatom")]);
+    let info = message_info(&addrs.ibc_hook_sender, &[Coin::new(1_000_000u128, "uatom")]);
 
     let result = execute(
         deps.as_mut(),
@@ -726,7 +737,10 @@ fn test_lock_from_ibc_replay_protection() {
     let ibc_denom = "ibc/27394FB092D2ECCD56123C74F36E4C1F926001CEADA9CA97EA622B25F41E5EB2";
 
     // First lock succeeds
-    let info = message_info(&addrs.user, &[Coin::new(1_000_000u128, ibc_denom)]);
+    let info = message_info(
+        &addrs.ibc_hook_sender,
+        &[Coin::new(1_000_000u128, ibc_denom)],
+    );
     execute(
         deps.as_mut(),
         env.clone(),
@@ -742,7 +756,10 @@ fn test_lock_from_ibc_replay_protection() {
     .unwrap();
 
     // ATTACK: Second lock with same intent_id must fail
-    let info = message_info(&addrs.attacker, &[Coin::new(2_000_000u128, ibc_denom)]);
+    let info = message_info(
+        &addrs.ibc_hook_sender,
+        &[Coin::new(2_000_000u128, ibc_denom)],
+    );
     let result = execute(
         deps.as_mut(),
         env,
@@ -765,7 +782,10 @@ fn test_cross_chain_refund_uses_ibc() {
     let (mut deps, mut env, addrs) = setup_contract();
 
     let ibc_denom = "ibc/27394FB092D2ECCD56123C74F36E4C1F926001CEADA9CA97EA622B25F41E5EB2";
-    let info = message_info(&addrs.user, &[Coin::new(1_000_000u128, ibc_denom)]);
+    let info = message_info(
+        &addrs.ibc_hook_sender,
+        &[Coin::new(1_000_000u128, ibc_denom)],
+    );
 
     // Lock via IBC
     execute(

@@ -139,7 +139,7 @@ fn execute_lock(
 
 #### Step 3-4: Settlement State Transitions
 
-**File**: `contracts/settlement/src/handlers.rs`
+**File**: `contracts/settlement/src/contract.rs`
 
 The settlement moves through states:
 - `Pending` → Intent created
@@ -148,7 +148,7 @@ The settlement moves through states:
 
 #### Step 5: Execute Settlement (IBC Transfer)
 
-**File**: `contracts/settlement/src/handlers.rs:442-503`
+**File**: `contracts/settlement/src/contract.rs`
 
 ```rust
 pub fn execute_settlement(
@@ -194,7 +194,7 @@ This happens automatically via the IBC module and relayers.
 
 #### Step 9: Handle IBC Acknowledgement (THE VERIFICATION STEP)
 
-**File**: `contracts/settlement/src/handlers.rs:576-679`
+**File**: `contracts/settlement/src/contract.rs`
 
 ```rust
 pub fn execute_handle_ibc_ack(
@@ -303,7 +303,7 @@ When both user and solver are on the same chain, you have two options:
 
 ### Optimized Same-Chain Flow (ExecuteSettlementLocal)
 
-**File**: `contracts/settlement/src/handlers.rs:519-619`
+**File**: `contracts/settlement/src/contract.rs`
 
 ```
 ┌─────────┐     ┌────────────┐     ┌─────────────┐
@@ -525,7 +525,7 @@ if env.block.time.seconds() >= escrow.expires_at {
 
 ### IBC Timeout
 
-**File**: `contracts/settlement/src/handlers.rs:505-574`
+**File**: `contracts/settlement/src/contract.rs`
 
 ```rust
 pub fn execute_handle_timeout(

@@ -38,6 +38,10 @@ This document describes a system that ensures **zero failed intents during upgra
 
 ## Core Components
 
+### Implementation Status
+
+The current codebase implements drain mode, inflight tracking, and an admin API for drain/upgrade control in the orchestrator. Checkpointing and version migration remain planned but are not yet wired in.
+
 ### 1. Drain Mode Manager
 
 Controls the flow of new intents during upgrade windows.

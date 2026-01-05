@@ -26,6 +26,12 @@ pub enum SettlementError {
     #[error("timeout configuration error: {0}")]
     TimeoutError(String),
 
+    #[error("constraint violation: {0}")]
+    ConstraintViolation(String),
+
+    #[error("route not found: {0} -> {1}")]
+    RouteNotFound(String, String),
+
     #[error("channel error: {0}")]
     ChannelError(#[from] ChannelError),
 }

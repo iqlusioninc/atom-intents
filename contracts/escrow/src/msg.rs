@@ -5,6 +5,8 @@ use cosmwasm_std::Uint128;
 pub struct InstantiateMsg {
     pub admin: String,
     pub settlement_contract: String,
+    /// IBC Hooks sender address authorized to call LockFromIbc
+    pub ibc_hook_sender: String,
 }
 
 #[cw_serde]
@@ -44,6 +46,7 @@ pub enum ExecuteMsg {
     UpdateConfig {
         admin: Option<String>,
         settlement_contract: Option<String>,
+        ibc_hook_sender: Option<String>,
     },
 }
 
@@ -71,6 +74,7 @@ pub enum QueryMsg {
 pub struct ConfigResponse {
     pub admin: String,
     pub settlement_contract: String,
+    pub ibc_hook_sender: String,
 }
 
 #[cw_serde]

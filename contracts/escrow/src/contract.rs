@@ -19,6 +19,7 @@ pub fn instantiate(
     let config = Config {
         admin: deps.api.addr_validate(&msg.admin)?,
         settlement_contract: deps.api.addr_validate(&msg.settlement_contract)?,
+        ibc_hook_sender: deps.api.addr_validate(&msg.ibc_hook_sender)?,
     };
     CONFIG.save(deps.storage, &config)?;
 
@@ -63,7 +64,8 @@ pub fn execute(
         ExecuteMsg::UpdateConfig {
             admin,
             settlement_contract,
-        } => execute_update_config(deps, info, admin, settlement_contract),
+            ibc_hook_sender,
+        } => execute_update_config(deps, info, admin, settlement_contract, ibc_hook_sender),
     }
 }
 
@@ -136,6 +138,11 @@ fn execute_lock_from_ibc(
     source_chain_id: String,
     source_channel: String,
 ) -> Result<Response, ContractError> {
+    let config = CONFIG.load(deps.storage)?;
+    if info.sender != config.ibc_hook_sender {
+        return Err(ContractError::Unauthorized {});
+    }
+
     // Verify intent doesn't already have an escrow (replay protection)
     if ESCROWS_BY_INTENT.has(deps.storage, &intent_id) {
         return Err(ContractError::IntentAlreadyEscrowed {
@@ -409,6 +416,7 @@ fn execute_update_config(
     info: MessageInfo,
     admin: Option<String>,
     settlement_contract: Option<String>,
+    ibc_hook_sender: Option<String>,
 ) -> Result<Response, ContractError> {
     let mut config = CONFIG.load(deps.storage)?;
 
@@ -421,6 +429,9 @@ fn execute_update_config(
     }
     if let Some(settlement_contract) = settlement_contract {
         config.settlement_contract = deps.api.addr_validate(&settlement_contract)?;
+    }
+    if let Some(ibc_hook_sender) = ibc_hook_sender {
+        config.ibc_hook_sender = deps.api.addr_validate(&ibc_hook_sender)?;
     }
 
     CONFIG.save(deps.storage, &config)?;
@@ -449,6 +460,7 @@ fn query_config(deps: Deps) -> StdResult<ConfigResponse> {
     Ok(ConfigResponse {
         admin: config.admin.to_string(),
         settlement_contract: config.settlement_contract.to_string(),
+        ibc_hook_sender: config.ibc_hook_sender.to_string(),
     })
 }
 
@@ -521,22 +533,26 @@ mod tests {
     struct TestAddrs {
         admin: Addr,
         settlement: Addr,
+        ibc_hook_sender: Addr,
         user: Addr,
         recipient: Addr,
         random_user: Addr,
         new_admin: Addr,
         new_settlement: Addr,
+        new_ibc_hook_sender: Addr,
     }
 
     fn test_addrs(api: &MockApi) -> TestAddrs {
         TestAddrs {
             admin: api.addr_make("admin"),
             settlement: api.addr_make("settlement"),
+            ibc_hook_sender: api.addr_make("ibc_hook_sender"),
             user: api.addr_make("user"),
             recipient: api.addr_make("recipient"),
             random_user: api.addr_make("random_user"),
             new_admin: api.addr_make("new_admin"),
             new_settlement: api.addr_make("new_settlement"),
+            new_ibc_hook_sender: api.addr_make("new_ibc_hook_sender"),
         }
     }
 
@@ -556,6 +572,7 @@ mod tests {
         let msg = InstantiateMsg {
             admin: addrs.admin.to_string(),
             settlement_contract: addrs.settlement.to_string(),
+            ibc_hook_sender: addrs.ibc_hook_sender.to_string(),
         };
         let info = message_info(&addrs.admin, &[]);
 
@@ -600,6 +617,7 @@ mod tests {
 
         assert_eq!(config.admin, addrs.admin.to_string());
         assert_eq!(config.settlement_contract, addrs.settlement.to_string());
+        assert_eq!(config.ibc_hook_sender, addrs.ibc_hook_sender.to_string());
     }
 
     // ==================== LOCK TESTS ====================
@@ -1332,6 +1350,7 @@ mod tests {
             ExecuteMsg::UpdateConfig {
                 admin: Some(addrs.new_admin.to_string()),
                 settlement_contract: Some(addrs.new_settlement.to_string()),
+                ibc_hook_sender: Some(addrs.new_ibc_hook_sender.to_string()),
             },
         )
         .unwrap();
@@ -1341,6 +1360,7 @@ mod tests {
 
         assert_eq!(config.admin, addrs.new_admin.to_string());
         assert_eq!(config.settlement_contract, addrs.new_settlement.to_string());
+        assert_eq!(config.ibc_hook_sender, addrs.new_ibc_hook_sender.to_string());
     }
 
     #[test]
@@ -1355,6 +1375,7 @@ mod tests {
             ExecuteMsg::UpdateConfig {
                 admin: Some(addrs.new_admin.to_string()),
                 settlement_contract: None,
+                ibc_hook_sender: None,
             },
         )
         .unwrap_err();
@@ -1374,6 +1395,7 @@ mod tests {
             ExecuteMsg::UpdateConfig {
                 admin: None,
                 settlement_contract: Some(addrs.new_settlement.to_string()),
+                ibc_hook_sender: None,
             },
         )
         .unwrap();
@@ -1383,6 +1405,7 @@ mod tests {
 
         assert_eq!(config.admin, addrs.admin.to_string()); // Unchanged
         assert_eq!(config.settlement_contract, addrs.new_settlement.to_string());
+        assert_eq!(config.ibc_hook_sender, addrs.ibc_hook_sender.to_string());
         // Changed
     }
 }

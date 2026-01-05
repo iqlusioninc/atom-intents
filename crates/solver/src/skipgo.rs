@@ -50,6 +50,7 @@ struct RouteRequest {
     allow_multi_tx: bool,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Deserialize)]
 struct RouteResponse {
     amount_in: String,
@@ -74,6 +75,7 @@ struct Operation {
     swap: Option<SwapOperation>,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Deserialize)]
 struct TransferOperation {
     port: String,
@@ -93,30 +95,35 @@ struct SwapOperation {
     chain_id: String,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Deserialize)]
 struct SwapAsset {
     denom: String,
     amount: Option<String>,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Deserialize, Clone)]
 struct SwapVenue {
     name: String,
     chain_id: String,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Deserialize)]
 struct AssetsResponse {
     chain_to_assets_map: std::collections::HashMap<String, ChainAssets>,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Deserialize)]
 struct ChainAssets {
     assets: Vec<Asset>,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Deserialize, Clone)]
-struct Asset {
+pub(crate) struct Asset {
     denom: String,
     chain_id: String,
     origin_denom: String,
@@ -218,7 +225,7 @@ impl DexClient for SkipGoClient {
         })
     }
 
-    async fn get_pools(&self, pair: &TradingPair) -> Result<Vec<PoolInfo>, DexError> {
+    async fn get_pools(&self, _pair: &TradingPair) -> Result<Vec<PoolInfo>, DexError> {
         // Skip Go doesn't expose pools directly - it aggregates across venues
         // Return empty since we rely on route queries for liquidity
         Ok(vec![])
@@ -272,7 +279,11 @@ impl SkipGoClient {
     }
 
     /// Get supported assets for a chain
-    pub async fn get_assets(&self, chain_id: &str) -> Result<Vec<Asset>, DexError> {
+    #[allow(dead_code)]
+    pub(crate) async fn get_assets(
+        &self,
+        chain_id: &str,
+    ) -> Result<Vec<Asset>, DexError> {
         let url = format!("{}/v2/fungible/assets?chain_id={}", self.base_url, chain_id);
 
         let response = self

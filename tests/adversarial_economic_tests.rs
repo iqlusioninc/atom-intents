@@ -93,7 +93,7 @@ fn test_frontrunning_defense_via_limit_price() {
     );
 
     assert!(result.is_ok());
-    let auction = result.unwrap();
+    let _auction = result.unwrap();
 
     // Both buyers should get fills proportionally (batch auction property)
     // This is the defense against front-running in intent systems
@@ -208,7 +208,7 @@ fn test_sandwich_attack_mitigation() {
     );
 
     assert!(result.is_ok());
-    let auction = result.unwrap();
+    let _auction = result.unwrap();
 
     // All trades execute at same clearing price
     // Attacker buys and sells at same price = no profit from sandwich
@@ -246,7 +246,8 @@ fn test_solver_fee_extraction_blocked_by_min_output() {
 
     let oracle = Decimal::from_str("10.0").unwrap();
 
-    let result = engine.run_batch_auction(pair, vec![user_sell], vec![exploitative_solver], oracle);
+    let _result =
+        engine.run_batch_auction(pair, vec![user_sell], vec![exploitative_solver], oracle);
 
     // Auction succeeds but solver's bad quote is rejected by limit price check
     // (if they try to fill at 1 USDC/ATOM when user wants 10+)

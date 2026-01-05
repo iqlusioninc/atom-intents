@@ -230,6 +230,7 @@ impl MatchingEngine {
     ///
     /// For buy orders: we need to invert oracle_price to compare with limit_price
     /// For sell orders: oracle_price must be >= limit_price (user wants at least limit)
+    #[allow(dead_code)]
     fn validate_limit_price(
         intent: &Intent,
         oracle_price: Decimal,

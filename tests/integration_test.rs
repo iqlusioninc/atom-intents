@@ -2,8 +2,8 @@ use async_trait::async_trait;
 use atom_intents_matching_engine::MatchingEngine;
 use atom_intents_settlement::{
     determine_flow, EscrowContract, EscrowLock, IbcFlowType, IbcResult, IbcTransferBuilder,
-    RelayerService, SettlementError, SolverVaultContract, TimeoutConfig, TwoPhaseSettlement,
-    VaultLock,
+    RelayerService, RouteRegistry, SettlementError, SolverVaultContract, TimeoutConfig,
+    TwoPhaseSettlement, VaultLock,
 };
 use atom_intents_solver::{DexRoutingSolver, MockDexClient, MockOracle, SolutionAggregator};
 use atom_intents_types::{
@@ -37,6 +37,7 @@ impl MockEscrowContract {
         }
     }
 
+    #[allow(dead_code)]
     fn set_should_fail(&self, fail: bool) {
         *self.should_fail.lock().unwrap() = fail;
     }
@@ -177,6 +178,8 @@ impl MockRelayer {
         *self.should_timeout.lock().unwrap() = timeout;
     }
 
+    #[allow(dead_code)]
+    #[allow(dead_code)]
     fn set_should_error(&self, error: bool) {
         *self.should_error.lock().unwrap() = error;
     }
@@ -299,7 +302,13 @@ async fn test_full_settlement_flow() {
     let relayer = MockRelayer::new();
     let config = TimeoutConfig::default();
 
-    let settlement_engine = TwoPhaseSettlement::new(escrow.clone(), vault.clone(), relayer, config);
+    let settlement_engine = TwoPhaseSettlement::new(
+        escrow.clone(),
+        vault.clone(),
+        relayer,
+        config,
+        RouteRegistry::with_mainnet_routes(),
+    );
 
     // Step 1: Create an intent
     let intent = make_test_intent(
@@ -308,7 +317,7 @@ async fn test_full_settlement_flow() {
         "cosmoshub-4",
         "uatom",
         10_000_000, // 10 ATOM
-        "noble-1",
+        "osmosis-1",
         "uusdc",
         100_000_000, // 100 USDC minimum
         "10.0",      // 10 USDC/ATOM limit price
@@ -491,7 +500,7 @@ async fn test_multi_pair_trading() {
         "cosmoshub-4",
         "uatom",
         10_000_000,
-        "noble-1",
+        "osmosis-1",
         "uusdc",
         100_000_000,
         "10.0",
@@ -565,7 +574,13 @@ async fn test_settlement_failure_and_recovery() {
     relayer.set_should_timeout(true);
 
     let config = TimeoutConfig::default();
-    let settlement_engine = TwoPhaseSettlement::new(escrow.clone(), vault.clone(), relayer, config);
+    let settlement_engine = TwoPhaseSettlement::new(
+        escrow.clone(),
+        vault.clone(),
+        relayer,
+        config,
+        RouteRegistry::with_mainnet_routes(),
+    );
 
     let intent = make_test_intent(
         "intent-timeout",
@@ -573,7 +588,7 @@ async fn test_settlement_failure_and_recovery() {
         "cosmoshub-4",
         "uatom",
         10_000_000,
-        "noble-1",
+        "osmosis-1",
         "uusdc",
         100_000_000,
         "10.0",
@@ -618,7 +633,13 @@ async fn test_solver_vault_lock_failure() {
     vault.set_should_fail(true);
 
     let config = TimeoutConfig::default();
-    let settlement_engine = TwoPhaseSettlement::new(escrow.clone(), vault.clone(), relayer, config);
+    let settlement_engine = TwoPhaseSettlement::new(
+        escrow.clone(),
+        vault.clone(),
+        relayer,
+        config,
+        RouteRegistry::with_mainnet_routes(),
+    );
 
     let intent = make_test_intent(
         "intent-fail",
@@ -626,7 +647,7 @@ async fn test_solver_vault_lock_failure() {
         "cosmoshub-4",
         "uatom",
         10_000_000,
-        "noble-1",
+        "osmosis-1",
         "uusdc",
         100_000_000,
         "10.0",
@@ -800,7 +821,7 @@ async fn test_multiple_solvers_aggregation() {
         "cosmoshub-4",
         "uatom",
         10_000_000,
-        "noble-1",
+        "osmosis-1",
         "uusdc",
         100_000_000,
         "10.0",
@@ -848,7 +869,7 @@ async fn test_partial_fill_settlement() {
         "cosmoshub-4",
         "uatom",
         100_000_000, // 100 ATOM
-        "noble-1",
+        "osmosis-1",
         "uusdc",
         1_000_000_000, // 1000 USDC minimum
         "10.0",
@@ -935,7 +956,7 @@ async fn test_complex_multi_step_flow() {
 
     // Step 2: Setup solvers
     let mock_dex = Arc::new(MockDexClient::new("osmosis", 100_000_000_000, 0.003));
-    let solver = Arc::new(DexRoutingSolver::new("solver-1", vec![mock_dex]));
+    let _solver = Arc::new(DexRoutingSolver::new("solver-1", vec![mock_dex]));
 
     // Get solver quotes
     let solver_quotes = vec![SolverQuote {
@@ -958,4 +979,124 @@ async fn test_complex_multi_step_flow() {
     // Step 4: Verify state after auction
     let clearing_price = Decimal::from_str(&auction_result.clearing_price).unwrap();
     assert!(clearing_price > Decimal::ZERO);
+}
+
+#[tokio::test]
+async fn test_settlement_rejects_max_hops_constraint() {
+    let mock_dex = Arc::new(MockDexClient::new("osmosis", 100_000_000_000, 0.003));
+    let solver = Arc::new(DexRoutingSolver::new("solver-1", vec![mock_dex]));
+    let oracle = Arc::new(MockOracle::new("test-oracle"));
+    let pair = TradingPair::new("uatom", "uusdc");
+    oracle
+        .set_price(
+            &pair,
+            Decimal::from_str("10.5").unwrap(),
+            Decimal::from_str("0.01").unwrap(),
+        )
+        .await
+        .unwrap();
+    let aggregator = SolutionAggregator::new(vec![solver.clone()], oracle);
+
+    let escrow = MockEscrowContract::new();
+    let vault = MockSolverVault::new();
+    let relayer = MockRelayer::new();
+    let config = TimeoutConfig::default();
+
+    let settlement_engine = TwoPhaseSettlement::new(
+        escrow,
+        vault,
+        relayer,
+        config,
+        RouteRegistry::with_mainnet_routes(),
+    );
+
+    let mut intent = make_test_intent(
+        "intent-max-hops",
+        "user1",
+        "neutron-1",
+        "uatom",
+        10_000_000,
+        "stride-1",
+        "uusdc",
+        100_000_000,
+        "10.0",
+    );
+    intent.constraints.max_hops = Some(1);
+
+    let fill_plan = aggregator
+        .aggregate(&intent, Uint128::zero())
+        .await
+        .unwrap();
+    let (solution, _) = &fill_plan.selected[0];
+
+    let result = settlement_engine
+        .execute(&intent, solution, current_time())
+        .await;
+
+    match result {
+        Err(SettlementError::ConstraintViolation(message)) => {
+            assert!(message.contains("hops"));
+        }
+        other => panic!("unexpected result: {:?}", other),
+    }
+}
+
+#[tokio::test]
+async fn test_settlement_rejects_max_bridge_time_constraint() {
+    let mock_dex = Arc::new(MockDexClient::new("osmosis", 100_000_000_000, 0.003));
+    let solver = Arc::new(DexRoutingSolver::new("solver-1", vec![mock_dex]));
+    let oracle = Arc::new(MockOracle::new("test-oracle"));
+    let pair = TradingPair::new("uatom", "uusdc");
+    oracle
+        .set_price(
+            &pair,
+            Decimal::from_str("10.5").unwrap(),
+            Decimal::from_str("0.01").unwrap(),
+        )
+        .await
+        .unwrap();
+    let aggregator = SolutionAggregator::new(vec![solver.clone()], oracle);
+
+    let escrow = MockEscrowContract::new();
+    let vault = MockSolverVault::new();
+    let relayer = MockRelayer::new();
+    let config = TimeoutConfig::default();
+
+    let settlement_engine = TwoPhaseSettlement::new(
+        escrow,
+        vault,
+        relayer,
+        config,
+        RouteRegistry::with_mainnet_routes(),
+    );
+
+    let mut intent = make_test_intent(
+        "intent-max-time",
+        "user1",
+        "neutron-1",
+        "uatom",
+        10_000_000,
+        "stride-1",
+        "uusdc",
+        100_000_000,
+        "10.0",
+    );
+    intent.constraints.max_bridge_time_secs = Some(10);
+
+    let fill_plan = aggregator
+        .aggregate(&intent, Uint128::zero())
+        .await
+        .unwrap();
+    let (solution, _) = &fill_plan.selected[0];
+
+    let result = settlement_engine
+        .execute(&intent, solution, current_time())
+        .await;
+
+    match result {
+        Err(SettlementError::ConstraintViolation(message)) => {
+            assert!(message.contains("max_bridge_time_secs"));
+        }
+        other => panic!("unexpected result: {:?}", other),
+    }
 }
