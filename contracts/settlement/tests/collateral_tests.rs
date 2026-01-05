@@ -1,13 +1,13 @@
-/// Tests for collateral management and bond pool functionality
-///
-/// These tests cover:
-/// - Collateral deposits and withdrawals
-/// - Per-settlement 1.5x collateral locking
-/// - Collateral unlocking on settlement completion
-/// - Slashing and liquidation for failed settlements
-/// - Multi-asset collateral (Native, LSM, Hydro)
-/// - Pool info caching for cross-chain assets
-/// - Liquidation auction mechanics
+//! Tests for collateral management and bond pool functionality
+//!
+//! These tests cover:
+//! - Collateral deposits and withdrawals
+//! - Per-settlement 1.5x collateral locking
+//! - Collateral unlocking on settlement completion
+//! - Slashing and liquidation for failed settlements
+//! - Multi-asset collateral (Native, LSM, Hydro)
+//! - Pool info caching for cross-chain assets
+//! - Liquidation auction mechanics
 
 use atom_intents_types::collateral::{AssetClass, CollateralAsset};
 use cosmwasm_std::testing::{message_info, mock_dependencies, mock_env, MockApi};
