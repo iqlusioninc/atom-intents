@@ -8,7 +8,8 @@
 /// If any of these tests fail, it means that field is NOT protected by the signature,
 /// which is a critical security vulnerability.
 use atom_intents_types::{
-    Asset, ExecutionConstraints, FillConfig, FillStrategy, Intent, OutputSpec,
+    Asset, AssetPreference, ExecutionConstraints, FillConfig, FillStrategy, Intent, OutputSpec,
+    SettlementPreference,
 };
 use cosmwasm_std::Uint128;
 
@@ -546,5 +547,200 @@ fn test_original_fields_still_protected_output_recipient() {
         signed1.signing_hash(),
         signed2.signing_hash(),
         "Regression: output.recipient should still be in signing hash"
+    );
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// PHASE 1 EUREKA INTEGRATION - NEW FIELD SECURITY TESTS
+// ═══════════════════════════════════════════════════════════════════════════
+
+#[test]
+fn test_signing_hash_changes_with_asset_preference() {
+    // Test NativeOnly vs AnyEquivalent
+    let mut unsigned1 = create_baseline_unsigned();
+    unsigned1.constraints.asset_preference = AssetPreference::NativeOnly;
+
+    let mut unsigned2 = create_baseline_unsigned();
+    unsigned2.constraints.asset_preference = AssetPreference::AnyEquivalent;
+
+    let signed1 = sign_intent(unsigned1);
+    let signed2 = sign_intent(unsigned2);
+
+    assert_ne!(
+        signed1.signing_hash(),
+        signed2.signing_hash(),
+        "SECURITY FAILURE: asset_preference not included in signing hash!"
+    );
+    assert_ne!(signed1.signature, signed2.signature);
+
+    // Verify tampering detection
+    let mut tampered = signed1.clone();
+    tampered.constraints.asset_preference = AssetPreference::AnyEquivalent;
+    assert!(
+        tampered.verify().is_err(),
+        "SECURITY FAILURE: Signature should be invalid after changing asset_preference!"
+    );
+}
+
+#[test]
+fn test_signing_hash_changes_with_asset_preference_bridged_denoms() {
+    // Test AcceptBridged with different allowed_denoms
+    let mut unsigned1 = create_baseline_unsigned();
+    unsigned1.constraints.asset_preference = AssetPreference::AcceptBridged {
+        allowed_denoms: vec!["eureka/usdc".to_string()],
+    };
+
+    let mut unsigned2 = create_baseline_unsigned();
+    unsigned2.constraints.asset_preference = AssetPreference::AcceptBridged {
+        allowed_denoms: vec!["eureka/usdt".to_string()],
+    };
+
+    let signed1 = sign_intent(unsigned1);
+    let signed2 = sign_intent(unsigned2);
+
+    assert_ne!(
+        signed1.signing_hash(),
+        signed2.signing_hash(),
+        "SECURITY FAILURE: asset_preference allowed_denoms not included in signing hash!"
+    );
+    assert_ne!(signed1.signature, signed2.signature);
+}
+
+#[test]
+fn test_signing_hash_changes_with_settlement_preference() {
+    let mut unsigned1 = create_baseline_unsigned();
+    unsigned1.constraints.settlement_preference = SettlementPreference::Cost;
+
+    let mut unsigned2 = create_baseline_unsigned();
+    unsigned2.constraints.settlement_preference = SettlementPreference::Latency;
+
+    let signed1 = sign_intent(unsigned1);
+    let signed2 = sign_intent(unsigned2);
+
+    assert_ne!(
+        signed1.signing_hash(),
+        signed2.signing_hash(),
+        "SECURITY FAILURE: settlement_preference not included in signing hash!"
+    );
+    assert_ne!(signed1.signature, signed2.signature);
+
+    // Verify tampering detection
+    let mut tampered = signed1.clone();
+    tampered.constraints.settlement_preference = SettlementPreference::Latency;
+    assert!(
+        tampered.verify().is_err(),
+        "SECURITY FAILURE: Signature should be invalid after changing settlement_preference!"
+    );
+}
+
+#[test]
+fn test_signing_hash_changes_with_max_settlement_secs() {
+    let mut unsigned1 = create_baseline_unsigned();
+    unsigned1.constraints.max_settlement_secs = Some(3600);
+
+    let mut unsigned2 = create_baseline_unsigned();
+    unsigned2.constraints.max_settlement_secs = Some(7200);
+
+    let signed1 = sign_intent(unsigned1);
+    let signed2 = sign_intent(unsigned2);
+
+    assert_ne!(
+        signed1.signing_hash(),
+        signed2.signing_hash(),
+        "SECURITY FAILURE: max_settlement_secs not included in signing hash!"
+    );
+    assert_ne!(signed1.signature, signed2.signature);
+}
+
+#[test]
+fn test_signing_hash_changes_with_max_settlement_secs_some_to_none() {
+    let mut unsigned1 = create_baseline_unsigned();
+    unsigned1.constraints.max_settlement_secs = Some(3600);
+
+    let mut unsigned2 = create_baseline_unsigned();
+    unsigned2.constraints.max_settlement_secs = None;
+
+    let signed1 = sign_intent(unsigned1);
+    let signed2 = sign_intent(unsigned2);
+
+    assert_ne!(
+        signed1.signing_hash(),
+        signed2.signing_hash(),
+        "SECURITY FAILURE: max_settlement_secs Some/None distinction not included in signing hash!"
+    );
+    assert_ne!(signed1.signature, signed2.signature);
+
+    // Verify tampering detection - attacker removes time constraint
+    let mut tampered = signed1.clone();
+    tampered.constraints.max_settlement_secs = None;
+    assert!(
+        tampered.verify().is_err(),
+        "SECURITY FAILURE: Signature should be invalid after removing max_settlement_secs!"
+    );
+}
+
+#[test]
+fn test_attack_scenario_change_asset_preference() {
+    // Scenario: User signs intent with NativeOnly (wants canonical assets only)
+    // Attacker tries to change to AnyEquivalent to deliver wrapped/bridged assets
+
+    let mut unsigned = create_baseline_unsigned();
+    unsigned.constraints.asset_preference = AssetPreference::NativeOnly;
+
+    let private_key = [0x42; 32];
+    let mut signed = unsigned.sign_with_key(&private_key).unwrap();
+
+    // Attacker modifies asset_preference
+    signed.constraints.asset_preference = AssetPreference::AnyEquivalent;
+
+    // Verification MUST fail
+    let result = signed.verify();
+    assert!(
+        result.is_err(),
+        "CRITICAL ATTACK VECTOR: Attacker changed asset_preference from NativeOnly to AnyEquivalent!"
+    );
+}
+
+#[test]
+fn test_attack_scenario_change_settlement_preference() {
+    // Scenario: User signs intent preferring Cost (cheapest path)
+    // Attacker changes to Latency which may cost more
+
+    let mut unsigned = create_baseline_unsigned();
+    unsigned.constraints.settlement_preference = SettlementPreference::Cost;
+
+    let private_key = [0x42; 32];
+    let mut signed = unsigned.sign_with_key(&private_key).unwrap();
+
+    // Attacker changes settlement preference
+    signed.constraints.settlement_preference = SettlementPreference::Latency;
+
+    // Verification MUST fail
+    let result = signed.verify();
+    assert!(
+        result.is_err(),
+        "CRITICAL ATTACK VECTOR: Attacker changed settlement_preference!"
+    );
+}
+
+#[test]
+fn test_attack_scenario_remove_max_settlement_secs() {
+    // Scenario: User signs intent with max_settlement_secs=3600 (1 hour max)
+    // Attacker removes constraint to allow indefinite settlement time
+
+    let mut unsigned = create_baseline_unsigned();
+    unsigned.constraints.max_settlement_secs = Some(3600);
+
+    let private_key = [0x42; 32];
+    let mut signed = unsigned.sign_with_key(&private_key).unwrap();
+
+    // Attacker removes the constraint
+    signed.constraints.max_settlement_secs = None;
+
+    // Verification MUST fail
+    let result = signed.verify();
+    assert!(
+        result.is_err(),
+        "CRITICAL ATTACK VECTOR: Attacker removed max_settlement_secs constraint!"
     );
 }

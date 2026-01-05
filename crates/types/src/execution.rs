@@ -2,38 +2,28 @@ use cosmwasm_schema::cw_serde;
 
 /// User preference for asset delivery
 #[cw_serde]
+#[derive(Default)]
 pub enum AssetPreference {
     /// Only accept canonical native denoms (uatom, Noble USDC, etc.)
+    #[default]
     NativeOnly,
 
     /// Accept bridged representations from specific sources
-    AcceptBridged {
-        allowed_denoms: Vec<String>,
-    },
+    AcceptBridged { allowed_denoms: Vec<String> },
 
     /// Accept any fungible equivalent
     AnyEquivalent,
 }
 
-impl Default for AssetPreference {
-    fn default() -> Self {
-        Self::NativeOnly
-    }
-}
-
 /// User preference for settlement path selection
 #[cw_serde]
+#[derive(Default)]
 pub enum SettlementPreference {
     /// Prefer cheapest settlement path (default)
+    #[default]
     Cost,
     /// Prefer fastest settlement path
     Latency,
-}
-
-impl Default for SettlementPreference {
-    fn default() -> Self {
-        Self::Cost
-    }
 }
 
 /// Constraints on how intent can be executed
@@ -199,6 +189,15 @@ mod tests {
     fn test_settlement_preference_latency() {
         let constraints = ExecutionConstraints::new(1000)
             .with_settlement_preference(SettlementPreference::Latency);
-        assert!(matches!(constraints.settlement_preference, SettlementPreference::Latency));
+        assert!(matches!(
+            constraints.settlement_preference,
+            SettlementPreference::Latency
+        ));
+    }
+
+    #[test]
+    fn test_max_settlement_secs() {
+        let constraints = ExecutionConstraints::new(1000).with_max_settlement_secs(3600);
+        assert_eq!(constraints.max_settlement_secs, Some(3600));
     }
 }
