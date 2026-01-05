@@ -28,8 +28,10 @@ spec:
         fsGroup: 1000
       containers:
         - name: go-fast
-          image: us-central1-docker.pkg.dev/atom-intents-demo-20251225/atom-intents/go-fast-simulator:v1.0.0
+          image: us-central1-docker.pkg.dev/atom-intents-demo-20251225/atom-intents/go-fast-simulator:v1.2.0
           imagePullPolicy: Always
+          command:
+            - "/app/go-fast-simulator"
           args:
             - "--mode"
             - "testnet"
