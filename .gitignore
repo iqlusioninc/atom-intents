@@ -29,3 +29,6 @@ wallet.key
 # Node.js
 **/node_modules/
 **/dist/
+
+# Git worktrees
+.worktrees/
