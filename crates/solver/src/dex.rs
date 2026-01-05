@@ -167,6 +167,7 @@ impl Solver for DexRoutingSolver {
             execution: ExecutionPlan::DexRoute { steps: best.route },
             valid_until: current_time + 5, // 5 second validity
             bond: self.calculate_bond(ctx.remaining),
+            metadata: None, // No cross-ecosystem metadata for DEX-only solutions
         })
     }
 

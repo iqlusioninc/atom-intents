@@ -16,8 +16,8 @@ pub use two_phase::*;
 
 // IBC module exports
 pub use ibc::{
-    build_wasm_memo, calculate_timeout, determine_flow, determine_flow_with_routing, IbcFlowType,
-    IbcTransferBuilder, PfmHop,
+    build_eureka_memo, build_wasm_memo, calculate_timeout, determine_flow,
+    determine_flow_with_routing, EurekaDirection, IbcFlowType, IbcTransferBuilder, PfmHop,
 };
 
 // Routing module exports (including its own build_pfm_memo)

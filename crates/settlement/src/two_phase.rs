@@ -198,7 +198,7 @@ where
 
         // Track with relayer for priority handling
         self.relayer
-            .track_settlement(&intent.id, &[output_transfer.clone()])
+            .track_settlement(&intent.id, std::slice::from_ref(&output_transfer))
             .await?;
 
         // Wait for IBC confirmation

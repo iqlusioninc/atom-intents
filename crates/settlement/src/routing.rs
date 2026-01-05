@@ -37,6 +37,15 @@ pub struct RouteHop {
     pub port_id: String,
 }
 
+impl Route {
+    /// Check if this route involves IBC Eureka (Ethereum connectivity)
+    pub fn is_eureka(&self) -> bool {
+        self.source_chain.starts_with("ethereum")
+            || self.dest_chain.starts_with("ethereum")
+            || self.hops.iter().any(|h| h.chain_id.starts_with("ethereum"))
+    }
+}
+
 impl RouteRegistry {
     /// Create an empty route registry
     pub fn new(channel_registry: ChannelRegistry) -> Self {
@@ -173,13 +182,61 @@ impl RouteRegistry {
             estimated_cost_units: 150000,
         });
 
+        // IBC Eureka routes for Ethereum connectivity
+
+        // Cosmos Hub -> Ethereum via Eureka
+        registry.add_route(Route {
+            source_chain: "cosmoshub-4".to_string(),
+            dest_chain: "ethereum-1".to_string(),
+            hops: vec![RouteHop {
+                chain_id: "ethereum-1".to_string(),
+                channel_id: "channel-eureka".to_string(),
+                port_id: "transfer".to_string(),
+            }],
+            estimated_time_seconds: 25,
+            estimated_cost_units: 3_000_000,
+        });
+
+        // Ethereum -> Cosmos Hub via Eureka
+        registry.add_route(Route {
+            source_chain: "ethereum-1".to_string(),
+            dest_chain: "cosmoshub-4".to_string(),
+            hops: vec![RouteHop {
+                chain_id: "cosmoshub-4".to_string(),
+                channel_id: "channel-eureka".to_string(),
+                port_id: "transfer".to_string(),
+            }],
+            estimated_time_seconds: 25,
+            estimated_cost_units: 3_000_000,
+        });
+
+        // Ethereum -> Osmosis via Eureka + IBC
+        registry.add_route(Route {
+            source_chain: "ethereum-1".to_string(),
+            dest_chain: "osmosis-1".to_string(),
+            hops: vec![
+                RouteHop {
+                    chain_id: "cosmoshub-4".to_string(),
+                    channel_id: "channel-eureka".to_string(),
+                    port_id: "transfer".to_string(),
+                },
+                RouteHop {
+                    chain_id: "osmosis-1".to_string(),
+                    channel_id: "channel-141".to_string(),
+                    port_id: "transfer".to_string(),
+                },
+            ],
+            estimated_time_seconds: 31,
+            estimated_cost_units: 3_050_000,
+        });
+
         registry
     }
 
     /// Add a route to the registry
     pub fn add_route(&mut self, route: Route) {
         let key = (route.source_chain.clone(), route.dest_chain.clone());
-        self.routes.entry(key).or_insert_with(Vec::new).push(route);
+        self.routes.entry(key).or_default().push(route);
     }
 
     /// Find the best route between two chains
@@ -661,5 +718,53 @@ mod tests {
 
         let route = route.unwrap();
         assert_eq!(route.hops[0].channel_id, "channel-999");
+    }
+
+    #[test]
+    fn test_eureka_route_to_ethereum() {
+        let registry = RouteRegistry::with_mainnet_routes();
+        let route = registry.find_route("cosmoshub-4", "ethereum-1");
+        assert!(route.is_some());
+        let route = route.unwrap();
+        assert_eq!(route.dest_chain, "ethereum-1");
+        assert!(route.estimated_time_seconds >= 15);
+    }
+
+    #[test]
+    fn test_eureka_route_from_ethereum() {
+        let registry = RouteRegistry::with_mainnet_routes();
+        let route = registry.find_route("ethereum-1", "cosmoshub-4");
+        assert!(route.is_some());
+        let route = route.unwrap();
+        assert_eq!(route.source_chain, "ethereum-1");
+    }
+
+    #[test]
+    fn test_is_eureka_route() {
+        let eureka_route = Route {
+            source_chain: "cosmoshub-4".to_string(),
+            dest_chain: "ethereum-1".to_string(),
+            hops: vec![RouteHop {
+                chain_id: "ethereum-1".to_string(),
+                channel_id: "channel-eureka".to_string(),
+                port_id: "transfer".to_string(),
+            }],
+            estimated_time_seconds: 25,
+            estimated_cost_units: 3_000_000,
+        };
+        assert!(eureka_route.is_eureka());
+
+        let cosmos_route = Route {
+            source_chain: "cosmoshub-4".to_string(),
+            dest_chain: "osmosis-1".to_string(),
+            hops: vec![RouteHop {
+                chain_id: "osmosis-1".to_string(),
+                channel_id: "channel-141".to_string(),
+                port_id: "transfer".to_string(),
+            }],
+            estimated_time_seconds: 6,
+            estimated_cost_units: 50000,
+        };
+        assert!(!cosmos_route.is_eureka());
     }
 }

@@ -220,12 +220,11 @@ where
             RecoveryAction::RetryWithDifferentSolver => {
                 // Unlock solver funds and refund user for retry
                 if let Some(ref solver_lock) = settlement.solver_lock {
-                    (&self.solver_vault)
-                        .unlock(solver_lock)
-                        .await
-                        .map_err(|e| RecoveryError::UnlockFailed {
+                    self.solver_vault.unlock(solver_lock).await.map_err(|e| {
+                        RecoveryError::UnlockFailed {
                             reason: e.to_string(),
-                        })?;
+                        }
+                    })?;
                 }
                 self.refund_user(settlement).await?;
 
@@ -283,11 +282,12 @@ where
                 "Refunding user"
             );
 
-            (&self.user_escrow).refund(user_lock).await.map_err(|e| {
-                RecoveryError::RefundFailed {
+            self.user_escrow
+                .refund(user_lock)
+                .await
+                .map_err(|e| RecoveryError::RefundFailed {
                     reason: e.to_string(),
-                }
-            })?;
+                })?;
 
             Ok(())
         } else {
@@ -323,12 +323,11 @@ where
             // In a real implementation, this would slash the bond rather than just unlock
             // For now, we'll just unlock to return funds
             // TODO: Implement actual slashing mechanism
-            (&self.solver_vault)
-                .unlock(solver_lock)
-                .await
-                .map_err(|e| RecoveryError::SlashFailed {
+            self.solver_vault.unlock(solver_lock).await.map_err(|e| {
+                RecoveryError::SlashFailed {
                     reason: e.to_string(),
-                })?;
+                }
+            })?;
         }
 
         Ok(())

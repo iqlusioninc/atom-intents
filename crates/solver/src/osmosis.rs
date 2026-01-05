@@ -33,6 +33,7 @@ impl OsmosisClient {
 }
 
 #[derive(Debug, Deserialize)]
+#[allow(dead_code)]
 struct SqsQuoteResponse {
     amount_in: SqsCoin,
     amount_out: String,
@@ -42,12 +43,14 @@ struct SqsQuoteResponse {
 }
 
 #[derive(Debug, Deserialize)]
+#[allow(dead_code)]
 struct SqsCoin {
     denom: String,
     amount: String,
 }
 
 #[derive(Debug, Deserialize)]
+#[allow(dead_code)]
 struct SqsRoute {
     pools: Vec<SqsPoolRoute>,
     #[serde(rename = "tokenInDenom")]
@@ -57,6 +60,7 @@ struct SqsRoute {
 }
 
 #[derive(Debug, Deserialize)]
+#[allow(dead_code)]
 struct SqsPoolRoute {
     id: u64,
     #[serde(rename = "tokenOutDenom")]
@@ -71,6 +75,7 @@ struct SqsPoolsResponse {
 }
 
 #[derive(Debug, Deserialize)]
+#[allow(dead_code)]
 struct SqsPool {
     #[serde(rename = "pool_id")]
     id: u64,

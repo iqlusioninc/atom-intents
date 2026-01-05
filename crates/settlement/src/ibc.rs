@@ -2,6 +2,15 @@ use atom_intents_types::IbcTransferInfo;
 use cosmwasm_std::Uint128;
 use serde::{Deserialize, Serialize};
 
+/// Direction of Eureka transfer
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub enum EurekaDirection {
+    /// Cosmos Hub -> Ethereum
+    CosmosToEthereum,
+    /// Ethereum -> Cosmos Hub
+    EthereumToCosmos,
+}
+
 /// IBC flow type for settlement
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum IbcFlowType {
@@ -16,6 +25,12 @@ pub enum IbcFlowType {
 
     /// IBC Hooks with Wasm execution (~10-15s)
     IbcHooksWasm { contract: String, msg: String },
+
+    /// IBC Eureka to/from Ethereum (~15-30s)
+    Eureka {
+        direction: EurekaDirection,
+        eth_address: Option<String>,
+    },
 }
 
 /// A hop in PFM routing
@@ -79,6 +94,21 @@ pub fn build_wasm_memo(
     memo.to_string()
 }
 
+/// Build Eureka-specific memo for IBC transfers
+pub fn build_eureka_memo(eth_recipient: &str, callback: Option<&str>) -> String {
+    let mut memo = serde_json::json!({
+        "eureka": {
+            "recipient": eth_recipient,
+        }
+    });
+
+    if let Some(cb) = callback {
+        memo["eureka"]["callback"] = serde_json::Value::String(cb.to_string());
+    }
+
+    memo.to_string()
+}
+
 /// Calculate appropriate IBC timeout based on flow type
 pub fn calculate_timeout(flow_type: &IbcFlowType, base_timeout_secs: u64) -> u64 {
     let multiplier = match flow_type {
@@ -86,6 +116,7 @@ pub fn calculate_timeout(flow_type: &IbcFlowType, base_timeout_secs: u64) -> u64
         IbcFlowType::DirectIbc { .. } => 2,
         IbcFlowType::MultiHopPfm { hops } => 2 + hops.len() as u64,
         IbcFlowType::IbcHooksWasm { .. } => 3,
+        IbcFlowType::Eureka { .. } => 5, // Eureka needs more time for ZK proof generation
     };
 
     base_timeout_secs * multiplier
@@ -653,5 +684,44 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn test_eureka_flow_type() {
+        let flow = IbcFlowType::Eureka {
+            direction: EurekaDirection::EthereumToCosmos,
+            eth_address: Some("0x1234567890abcdef".to_string()),
+        };
+
+        match flow {
+            IbcFlowType::Eureka {
+                direction,
+                eth_address,
+            } => {
+                assert!(matches!(direction, EurekaDirection::EthereumToCosmos));
+                assert_eq!(eth_address, Some("0x1234567890abcdef".to_string()));
+            }
+            _ => panic!("Expected Eureka flow type"),
+        }
+    }
+
+    #[test]
+    fn test_eureka_timeout_calculation() {
+        let flow = IbcFlowType::Eureka {
+            direction: EurekaDirection::CosmosToEthereum,
+            eth_address: None,
+        };
+
+        let timeout = calculate_timeout(&flow, 60);
+        assert_eq!(timeout, 300); // 5x multiplier for Eureka
+    }
+
+    #[test]
+    fn test_build_eureka_memo() {
+        let memo = build_eureka_memo("0xRecipient", Some("swap_callback"));
+        let parsed: serde_json::Value = serde_json::from_str(&memo).unwrap();
+
+        assert_eq!(parsed["eureka"]["recipient"], "0xRecipient");
+        assert_eq!(parsed["eureka"]["callback"], "swap_callback");
     }
 }

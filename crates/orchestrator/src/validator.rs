@@ -162,7 +162,7 @@ impl IntentValidator {
         }
 
         // Check limit price is valid
-        if let Err(_) = intent.output.limit_price.parse::<f64>() {
+        if intent.output.limit_price.parse::<f64>().is_err() {
             return Err(ValidationError::InvalidLimitPrice {
                 intent_id: intent.id.clone(),
                 limit_price: intent.output.limit_price.clone(),
@@ -232,7 +232,7 @@ impl IntentValidator {
         if intent.fill_config.allow_partial {
             // If partial fills allowed, check min_fill_pct is valid
             if let Ok(min_pct) = intent.fill_config.min_fill_pct.parse::<f64>() {
-                if min_pct < 0.0 || min_pct > 1.0 {
+                if !(0.0..=1.0).contains(&min_pct) {
                     return Err(ValidationError::InvalidFillPercentage {
                         intent_id: intent.id.clone(),
                         percentage: intent.fill_config.min_fill_pct.clone(),

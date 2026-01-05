@@ -100,7 +100,6 @@ pub enum ExecuteMsg {
     // ═══════════════════════════════════════════════════════════════════════════
     // ON-CHAIN ORDER FALLBACK
     // ═══════════════════════════════════════════════════════════════════════════
-
     /// Submit an order directly on-chain (censorship-resistant fallback)
     /// User sends funds with this message which are locked until fill/expiry
     SubmitOrder {
@@ -187,7 +186,6 @@ pub enum QueryMsg {
     // ═══════════════════════════════════════════════════════════════════════════
     // ON-CHAIN ORDER QUERIES
     // ═══════════════════════════════════════════════════════════════════════════
-
     /// Query a specific order by ID
     #[returns(OrderResponse)]
     Order { order_id: String },

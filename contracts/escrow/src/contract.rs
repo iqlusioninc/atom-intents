@@ -1,13 +1,15 @@
 use cosmwasm_std::{
-    entry_point, to_json_binary, BankMsg, Binary, Coin, CosmosMsg, Deps, DepsMut, Env,
-    IbcMsg, IbcTimeout, MessageInfo, Response, StdResult,
+    entry_point, to_json_binary, BankMsg, Binary, Coin, CosmosMsg, Deps, DepsMut, Env, IbcMsg,
+    IbcTimeout, MessageInfo, Response, StdResult,
 };
 
 use crate::error::ContractError;
 use crate::msg::{
     ConfigResponse, EscrowResponse, EscrowsResponse, ExecuteMsg, InstantiateMsg, QueryMsg,
 };
-use crate::state::{Config, Escrow, EscrowStatus, CONFIG, ESCROWS, ESCROWS_BY_INTENT, USER_ESCROWS};
+use crate::state::{
+    Config, Escrow, EscrowStatus, CONFIG, ESCROWS, ESCROWS_BY_INTENT, USER_ESCROWS,
+};
 
 #[entry_point]
 pub fn instantiate(
@@ -126,6 +128,7 @@ fn execute_lock(
 
 /// Lock funds via IBC Hooks - called when funds arrive from a cross-chain transfer
 /// The IBC Hooks middleware calls this with the transferred funds attached
+#[allow(clippy::too_many_arguments)]
 fn execute_lock_from_ibc(
     deps: DepsMut,
     _env: Env,
@@ -363,18 +366,20 @@ fn execute_retry_refund(
     }
 
     // Must be a cross-chain escrow
-    let source_channel = escrow
-        .source_channel
-        .as_ref()
-        .ok_or(ContractError::MissingCrossChainField {
-            field: "source_channel".to_string(),
-        })?;
-    let source_address = escrow
-        .owner_source_address
-        .as_ref()
-        .ok_or(ContractError::MissingCrossChainField {
-            field: "owner_source_address".to_string(),
-        })?;
+    let source_channel =
+        escrow
+            .source_channel
+            .as_ref()
+            .ok_or(ContractError::MissingCrossChainField {
+                field: "source_channel".to_string(),
+            })?;
+    let source_address =
+        escrow
+            .owner_source_address
+            .as_ref()
+            .ok_or(ContractError::MissingCrossChainField {
+                field: "owner_source_address".to_string(),
+            })?;
 
     // Update status to Refunding
     escrow.status = EscrowStatus::Refunding;

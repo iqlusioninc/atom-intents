@@ -293,7 +293,7 @@ impl FeeEstimator {
     pub fn estimate_ibc_fee(
         &self,
         source_chain: &str,
-        dest_chain: &str,
+        _dest_chain: &str,
         priority: FeePriority,
     ) -> Result<FeeEstimate, FeeError> {
         // Fee is paid on source chain
@@ -728,7 +728,7 @@ mod tests {
             .unwrap();
 
         // Should use the updated gas price
-        let expected_fee = 300_000u128 * 10_000_000_000u128 / 1_000_000_000_000u128; // 0.01 * 300_000
+        let _expected_fee = 300_000u128 * 10_000_000_000u128 / 1_000_000_000_000u128; // 0.01 * 300_000
         assert_eq!(fee.fee_amount, 3000);
     }
 

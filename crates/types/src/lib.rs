@@ -1,5 +1,6 @@
 pub mod asset;
 pub mod cancellation;
+pub mod ecosystem;
 pub mod execution;
 pub mod fill;
 pub mod intent;
@@ -9,6 +10,7 @@ pub mod verification;
 
 pub use asset::*;
 pub use cancellation::*;
+pub use ecosystem::*;
 pub use execution::*;
 pub use fill::*;
 pub use intent::*;

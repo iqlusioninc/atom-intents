@@ -41,7 +41,9 @@ pub struct Escrow {
 #[cw_serde]
 pub enum EscrowStatus {
     Locked,
-    Released { recipient: String },
+    Released {
+        recipient: String,
+    },
     Refunded,
     /// Refund initiated via IBC (waiting for ack)
     Refunding,

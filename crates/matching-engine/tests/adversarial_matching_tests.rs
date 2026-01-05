@@ -7,7 +7,6 @@
 /// - Self-trading/wash trading
 /// - Division by zero / overflow attacks
 /// - Oracle manipulation scenarios
-
 use atom_intents_matching_engine::MatchingEngine;
 use atom_intents_types::{
     Asset, ExecutionConstraints, FillConfig, FillStrategy, Intent, OutputSpec, SolverQuote,
@@ -84,7 +83,10 @@ fn test_oracle_manipulation_attack_buy_side_rejected() {
     // Oracle deviation = |10 - 15| / 15 = 33% > 10% threshold
     // Result: auction succeeds but no fills due to sanity check
     assert!(result.is_ok());
-    assert!(result.unwrap().internal_fills.is_empty(), "High oracle deviation prevents match");
+    assert!(
+        result.unwrap().internal_fills.is_empty(),
+        "High oracle deviation prevents match"
+    );
 }
 
 /// Test that oracle price outside user's limit is rejected (sell side)
@@ -113,7 +115,10 @@ fn test_oracle_manipulation_attack_sell_side_rejected() {
     // Oracle deviation = |11.525 - 10| / 10 = 15.25% > 10% threshold
     // Result: auction succeeds but no fills due to sanity check
     assert!(result.is_ok());
-    assert!(result.unwrap().internal_fills.is_empty(), "High oracle deviation prevents match");
+    assert!(
+        result.unwrap().internal_fills.is_empty(),
+        "High oracle deviation prevents match"
+    );
 }
 
 /// Test that zero oracle price is handled safely
@@ -138,7 +143,10 @@ fn test_zero_oracle_price_handled() {
     // Limits are compatible (10 >= 10), so they match at midpoint = 10
     // Result: auction succeeds with fills (oracle check bypassed when oracle is 0)
     assert!(result.is_ok());
-    assert!(!result.unwrap().internal_fills.is_empty(), "Zero oracle skips sanity check, limits match");
+    assert!(
+        !result.unwrap().internal_fills.is_empty(),
+        "Zero oracle skips sanity check, limits match"
+    );
 }
 
 /// Test that negative-like extreme oracle price is handled
@@ -163,7 +171,10 @@ fn test_extreme_oracle_price_handled() {
     // Oracle deviation = |10 - 999999999999| / 999999999999 ≈ 100% > 10%
     // Result: auction succeeds but no fills due to extreme sanity check failure
     assert!(result.is_ok());
-    assert!(result.unwrap().internal_fills.is_empty(), "Extreme oracle deviation prevents match");
+    assert!(
+        result.unwrap().internal_fills.is_empty(),
+        "Extreme oracle deviation prevents match"
+    );
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -191,7 +202,10 @@ fn test_zero_limit_price_buy_rejected() {
     // Code handles this by skipping the buy intent (buy_limit.is_zero() check)
     // Result: auction succeeds but no fills (buy skipped, no match)
     assert!(result.is_ok());
-    assert!(result.unwrap().internal_fills.is_empty(), "Zero limit buy skipped, no match");
+    assert!(
+        result.unwrap().internal_fills.is_empty(),
+        "Zero limit buy skipped, no match"
+    );
 }
 
 /// Test that limit price string parsing doesn't allow injection
@@ -202,7 +216,13 @@ fn test_malformed_limit_price_rejected() {
 
     // ATTACK: Malformed limit price
     let buy = make_test_intent(
-        "buy-1", "buyer", "uusdc", 10_000_000, "uatom", 1_000_000, "not_a_number",
+        "buy-1",
+        "buyer",
+        "uusdc",
+        10_000_000,
+        "uatom",
+        1_000_000,
+        "not_a_number",
     );
     let sell = make_test_intent(
         "sell-1", "seller", "uatom", 1_000_000, "uusdc", 10_000_000, "10.0",
@@ -253,10 +273,22 @@ fn test_large_amounts_no_overflow() {
     let large_amount: u128 = 1_000_000_000_000_000_000_000_000; // 10^24 (1M with 18 decimals)
 
     let buy = make_test_intent(
-        "buy-1", "buyer", "uusdc", large_amount, "uatom", large_amount / 10, "0.1",
+        "buy-1",
+        "buyer",
+        "uusdc",
+        large_amount,
+        "uatom",
+        large_amount / 10,
+        "0.1",
     );
     let sell = make_test_intent(
-        "sell-1", "seller", "uatom", large_amount / 10, "uusdc", large_amount, "10.0",
+        "sell-1",
+        "seller",
+        "uatom",
+        large_amount / 10,
+        "uusdc",
+        large_amount,
+        "10.0",
     );
 
     let oracle = Decimal::from_str("10.0").unwrap();
@@ -272,12 +304,8 @@ fn test_zero_amounts_handled() {
     let pair = TradingPair::new("uatom", "uusdc");
 
     // Zero input amount
-    let buy = make_test_intent(
-        "buy-1", "buyer", "uusdc", 0, "uatom", 0, "0.1",
-    );
-    let sell = make_test_intent(
-        "sell-1", "seller", "uatom", 0, "uusdc", 0, "10.0",
-    );
+    let buy = make_test_intent("buy-1", "buyer", "uusdc", 0, "uatom", 0, "0.1");
+    let sell = make_test_intent("sell-1", "seller", "uatom", 0, "uusdc", 0, "10.0");
 
     let oracle = Decimal::from_str("10.0").unwrap();
     let result = engine.run_batch_auction(pair, vec![buy, sell], vec![], oracle);
@@ -301,10 +329,22 @@ fn test_self_trading_same_user() {
 
     // ATTACK: Same user placing both buy and sell
     let buy = make_test_intent(
-        "buy-1", "cosmos1sameuser", "uusdc", 10_000_000, "uatom", 1_000_000, "0.1",
+        "buy-1",
+        "cosmos1sameuser",
+        "uusdc",
+        10_000_000,
+        "uatom",
+        1_000_000,
+        "0.1",
     );
     let sell = make_test_intent(
-        "sell-1", "cosmos1sameuser", "uatom", 1_000_000, "uusdc", 10_000_000, "10.0",
+        "sell-1",
+        "cosmos1sameuser",
+        "uatom",
+        1_000_000,
+        "uusdc",
+        10_000_000,
+        "10.0",
     );
 
     let oracle = Decimal::from_str("10.0").unwrap();

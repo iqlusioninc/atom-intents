@@ -300,9 +300,7 @@ fn validate_log_level(level: &str) -> std::result::Result<(), ValidationError> {
         "trace" | "debug" | "info" | "warn" | "error" => Ok(()),
         _ => Err(ValidationError::new(
             "network.log_level",
-            format!(
-                "invalid log level '{level}', must be one of: trace, debug, info, warn, error"
-            ),
+            format!("invalid log level '{level}', must be one of: trace, debug, info, warn, error"),
         )),
     }
 }

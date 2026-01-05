@@ -7,7 +7,6 @@
 /// - Funds stuck scenarios
 /// - Admin takeover attacks
 /// - Time manipulation attacks
-
 use cosmwasm_std::testing::{message_info, mock_dependencies, mock_env, MockApi};
 use cosmwasm_std::{from_json, Addr, Coin, Timestamp};
 
@@ -252,7 +251,10 @@ fn test_random_user_cannot_release() {
         },
     );
 
-    assert!(matches!(result.unwrap_err(), ContractError::Unauthorized {}));
+    assert!(matches!(
+        result.unwrap_err(),
+        ContractError::Unauthorized {}
+    ));
 }
 
 /// Test that fake settlement contract cannot release
@@ -273,7 +275,10 @@ fn test_fake_settlement_cannot_release() {
         },
     );
 
-    assert!(matches!(result.unwrap_err(), ContractError::Unauthorized {}));
+    assert!(matches!(
+        result.unwrap_err(),
+        ContractError::Unauthorized {}
+    ));
 }
 
 /// Test that random user cannot refund someone else's escrow
@@ -296,7 +301,10 @@ fn test_random_user_cannot_refund_others_escrow() {
         },
     );
 
-    assert!(matches!(result.unwrap_err(), ContractError::Unauthorized {}));
+    assert!(matches!(
+        result.unwrap_err(),
+        ContractError::Unauthorized {}
+    ));
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -320,7 +328,10 @@ fn test_early_refund_blocked() {
         },
     );
 
-    assert!(matches!(result.unwrap_err(), ContractError::EscrowNotExpired { .. }));
+    assert!(matches!(
+        result.unwrap_err(),
+        ContractError::EscrowNotExpired { .. }
+    ));
 }
 
 /// Test refund at exact expiration time succeeds (boundary condition)
@@ -420,7 +431,10 @@ fn test_non_admin_cannot_update_config() {
         },
     );
 
-    assert!(matches!(result.unwrap_err(), ContractError::Unauthorized {}));
+    assert!(matches!(
+        result.unwrap_err(),
+        ContractError::Unauthorized {}
+    ));
 }
 
 /// Test that attacker cannot change settlement contract
@@ -440,7 +454,10 @@ fn test_attacker_cannot_change_settlement_contract() {
         },
     );
 
-    assert!(matches!(result.unwrap_err(), ContractError::Unauthorized {}));
+    assert!(matches!(
+        result.unwrap_err(),
+        ContractError::Unauthorized {}
+    ));
 }
 
 /// Test admin transfer is successful
@@ -473,7 +490,10 @@ fn test_admin_transfer_successful() {
             settlement_contract: None,
         },
     );
-    assert!(matches!(result.unwrap_err(), ContractError::Unauthorized {}));
+    assert!(matches!(
+        result.unwrap_err(),
+        ContractError::Unauthorized {}
+    ));
 
     // New admin can update config
     let info = message_info(&new_admin, &[]);
@@ -574,7 +594,10 @@ fn test_duplicate_escrow_id_rejected() {
         },
     );
 
-    assert!(matches!(result.unwrap_err(), ContractError::EscrowAlreadyExists { .. }));
+    assert!(matches!(
+        result.unwrap_err(),
+        ContractError::EscrowAlreadyExists { .. }
+    ));
 }
 
 /// Test locking with multiple coins fails
@@ -601,7 +624,10 @@ fn test_lock_multiple_coins_fails() {
         },
     );
 
-    assert!(matches!(result.unwrap_err(), ContractError::InvalidFunds { .. }));
+    assert!(matches!(
+        result.unwrap_err(),
+        ContractError::InvalidFunds { .. }
+    ));
 }
 
 /// Test locking with no coins fails
@@ -622,7 +648,10 @@ fn test_lock_no_coins_fails() {
         },
     );
 
-    assert!(matches!(result.unwrap_err(), ContractError::InvalidFunds { .. }));
+    assert!(matches!(
+        result.unwrap_err(),
+        ContractError::InvalidFunds { .. }
+    ));
 }
 
 /// Test release to invalid address is handled
@@ -689,7 +718,10 @@ fn test_lock_from_ibc_success() {
     .unwrap();
 
     assert_eq!(escrow.owner_chain_id, Some("celestia".to_string()));
-    assert_eq!(escrow.owner_source_address, Some("celestia1user123abc".to_string()));
+    assert_eq!(
+        escrow.owner_source_address,
+        Some("celestia1user123abc".to_string())
+    );
     assert_eq!(escrow.source_channel, Some("channel-0".to_string()));
     assert!(escrow.denom.starts_with("ibc/"));
 }
@@ -756,7 +788,10 @@ fn test_lock_from_ibc_replay_protection() {
         },
     );
 
-    assert!(matches!(result.unwrap_err(), ContractError::IntentAlreadyEscrowed { .. }));
+    assert!(matches!(
+        result.unwrap_err(),
+        ContractError::IntentAlreadyEscrowed { .. }
+    ));
 }
 
 /// Test cross-chain escrow refund initiates IBC transfer
@@ -838,5 +873,8 @@ fn test_duplicate_intent_id_rejected() {
         },
     );
 
-    assert!(matches!(result.unwrap_err(), ContractError::IntentAlreadyEscrowed { .. }));
+    assert!(matches!(
+        result.unwrap_err(),
+        ContractError::IntentAlreadyEscrowed { .. }
+    ));
 }

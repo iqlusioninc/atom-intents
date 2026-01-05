@@ -74,7 +74,10 @@ pub fn query_settlements_by_solver(
     Ok(SettlementsResponse { settlements })
 }
 
-pub fn query_solver_reputation(deps: Deps, solver_id: String) -> StdResult<SolverReputationResponse> {
+pub fn query_solver_reputation(
+    deps: Deps,
+    solver_id: String,
+) -> StdResult<SolverReputationResponse> {
     let reputation = REPUTATIONS.load(deps.storage, &solver_id)?;
     Ok(reputation_to_response(reputation))
 }

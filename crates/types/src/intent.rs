@@ -172,6 +172,24 @@ impl Intent {
             hasher.update([0u8]); // None marker
         }
 
+        // asset_preference (serialize as JSON for deterministic representation)
+        let asset_pref_json = serde_json::to_string(&self.constraints.asset_preference)
+            .unwrap_or_else(|_| "null".to_string());
+        hasher.update(asset_pref_json.as_bytes());
+
+        // settlement_preference (serialize as JSON for deterministic representation)
+        let settlement_pref_json = serde_json::to_string(&self.constraints.settlement_preference)
+            .unwrap_or_else(|_| "null".to_string());
+        hasher.update(settlement_pref_json.as_bytes());
+
+        // max_settlement_secs (Option<u64>)
+        if let Some(settlement_secs) = self.constraints.max_settlement_secs {
+            hasher.update([1u8]); // Some marker
+            hasher.update(settlement_secs.to_le_bytes());
+        } else {
+            hasher.update([0u8]); // None marker
+        }
+
         hasher.finalize().into()
     }
 
@@ -361,6 +379,24 @@ impl UnsignedIntent {
         if let Some(bridge_time) = self.constraints.max_bridge_time_secs {
             hasher.update([1u8]); // Some marker
             hasher.update(bridge_time.to_le_bytes());
+        } else {
+            hasher.update([0u8]); // None marker
+        }
+
+        // asset_preference (serialize as JSON for deterministic representation)
+        let asset_pref_json = serde_json::to_string(&self.constraints.asset_preference)
+            .unwrap_or_else(|_| "null".to_string());
+        hasher.update(asset_pref_json.as_bytes());
+
+        // settlement_preference (serialize as JSON for deterministic representation)
+        let settlement_pref_json = serde_json::to_string(&self.constraints.settlement_preference)
+            .unwrap_or_else(|_| "null".to_string());
+        hasher.update(settlement_pref_json.as_bytes());
+
+        // max_settlement_secs (Option<u64>)
+        if let Some(settlement_secs) = self.constraints.max_settlement_secs {
+            hasher.update([1u8]); // Some marker
+            hasher.update(settlement_secs.to_le_bytes());
         } else {
             hasher.update([0u8]); // None marker
         }
