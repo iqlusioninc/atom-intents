@@ -1,3 +1,4 @@
+use atom_intents_types::collateral::{LiquidationIntent, LockedCollateral, SolverBondPool};
 use cosmwasm_schema::cw_serde;
 use cosmwasm_std::{Addr, Uint128};
 use cw_storage_plus::{Item, Map};
@@ -39,6 +40,8 @@ pub struct Settlement {
     pub created_at: u64,
     pub expires_at: u64,
     pub escrow_id: Option<String>,
+    /// Collateral locked for this settlement (1.5x fill value)
+    pub locked_collateral: Option<LockedCollateral>,
 }
 
 /// Minimum slash amount to prevent dust attacks (10 ATOM = 10_000_000 uatom)
@@ -154,3 +157,20 @@ pub struct MigrationInfo {
 }
 
 pub const MIGRATION_INFO: Item<MigrationInfo> = Item::new("migration_info");
+
+// ═══════════════════════════════════════════════════════════════════════════
+// BOND POOL STATE
+// ═══════════════════════════════════════════════════════════════════════════
+
+/// Solver bond pools - multi-asset collateral for per-settlement locking
+pub const BOND_POOLS: Map<&str, SolverBondPool> = Map::new("bond_pools");
+
+/// Cached pool info for cross-chain Hydro vaults (keyed by share_denom)
+pub const CACHED_POOL_INFO: Map<&str, atom_intents_types::collateral::CachedPoolInfo> =
+    Map::new("cached_pool_info");
+
+/// Liquidation intents (keyed by intent ID)
+pub const LIQUIDATION_INTENTS: Map<&str, LiquidationIntent> = Map::new("liquidation_intents");
+
+/// Index: settlement_id -> liquidation_intent_id (for lookups)
+pub const SETTLEMENT_LIQUIDATIONS: Map<&str, String> = Map::new("settlement_liquidations");

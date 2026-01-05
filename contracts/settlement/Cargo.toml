@@ -19,5 +19,6 @@ cosmwasm-schema = { workspace = true }
 cw-storage-plus = { workspace = true }
 serde = { workspace = true }
 thiserror = { workspace = true }
+atom-intents-types = { path = "../../crates/types" }
 
 [dev-dependencies]

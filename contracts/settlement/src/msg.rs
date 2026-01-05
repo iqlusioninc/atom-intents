@@ -1,3 +1,4 @@
+use atom_intents_types::collateral::{AssetClass, CollateralAsset, LiquidationStatus};
 use cosmwasm_schema::{cw_serde, QueryResponses};
 use cosmwasm_std::Uint128;
 
@@ -96,6 +97,51 @@ pub enum ExecuteMsg {
         start_after: Option<String>,
         limit: Option<u32>,
     },
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    // COLLATERAL MANAGEMENT
+    // ═══════════════════════════════════════════════════════════════════════════
+
+    /// Deposit collateral to solver's bond pool
+    /// Caller must send the collateral tokens with this message
+    DepositCollateral {
+        solver_id: String,
+        /// The type of asset being deposited (for validation)
+        asset: CollateralAsset,
+    },
+
+    /// Withdraw unlocked collateral from solver's bond pool
+    WithdrawCollateral {
+        solver_id: String,
+        /// The asset to withdraw
+        asset: CollateralAsset,
+        /// Amount to withdraw
+        amount: Uint128,
+    },
+
+    /// Update cached pool info for cross-chain Hydro vaults (via ICQ callback)
+    UpdatePoolInfo {
+        share_denom: String,
+        total_shares_issued: Uint128,
+        total_pool_value: Uint128,
+    },
+
+    /// Submit a bid on a liquidation intent
+    BidOnLiquidation {
+        liquidation_id: String,
+        /// ATOM amount the solver will deliver (must meet min_output_amount)
+        offered_output: Uint128,
+    },
+
+    /// Execute a liquidation (settle the winning bid)
+    /// Caller must send the offered ATOM amount with this message
+    ExecuteLiquidation { liquidation_id: String },
+
+    /// Cancel an expired liquidation intent (admin only)
+    CancelLiquidation {
+        liquidation_id: String,
+        reason: String,
+    },
 }
 
 #[cw_serde]
@@ -145,6 +191,37 @@ pub enum QueryMsg {
         start_after: Option<String>,
         limit: Option<u32>,
     },
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    // COLLATERAL QUERIES
+    // ═══════════════════════════════════════════════════════════════════════════
+
+    /// Query a solver's bond pool
+    #[returns(BondPoolResponse)]
+    BondPool { solver_id: String },
+
+    /// Query total collateral value for a solver (after haircuts)
+    #[returns(CollateralValueResponse)]
+    CollateralValue { solver_id: String },
+
+    /// Query available (unlocked) collateral for a solver
+    #[returns(AvailableCollateralResponse)]
+    AvailableCollateral { solver_id: String },
+
+    /// Query a liquidation intent
+    #[returns(LiquidationResponse)]
+    Liquidation { liquidation_id: String },
+
+    /// Query pending liquidations
+    #[returns(LiquidationsResponse)]
+    PendingLiquidations {
+        start_after: Option<String>,
+        limit: Option<u32>,
+    },
+
+    /// Query cached pool info for a Hydro vault
+    #[returns(PoolInfoResponse)]
+    CachedPoolInfo { share_denom: String },
 }
 
 #[cw_serde]
@@ -287,4 +364,94 @@ pub struct InflightSettlementsResponse {
     pub settlement_ids: Vec<String>,
     /// Total count
     pub count: u64,
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// COLLATERAL RESPONSE TYPES
+// ═══════════════════════════════════════════════════════════════════════════
+
+/// Single collateral deposit info
+#[cw_serde]
+pub struct CollateralDepositInfo {
+    pub asset: CollateralAsset,
+    pub asset_class: AssetClass,
+    pub total_amount: Uint128,
+    pub locked_amount: Uint128,
+    pub available_amount: Uint128,
+    pub haircut_bps: u64,
+}
+
+/// Response for bond pool query
+#[cw_serde]
+pub struct BondPoolResponse {
+    pub solver_id: String,
+    pub deposits: Vec<CollateralDepositInfo>,
+}
+
+/// Response for total collateral value query
+#[cw_serde]
+pub struct CollateralValueResponse {
+    pub solver_id: String,
+    /// Total value after haircuts (in uatom equivalent)
+    pub total_value: Uint128,
+    /// Breakdown by asset class
+    pub by_class: Vec<AssetClassValue>,
+}
+
+/// Value by asset class
+#[cw_serde]
+pub struct AssetClassValue {
+    pub class: AssetClass,
+    pub raw_value: Uint128,
+    pub haircut_bps: u64,
+    pub value_after_haircut: Uint128,
+}
+
+/// Response for available collateral query
+#[cw_serde]
+pub struct AvailableCollateralResponse {
+    pub solver_id: String,
+    /// Total available value after haircuts
+    pub available_value: Uint128,
+    /// Can the solver take on more settlements?
+    pub can_accept_settlements: bool,
+}
+
+/// Response for liquidation query
+#[cw_serde]
+pub struct LiquidationResponse {
+    pub id: String,
+    pub source_settlement_id: String,
+    pub slashed_solver: String,
+    pub collateral_asset: CollateralAsset,
+    pub collateral_amount: Uint128,
+    pub min_output_amount: Uint128,
+    pub beneficiary: String,
+    pub timeout: u64,
+    pub status: LiquidationStatus,
+    pub winning_bid: Option<BidInfo>,
+}
+
+/// Bid information
+#[cw_serde]
+pub struct BidInfo {
+    pub solver: String,
+    pub offered_output: Uint128,
+    pub submitted_at: u64,
+}
+
+/// Response for pending liquidations query
+#[cw_serde]
+pub struct LiquidationsResponse {
+    pub liquidations: Vec<LiquidationResponse>,
+}
+
+/// Response for cached pool info query
+#[cw_serde]
+pub struct PoolInfoResponse {
+    pub share_denom: String,
+    pub total_shares_issued: Uint128,
+    pub total_pool_value: Uint128,
+    pub updated_at: u64,
+    pub is_stale: bool,
 }

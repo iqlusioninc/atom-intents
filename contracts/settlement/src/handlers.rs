@@ -1,11 +1,15 @@
+use atom_intents_types::collateral::CollateralAsset;
 use cosmwasm_std::{
     to_json_binary, BankMsg, Coin, DepsMut, Env, IbcMsg, IbcTimeout, MessageInfo, Response,
     Uint128, WasmMsg,
 };
 
+use crate::collateral_handlers::{
+    create_liquidation_intent, lock_collateral_for_settlement, unlock_collateral_for_settlement,
+};
 use crate::error::ContractError;
 use crate::state::{
-    RegisteredSolver, Settlement, SettlementStatus, SolverReputation, CONFIG,
+    RegisteredSolver, Settlement, SettlementStatus, SolverReputation, BOND_POOLS, CONFIG,
     INTENT_SETTLEMENTS, REPUTATIONS, SETTLEMENTS, SOLVERS,
 };
 
@@ -129,10 +133,19 @@ pub fn execute_create_settlement(
         return Err(ContractError::SettlementAlreadyExists { id: settlement_id });
     }
 
+    // Lock collateral for this settlement (1.5x the fill value)
+    // Use user_input_amount as the fill value (what the user is sending)
+    let locked_collateral = lock_collateral_for_settlement(
+        deps.storage,
+        &solver_id,
+        user_input_amount,
+        None, // No preferred asset class - use default priority
+    )?;
+
     let settlement = Settlement {
         id: settlement_id.clone(),
         intent_id: intent_id.clone(),
-        solver_id,
+        solver_id: solver_id.clone(),
         user: deps.api.addr_validate(&user)?,
         user_input_amount,
         user_input_denom,
@@ -142,6 +155,7 @@ pub fn execute_create_settlement(
         created_at: env.block.time.seconds(),
         expires_at,
         escrow_id: None,
+        locked_collateral: Some(locked_collateral.clone()),
     };
 
     SETTLEMENTS.save(deps.storage, &settlement_id, &settlement)?;
@@ -150,7 +164,10 @@ pub fn execute_create_settlement(
     Ok(Response::new()
         .add_attribute("action", "create_settlement")
         .add_attribute("settlement_id", settlement_id)
-        .add_attribute("intent_id", intent_id))
+        .add_attribute("intent_id", intent_id)
+        .add_attribute("solver_id", solver_id)
+        .add_attribute("locked_collateral_amount", locked_collateral.amount)
+        .add_attribute("locked_collateral_value", locked_collateral.value))
 }
 
 pub fn execute_mark_user_locked(
@@ -285,12 +302,18 @@ pub fn execute_mark_completed(
         });
     }
 
+    // Unlock collateral on successful completion
+    if let Some(ref locked) = settlement.locked_collateral {
+        unlock_collateral_for_settlement(deps.storage, &settlement.solver_id, locked)?;
+    }
+
     // Update solver stats
     let mut solver = SOLVERS.load(deps.storage, &settlement.solver_id)?;
     solver.total_settlements += 1;
     SOLVERS.save(deps.storage, &settlement.solver_id, &solver)?;
 
     settlement.status = target_status;
+    settlement.locked_collateral = None; // Clear after unlocking
     SETTLEMENTS.save(deps.storage, &settlement_id, &settlement)?;
 
     Ok(Response::new()
@@ -344,6 +367,7 @@ pub fn execute_mark_failed(
 
 pub fn execute_slash_solver(
     deps: DepsMut,
+    env: Env,
     info: MessageInfo,
     solver_id: String,
     settlement_id: String,
@@ -381,30 +405,93 @@ pub fn execute_slash_solver(
         });
     }
 
-    // Calculate slash amount (base_slash_bps of settlement value)
-    let calculated_slash = settlement.user_input_amount * Uint128::from(config.base_slash_bps)
-        / Uint128::from(10000u64);
+    let mut response = Response::new()
+        .add_attribute("action", "slash_solver")
+        .add_attribute("solver_id", solver_id.clone())
+        .add_attribute("settlement_id", settlement_id.clone());
 
-    // SECURITY FIX (1.7): Apply minimum slash threshold to prevent dust attacks
-    let slash_with_minimum = std::cmp::max(calculated_slash, Uint128::new(MIN_SLASH_AMOUNT));
+    // Handle slashing based on whether there's locked collateral (new per-settlement system)
+    // or the old fixed bond system
+    let actual_slash = if let Some(ref locked) = settlement.locked_collateral {
+        // NEW: Per-settlement collateral system
+        // Seize the locked collateral
+        let slash_amount = locked.amount;
+        let slash_value = locked.value;
 
-    // Cap at solver's bond amount
-    let actual_slash = std::cmp::min(slash_with_minimum, solver.bond_amount);
+        // Check if this is native ATOM (can slash directly) or non-native (needs liquidation)
+        match &locked.asset {
+            CollateralAsset::Native { denom } if denom == "uatom" => {
+                // Native ATOM: Remove from bond pool and distribute directly
+                if let Some(mut pool) = BOND_POOLS.may_load(deps.storage, &solver_id)? {
+                    if let Some(deposit) = pool.find_by_asset_mut(&locked.asset) {
+                        // Reduce total amount (collateral is already locked, so reduce both)
+                        deposit.amount = deposit.amount.saturating_sub(slash_amount);
+                        deposit.locked_amount = deposit.locked_amount.saturating_sub(slash_amount);
+                    }
+                    BOND_POOLS.save(deps.storage, &solver_id, &pool)?;
+                }
 
-    solver.bond_amount = solver.bond_amount.saturating_sub(actual_slash);
-    SOLVERS.save(deps.storage, &solver_id, &solver)?;
+                // TODO: Transfer slashed ATOM to treasury or burn
+                response = response
+                    .add_attribute("slash_type", "native")
+                    .add_attribute("slash_amount", slash_amount);
+            }
+            _ => {
+                // Non-native (LSM shares, Hydro vault): Create liquidation intent
+                // Seize the collateral from the bond pool
+                if let Some(mut pool) = BOND_POOLS.may_load(deps.storage, &solver_id)? {
+                    if let Some(deposit) = pool.find_by_asset_mut(&locked.asset) {
+                        deposit.amount = deposit.amount.saturating_sub(slash_amount);
+                        deposit.locked_amount = deposit.locked_amount.saturating_sub(slash_amount);
+                    }
+                    BOND_POOLS.save(deps.storage, &solver_id, &pool)?;
+                }
+
+                // Create liquidation intent
+                let liquidation_id = create_liquidation_intent(
+                    deps.storage,
+                    env.block.time.seconds(),
+                    &settlement,
+                    locked,
+                    &solver_id,
+                )?;
+
+                response = response
+                    .add_attribute("slash_type", "liquidation")
+                    .add_attribute("liquidation_id", liquidation_id)
+                    .add_attribute("collateral_amount", slash_amount);
+            }
+        }
+
+        slash_value
+    } else {
+        // LEGACY: Fixed bond system (for backwards compatibility)
+        // Calculate slash amount (base_slash_bps of settlement value)
+        let calculated_slash = settlement.user_input_amount * Uint128::from(config.base_slash_bps)
+            / Uint128::from(10000u64);
+
+        // SECURITY FIX (1.7): Apply minimum slash threshold to prevent dust attacks
+        let slash_with_minimum = std::cmp::max(calculated_slash, Uint128::new(MIN_SLASH_AMOUNT));
+
+        // Cap at solver's bond amount
+        let actual_slash = std::cmp::min(slash_with_minimum, solver.bond_amount);
+
+        solver.bond_amount = solver.bond_amount.saturating_sub(actual_slash);
+        SOLVERS.save(deps.storage, &solver_id, &solver)?;
+
+        response = response.add_attribute("slash_type", "legacy_bond");
+
+        actual_slash
+    };
 
     // Update settlement status
     settlement.status = SettlementStatus::Slashed {
         amount: actual_slash,
     };
+    settlement.locked_collateral = None; // Clear after slashing
     SETTLEMENTS.save(deps.storage, &settlement_id, &settlement)?;
 
-    Ok(Response::new()
-        .add_attribute("action", "slash_solver")
-        .add_attribute("solver_id", solver_id)
-        .add_attribute("settlement_id", settlement_id)
-        .add_attribute("slash_amount", actual_slash))
+    Ok(response.add_attribute("slash_amount", actual_slash))
 }
 
 pub fn execute_update_config(

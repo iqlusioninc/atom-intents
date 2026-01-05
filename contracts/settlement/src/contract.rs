@@ -3,6 +3,10 @@ use cosmwasm_std::{
     StdResult,
 };
 
+use crate::collateral_handlers::{
+    execute_bid_on_liquidation, execute_cancel_liquidation, execute_deposit_collateral,
+    execute_liquidation, execute_update_pool_info, execute_withdraw_collateral,
+};
 use crate::error::ContractError;
 use crate::handlers::{
     execute_create_settlement, execute_decay_reputation, execute_deregister_solver,
@@ -16,9 +20,10 @@ use crate::msg::{
     MigrationInfoResponse, QueryMsg, StuckSettlementAction,
 };
 use crate::queries::{
-    query_config, query_settlement, query_settlement_by_intent, query_settlements_by_solver,
-    query_solver, query_solver_reputation, query_solvers, query_solvers_by_reputation,
-    query_top_solvers,
+    query_available_collateral, query_bond_pool, query_cached_pool_info, query_collateral_value,
+    query_config, query_liquidation, query_pending_liquidations, query_settlement,
+    query_settlement_by_intent, query_settlements_by_solver, query_solver, query_solver_reputation,
+    query_solvers, query_solvers_by_reputation, query_top_solvers,
 };
 use crate::state::{
     Config, MigrationInfo, SettlementStatus, CONFIG, MIGRATION_INFO, SETTLEMENTS,
@@ -100,7 +105,7 @@ pub fn execute(
         ExecuteMsg::SlashSolver {
             solver_id,
             settlement_id,
-        } => execute_slash_solver(deps, info, solver_id, settlement_id),
+        } => execute_slash_solver(deps, env, info, solver_id, settlement_id),
         ExecuteMsg::UpdateConfig {
             admin,
             escrow_contract,
@@ -134,11 +139,37 @@ pub fn execute(
         ExecuteMsg::DecayReputation { start_after, limit } => {
             execute_decay_reputation(deps, env, start_after, limit)
         }
+
+        // Collateral management
+        ExecuteMsg::DepositCollateral { solver_id, asset } => {
+            execute_deposit_collateral(deps, env, info, solver_id, asset)
+        }
+        ExecuteMsg::WithdrawCollateral {
+            solver_id,
+            asset,
+            amount,
+        } => execute_withdraw_collateral(deps, info, solver_id, asset, amount),
+        ExecuteMsg::UpdatePoolInfo {
+            share_denom,
+            total_shares_issued,
+            total_pool_value,
+        } => execute_update_pool_info(deps, env, info, share_denom, total_shares_issued, total_pool_value),
+        ExecuteMsg::BidOnLiquidation {
+            liquidation_id,
+            offered_output,
+        } => execute_bid_on_liquidation(deps, env, info, liquidation_id, offered_output),
+        ExecuteMsg::ExecuteLiquidation { liquidation_id } => {
+            execute_liquidation(deps, env, info, liquidation_id)
+        }
+        ExecuteMsg::CancelLiquidation {
+            liquidation_id,
+            reason,
+        } => execute_cancel_liquidation(deps, info, liquidation_id, reason),
     }
 }
 
 #[entry_point]
-pub fn query(deps: Deps, _env: Env, msg: QueryMsg) -> StdResult<Binary> {
+pub fn query(deps: Deps, env: Env, msg: QueryMsg) -> StdResult<Binary> {
     match msg {
         QueryMsg::Config {} => to_json_binary(&query_config(deps)?),
         QueryMsg::Solver { solver_id } => to_json_binary(&query_solver(deps, solver_id)?),
@@ -171,6 +202,24 @@ pub fn query(deps: Deps, _env: Env, msg: QueryMsg) -> StdResult<Binary> {
         QueryMsg::MigrationInfo {} => to_json_binary(&query_migration_info(deps)?),
         QueryMsg::InflightSettlements { start_after, limit } => {
             to_json_binary(&query_inflight_settlements(deps, start_after, limit)?)
+        }
+
+        // Collateral queries
+        QueryMsg::BondPool { solver_id } => to_json_binary(&query_bond_pool(deps, solver_id)?),
+        QueryMsg::CollateralValue { solver_id } => {
+            to_json_binary(&query_collateral_value(deps, env, solver_id)?)
+        }
+        QueryMsg::AvailableCollateral { solver_id } => {
+            to_json_binary(&query_available_collateral(deps, env, solver_id)?)
+        }
+        QueryMsg::Liquidation { liquidation_id } => {
+            to_json_binary(&query_liquidation(deps, liquidation_id)?)
+        }
+        QueryMsg::PendingLiquidations { start_after, limit } => {
+            to_json_binary(&query_pending_liquidations(deps, start_after, limit)?)
+        }
+        QueryMsg::CachedPoolInfo { share_denom } => {
+            to_json_binary(&query_cached_pool_info(deps, env, share_denom)?)
         }
     }
 }

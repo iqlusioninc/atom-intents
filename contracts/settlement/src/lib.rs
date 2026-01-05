@@ -1,5 +1,6 @@
 #[cfg(not(feature = "library"))]
 pub mod contract;
+pub mod collateral_handlers;
 pub mod error;
 pub mod handlers;
 pub mod helpers;
