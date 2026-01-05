@@ -5,7 +5,8 @@ use cosmwasm_std::{
 
 use crate::error::ContractError;
 use crate::msg::{
-    ConfigResponse, EscrowResponse, EscrowsResponse, ExecuteMsg, InstantiateMsg, QueryMsg,
+    ConfigResponse, EscrowResponse, EscrowsResponse, EthereumEscrowStatusResponse, ExecuteMsg,
+    InstantiateMsg, QueryMsg,
 };
 use crate::state::{
     Config, Escrow, EscrowStatus, CONFIG, ESCROWS, ESCROWS_BY_INTENT, USER_ESCROWS,
@@ -66,6 +67,28 @@ pub fn execute(
             admin,
             settlement_contract,
         } => execute_update_config(deps, info, admin, settlement_contract),
+
+        // Ethereum escrow messages (to be implemented)
+        ExecuteMsg::RegisterEthereumEscrowIntent { .. } => {
+            Err(ContractError::NotImplemented {
+                feature: "RegisterEthereumEscrowIntent".to_string(),
+            })
+        }
+        ExecuteMsg::NotifyEurekaPacketReceived { .. } => Err(ContractError::NotImplemented {
+            feature: "NotifyEurekaPacketReceived".to_string(),
+        }),
+        ExecuteMsg::NotifyEurekaFinalized { .. } => Err(ContractError::NotImplemented {
+            feature: "NotifyEurekaFinalized".to_string(),
+        }),
+        ExecuteMsg::FrontSettlement { .. } => Err(ContractError::NotImplemented {
+            feature: "FrontSettlement".to_string(),
+        }),
+        ExecuteMsg::ClaimEurekaEscrow { .. } => Err(ContractError::NotImplemented {
+            feature: "ClaimEurekaEscrow".to_string(),
+        }),
+        ExecuteMsg::HandleEurekaEscrowFailure { .. } => Err(ContractError::NotImplemented {
+            feature: "HandleEurekaEscrowFailure".to_string(),
+        }),
     }
 }
 
@@ -446,6 +469,9 @@ pub fn query(deps: Deps, _env: Env, msg: QueryMsg) -> StdResult<Binary> {
         QueryMsg::EscrowByIntent { intent_id } => {
             to_json_binary(&query_escrow_by_intent(deps, intent_id)?)
         }
+        QueryMsg::EthereumEscrowStatus { intent_id } => {
+            to_json_binary(&query_ethereum_escrow_status(deps, intent_id)?)
+        }
     }
 }
 
@@ -466,6 +492,19 @@ fn query_escrow_by_intent(deps: Deps, intent_id: String) -> StdResult<EscrowResp
     let escrow_id = ESCROWS_BY_INTENT.load(deps.storage, &intent_id)?;
     let escrow = ESCROWS.load(deps.storage, &escrow_id)?;
     Ok(escrow_to_response(escrow))
+}
+
+/// Query Ethereum escrow status (placeholder - will be implemented with state storage)
+fn query_ethereum_escrow_status(
+    _deps: Deps,
+    intent_id: String,
+) -> StdResult<EthereumEscrowStatusResponse> {
+    // Placeholder implementation - returns not found
+    // Will be implemented when EthereumEscrow state is added
+    Err(cosmwasm_std::StdError::not_found(format!(
+        "Ethereum escrow for intent {}",
+        intent_id
+    )))
 }
 
 fn query_escrows_by_user(

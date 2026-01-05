@@ -41,4 +41,10 @@ pub enum ContractError {
 
     #[error("IBC refund failed for escrow: {id}")]
     IbcRefundFailed { id: String },
+
+    #[error("Feature not implemented: {feature}")]
+    NotImplemented { feature: String },
+
+    #[error("Ethereum escrow not found for intent: {intent_id}")]
+    EthereumEscrowNotFound { intent_id: String },
 }

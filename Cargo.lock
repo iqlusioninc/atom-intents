@@ -267,6 +267,7 @@ dependencies = [
 name = "atom-intents-escrow"
 version = "0.1.0"
 dependencies = [
+ "atom-intents-types",
  "cosmwasm-schema",
  "cosmwasm-std",
  "cw-storage-plus",
