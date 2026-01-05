@@ -292,9 +292,7 @@ impl SettlementStore for SqliteStore {
         .await
         .map_err(|e| StoreError::DatabaseError(e.to_string()))?;
 
-        rows.iter()
-            .map(|row| Self::row_to_settlement(row))
-            .collect()
+        rows.iter().map(Self::row_to_settlement).collect()
     }
 
     async fn list_stuck(
@@ -314,9 +312,7 @@ impl SettlementStore for SqliteStore {
         .await
         .map_err(|e| StoreError::DatabaseError(e.to_string()))?;
 
-        rows.iter()
-            .map(|row| Self::row_to_settlement(row))
-            .collect()
+        rows.iter().map(Self::row_to_settlement).collect()
     }
 
     async fn list_by_solver(
@@ -333,9 +329,7 @@ impl SettlementStore for SqliteStore {
         .await
         .map_err(|e| StoreError::DatabaseError(e.to_string()))?;
 
-        rows.iter()
-            .map(|row| Self::row_to_settlement(row))
-            .collect()
+        rows.iter().map(Self::row_to_settlement).collect()
     }
 
     async fn record_transition(
