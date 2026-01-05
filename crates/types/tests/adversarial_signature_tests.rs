@@ -6,7 +6,6 @@
 /// - Forgery attempts
 /// - Nonce manipulation
 /// - Cross-chain signature replay
-
 use atom_intents_types::{
     Asset, ExecutionConstraints, FillConfig, FillStrategy, Intent, OutputSpec,
 };
@@ -148,7 +147,10 @@ fn test_cross_chain_replay_attack_prevented() {
 
     // Signatures MUST differ (chain_id is in signing hash)
     assert_ne!(signed_cosmoshub.signature, signed_osmosis.signature);
-    assert_ne!(signed_cosmoshub.signing_hash(), signed_osmosis.signing_hash());
+    assert_ne!(
+        signed_cosmoshub.signing_hash(),
+        signed_osmosis.signing_hash()
+    );
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -613,7 +615,11 @@ fn test_nonce_increment_changes_signature() {
     // All signatures must be unique
     for i in 0..signatures.len() {
         for j in (i + 1)..signatures.len() {
-            assert_ne!(signatures[i], signatures[j], "Signatures for nonces {} and {} should differ", i, j);
+            assert_ne!(
+                signatures[i], signatures[j],
+                "Signatures for nonces {} and {} should differ",
+                i, j
+            );
         }
     }
 }

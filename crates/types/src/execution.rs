@@ -161,13 +161,16 @@ mod tests {
     #[test]
     fn test_asset_preference_native_only_default() {
         let constraints = ExecutionConstraints::default();
-        assert!(matches!(constraints.asset_preference, AssetPreference::NativeOnly));
+        assert!(matches!(
+            constraints.asset_preference,
+            AssetPreference::NativeOnly
+        ));
     }
 
     #[test]
     fn test_asset_preference_accept_bridged() {
-        let constraints = ExecutionConstraints::new(1000)
-            .with_asset_preference(AssetPreference::AcceptBridged {
+        let constraints =
+            ExecutionConstraints::new(1000).with_asset_preference(AssetPreference::AcceptBridged {
                 allowed_denoms: vec!["eureka/usdc".to_string()],
             });
 
@@ -182,7 +185,10 @@ mod tests {
     #[test]
     fn test_settlement_preference_default_cost() {
         let constraints = ExecutionConstraints::default();
-        assert!(matches!(constraints.settlement_preference, SettlementPreference::Cost));
+        assert!(matches!(
+            constraints.settlement_preference,
+            SettlementPreference::Cost
+        ));
     }
 
     #[test]

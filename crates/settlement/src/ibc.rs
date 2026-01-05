@@ -694,7 +694,10 @@ mod tests {
         };
 
         match flow {
-            IbcFlowType::Eureka { direction, eth_address } => {
+            IbcFlowType::Eureka {
+                direction,
+                eth_address,
+            } => {
                 assert!(matches!(direction, EurekaDirection::EthereumToCosmos));
                 assert_eq!(eth_address, Some("0x1234567890abcdef".to_string()));
             }

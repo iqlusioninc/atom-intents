@@ -39,10 +39,7 @@ pub enum OmnibridgeDirection {
 #[cw_serde]
 pub enum SettlementPath {
     /// Cosmos IBC Classic
-    CosmosIbc {
-        channel: String,
-        is_multi_hop: bool,
-    },
+    CosmosIbc { channel: String, is_multi_hop: bool },
 
     /// Ethereum via IBC Eureka
     Eureka {
@@ -69,7 +66,11 @@ impl SettlementPath {
     pub fn estimated_time_secs(&self) -> u64 {
         match self {
             Self::CosmosIbc { is_multi_hop, .. } => {
-                if *is_multi_hop { 20 } else { 6 }
+                if *is_multi_hop {
+                    20
+                } else {
+                    6
+                }
             }
             Self::Eureka { .. } => 25,
             Self::NearOmnibridge { .. } => 45,
@@ -79,7 +80,11 @@ impl SettlementPath {
     pub fn estimated_cost_usd(&self) -> f64 {
         match self {
             Self::CosmosIbc { is_multi_hop, .. } => {
-                if *is_multi_hop { 0.02 } else { 0.01 }
+                if *is_multi_hop {
+                    0.02
+                } else {
+                    0.01
+                }
             }
             Self::Eureka { .. } => 3.0,
             Self::NearOmnibridge { .. } => 0.10,

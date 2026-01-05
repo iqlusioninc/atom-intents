@@ -422,7 +422,7 @@ mod tests {
 
     #[test]
     fn test_invalid_ibc_denom_format() {
-        let registry = DenomRegistry::new();
+        let _registry = DenomRegistry::new();
 
         // This would fail in lookup because "notanibc" doesn't start with "ibc/"
         // but won't throw InvalidFormat unless we try to strip the prefix
