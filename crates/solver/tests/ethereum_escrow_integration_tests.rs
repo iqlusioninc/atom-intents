@@ -174,25 +174,25 @@ fn test_fronting_requires_received_status() {
 fn test_fronting_bond_calculation() {
     let solver = EurekaSolver::new("test", Arc::new(SkipGoClient::mainnet()));
 
-    // Default 2x multiplier
+    // Default 1.5x multiplier (realistic for Ethereum finality)
     let bond = solver.calculate_fronting_bond(Uint128::new(1_000_000));
-    assert_eq!(bond, Uint128::new(2_000_000));
+    assert_eq!(bond, Uint128::new(1_500_000));
 
     // Test with larger amount
     let bond = solver.calculate_fronting_bond(Uint128::new(100_000_000));
-    assert_eq!(bond, Uint128::new(200_000_000));
+    assert_eq!(bond, Uint128::new(150_000_000));
 }
 
 #[test]
 fn test_fronting_bond_with_small_amounts() {
     let solver = EurekaSolver::new("test", Arc::new(SkipGoClient::mainnet()));
 
-    // Test with small amounts
+    // Test with small amounts (1.5x multiplier)
     let bond = solver.calculate_fronting_bond(Uint128::new(1));
-    assert_eq!(bond, Uint128::new(2));
+    assert_eq!(bond, Uint128::new(1)); // Truncated from 1.5
 
     let bond = solver.calculate_fronting_bond(Uint128::new(100));
-    assert_eq!(bond, Uint128::new(200));
+    assert_eq!(bond, Uint128::new(150));
 }
 
 // =============================================================================
@@ -203,10 +203,10 @@ fn test_fronting_bond_with_small_amounts() {
 fn test_fronting_risk_assessment_profitable() {
     let solver = EurekaSolver::new("test", Arc::new(SkipGoClient::mainnet()));
 
-    // Profitable fronting opportunity
+    // Profitable: solver receives 1M, pays user 900k, keeps 10%
     let assessment = solver.assess_fronting(
-        Uint128::new(1_000_000),
-        Uint128::new(1_100_000), // 10% gross profit
+        Uint128::new(1_000_000), // fronted_amount (what solver gets)
+        Uint128::new(900_000),   // solver_bid (what solver pays user)
     );
     assert!(assessment.should_front);
     assert!(assessment.expected_value > 0);
@@ -216,11 +216,8 @@ fn test_fronting_risk_assessment_profitable() {
 fn test_fronting_risk_assessment_unprofitable() {
     let solver = EurekaSolver::new("test", Arc::new(SkipGoClient::mainnet()));
 
-    // Unprofitable fronting opportunity
-    let assessment = solver.assess_fronting(
-        Uint128::new(1_000_000),
-        Uint128::new(950_000), // Loss
-    );
+    // Unprofitable: solver receives 1M but pays user 1.1M (loss)
+    let assessment = solver.assess_fronting(Uint128::new(1_000_000), Uint128::new(1_100_000));
     assert!(!assessment.should_front);
 }
 
@@ -228,14 +225,10 @@ fn test_fronting_risk_assessment_unprofitable() {
 fn test_fronting_risk_assessment_marginal() {
     let solver = EurekaSolver::new("test", Arc::new(SkipGoClient::mainnet()));
 
-    // Marginal profit - might not be worth the risk
-    let assessment = solver.assess_fronting(
-        Uint128::new(1_000_000),
-        Uint128::new(1_005_000), // Only 0.5% profit
-    );
+    // Marginal: solver receives 1M, pays 995k (0.5% profit)
+    let assessment = solver.assess_fronting(Uint128::new(1_000_000), Uint128::new(995_000));
 
-    // With 50bps premium deducted, this might not be profitable
-    // The assessment depends on the risk calculation
+    // Thin margin - depends on risk calculation
     println!(
         "Marginal assessment: should_front={}, ev={}",
         assessment.should_front, assessment.expected_value
@@ -245,13 +238,14 @@ fn test_fronting_risk_assessment_marginal() {
 #[test]
 fn test_fronting_risk_assessment_struct_fields() {
     let pricing = SettlementRiskPricing::default_eureka();
+    // fronted_amount=1M, solver_bid=950k (solver profits 50k)
     let assessment =
-        FrontingRiskAssessment::assess(&pricing, Uint128::new(1_000_000), Uint128::new(1_100_000));
+        FrontingRiskAssessment::assess(&pricing, Uint128::new(1_000_000), Uint128::new(950_000));
 
     // Verify all fields are populated
     assert!(assessment.required_bond > Uint128::zero());
-    assert!(assessment.adjusted_output > Uint128::zero());
     assert!(!assessment.reason.is_empty());
+    assert!(assessment.should_front); // Should be profitable
 }
 
 // =============================================================================
@@ -265,27 +259,41 @@ fn test_custom_risk_pricing_conservative() {
         .with_fronting(true)
         .with_risk_pricing(conservative);
 
-    // Conservative pricing: 3x multiplier
+    // Conservative pricing: 2x multiplier (vs 1.5x default)
     let bond = solver.calculate_fronting_bond(Uint128::new(1_000_000));
-    assert_eq!(bond, Uint128::new(3_000_000));
+    assert_eq!(bond, Uint128::new(2_000_000));
 }
 
 #[test]
 fn test_default_eureka_pricing() {
     let pricing = SettlementRiskPricing::default_eureka();
 
-    assert_eq!(pricing.bond_multiplier, "2.0");
-    assert_eq!(pricing.risk_premium_bps, 50);
-    assert_eq!(pricing.expected_finality_secs, 30);
+    // Realistic Ethereum finality: ~20 minutes
+    assert_eq!(pricing.bond_multiplier, "1.5");
+    assert_eq!(pricing.expected_finality_secs, 1200); // 20 minutes
+    assert_eq!(pricing.failure_probability, "0.0001");
+}
+
+#[test]
+fn test_source_specific_pricing() {
+    // OP Stack L2s (Base, Optimism, etc.)
+    let op_stack = SettlementRiskPricing::default_op_stack_l2();
+    assert_eq!(op_stack.expected_finality_secs, 1200); // L1 batch finality
+    assert_eq!(op_stack.failure_probability, "0.0005");
+
+    // ZK rollups
+    let zk = SettlementRiskPricing::default_zk_rollup();
+    assert_eq!(zk.expected_finality_secs, 900); // 15 min
+    assert_eq!(zk.failure_probability, "0.0002");
 }
 
 #[test]
 fn test_conservative_pricing_parameters() {
     let pricing = SettlementRiskPricing::conservative();
 
-    assert_eq!(pricing.bond_multiplier, "3.0");
-    assert_eq!(pricing.risk_premium_bps, 100);
-    assert_eq!(pricing.expected_finality_secs, 60);
+    assert_eq!(pricing.bond_multiplier, "2.0");
+    assert_eq!(pricing.expected_finality_secs, 1500); // 25 minutes
+    assert_eq!(pricing.failure_probability, "0.005");
 }
 
 #[test]
@@ -298,8 +306,8 @@ fn test_risk_pricing_bond_calculation() {
     let default_bond = default_pricing.required_bond(amount);
     let conservative_bond = conservative_pricing.required_bond(amount);
 
-    assert_eq!(default_bond, Uint128::new(2_000_000));
-    assert_eq!(conservative_bond, Uint128::new(3_000_000));
+    assert_eq!(default_bond, Uint128::new(1_500_000)); // 1.5x
+    assert_eq!(conservative_bond, Uint128::new(2_000_000)); // 2x
 }
 
 // =============================================================================
@@ -343,46 +351,37 @@ fn test_failed_escrow_not_frontable() {
 }
 
 // =============================================================================
-// QUOTE ADJUSTMENT TESTS
+// AUCTION-DISCOVERED PRICING TESTS
 // =============================================================================
 
 #[test]
-fn test_fronting_quote_adjustment() {
+fn test_solver_bid_determines_profit() {
+    // Risk premium is discovered through the auction - solvers bid their total spread
     let solver = EurekaSolver::new("test", Arc::new(SkipGoClient::mainnet()));
 
-    let base_output = Uint128::new(1_000_000);
-    let adjusted = solver.get_fronting_quote(base_output);
+    // Solver receives 1M from escrow
+    let fronted_amount = Uint128::new(1_000_000);
 
-    // Default 50 bps (0.5%) premium deducted
-    assert_eq!(adjusted, Uint128::new(995_000));
+    // If solver bids to pay user 950k, they profit 50k (5% spread)
+    let assessment = solver.assess_fronting(fronted_amount, Uint128::new(950_000));
+    assert!(assessment.should_front);
+    assert!(assessment.expected_value > 0);
+
+    // If solver bids to pay user 1M, they make no profit
+    let assessment = solver.assess_fronting(fronted_amount, Uint128::new(1_000_000));
+    assert!(!assessment.should_front);
 }
 
 #[test]
-fn test_fronting_quote_with_larger_amounts() {
+fn test_bond_requirement_independent_of_spread() {
+    // Bond is protocol-enforced, not dependent on solver's bid
     let solver = EurekaSolver::new("test", Arc::new(SkipGoClient::mainnet()));
 
-    let base_output = Uint128::new(100_000_000);
-    let adjusted = solver.get_fronting_quote(base_output);
+    let fronted = Uint128::new(1_000_000);
+    let bond = solver.calculate_fronting_bond(fronted);
 
-    // 50 bps = 500_000 deducted from 100M
-    assert_eq!(adjusted, Uint128::new(99_500_000));
-}
-
-#[test]
-fn test_risk_pricing_quote_adjustment() {
-    let default_pricing = SettlementRiskPricing::default_eureka();
-    let conservative_pricing = SettlementRiskPricing::conservative();
-
-    let base = Uint128::new(1_000_000);
-
-    let default_adjusted = default_pricing.adjust_quote(base);
-    let conservative_adjusted = conservative_pricing.adjust_quote(base);
-
-    // Default: 50 bps = 0.5% deducted
-    assert_eq!(default_adjusted, Uint128::new(995_000));
-
-    // Conservative: 100 bps = 1% deducted
-    assert_eq!(conservative_adjusted, Uint128::new(990_000));
+    // Bond is always 1.5x regardless of what solver bids
+    assert_eq!(bond, Uint128::new(1_500_000));
 }
 
 // =============================================================================
@@ -496,24 +495,23 @@ fn test_complete_fronting_flow() {
     // 5. Now can front
     assert!(solver.can_front_settlement(&escrowed));
 
-    // 6. Calculate required bond
+    // 6. Calculate required bond (1.5x multiplier)
     let input_amount = escrowed.base.input.amount;
     let bond = solver.calculate_fronting_bond(input_amount);
-    assert_eq!(bond, input_amount * Uint128::new(2));
+    // 1.5x bond: 1_000_000_000 * 1.5 = 1_500_000_000
+    assert_eq!(bond, Uint128::new(1_500_000_000));
 
     // 7. Assess risk for a profitable trade
-    let expected_output = Uint128::new(1_100_000_000); // 10% profit
-    let assessment = solver.assess_fronting(input_amount, expected_output);
+    // Solver receives input_amount from escrow, bids to pay user less (their spread)
+    let solver_bid = Uint128::new(950_000_000); // Solver keeps 5% as spread
+    let assessment = solver.assess_fronting(input_amount, solver_bid);
     assert!(assessment.should_front);
+    assert!(assessment.expected_value > 0);
 
-    // 8. Get risk-adjusted quote
-    let adjusted_quote = solver.get_fronting_quote(expected_output);
-    assert!(adjusted_quote < expected_output); // Premium deducted
-
-    // 9. After ZK proof finalizes
+    // 8. After ZK proof finalizes
     escrowed.mark_finalized("eureka-pkt-001".to_string(), 1704067230);
 
-    // 10. No longer needs fronting
+    // 9. No longer needs fronting
     assert!(!solver.can_front_settlement(&escrowed));
     assert!(escrowed.is_finalized());
 }
@@ -522,21 +520,22 @@ fn test_complete_fronting_flow() {
 fn test_fronting_decision_based_on_profit_margin() {
     let solver = EurekaSolver::new("test", Arc::new(SkipGoClient::mainnet()));
 
-    let input = Uint128::new(1_000_000);
+    // Solver receives 1M from escrow
+    let fronted = Uint128::new(1_000_000);
 
-    // High profit margin - should front
-    let high_profit = solver.assess_fronting(input, Uint128::new(1_200_000)); // 20%
+    // High profit margin - solver pays user 800k, keeps 200k (20% profit)
+    let high_profit = solver.assess_fronting(fronted, Uint128::new(800_000));
     assert!(high_profit.should_front);
 
-    // Medium profit margin - should front
-    let medium_profit = solver.assess_fronting(input, Uint128::new(1_050_000)); // 5%
+    // Medium profit margin - solver pays user 950k, keeps 50k (5% profit)
+    let medium_profit = solver.assess_fronting(fronted, Uint128::new(950_000));
     assert!(medium_profit.should_front);
 
-    // No profit margin - should not front
-    let no_profit = solver.assess_fronting(input, Uint128::new(1_000_000));
+    // No profit margin - solver pays user exactly what they receive
+    let no_profit = solver.assess_fronting(fronted, Uint128::new(1_000_000));
     assert!(!no_profit.should_front);
 
-    // Negative margin - should not front
-    let negative = solver.assess_fronting(input, Uint128::new(900_000));
+    // Negative margin - solver pays more than they receive (loss)
+    let negative = solver.assess_fronting(fronted, Uint128::new(1_100_000));
     assert!(!negative.should_front);
 }

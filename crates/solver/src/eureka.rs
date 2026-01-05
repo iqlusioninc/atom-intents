@@ -139,17 +139,15 @@ impl EurekaSolver {
     }
 
     /// Assess whether to front a specific settlement
+    ///
+    /// The solver_bid_output is what the solver offers to the user - their
+    /// auction bid which includes their spread/risk premium.
     pub fn assess_fronting(
         &self,
         fronted_amount: Uint128,
-        expected_output: Uint128,
+        solver_bid_output: Uint128,
     ) -> FrontingRiskAssessment {
-        FrontingRiskAssessment::assess(&self.risk_pricing, fronted_amount, expected_output)
-    }
-
-    /// Get risk-adjusted quote for fronted settlement
-    pub fn get_fronting_quote(&self, base_output: Uint128) -> Uint128 {
-        self.risk_pricing.adjust_quote(base_output)
+        FrontingRiskAssessment::assess(&self.risk_pricing, fronted_amount, solver_bid_output)
     }
 
     /// Create a new solver with fronting enabled
@@ -158,7 +156,7 @@ impl EurekaSolver {
         self
     }
 
-    /// Set custom risk pricing
+    /// Set custom risk pricing (bond multiplier, finality time)
     pub fn with_risk_pricing(mut self, pricing: SettlementRiskPricing) -> Self {
         self.risk_pricing = pricing;
         self
@@ -585,27 +583,29 @@ mod tests {
         let skip_go = Arc::new(SkipGoClient::mainnet());
         let solver = EurekaSolver::new("test", skip_go);
         let bond = solver.calculate_fronting_bond(Uint128::new(1_000_000));
-        assert_eq!(bond, Uint128::new(2_000_000)); // 2x default multiplier
+        assert_eq!(bond, Uint128::new(1_500_000)); // 1.5x default multiplier
     }
 
     #[test]
-    fn test_fronting_quote_adjustment() {
+    fn test_assess_fronting_profitable_bid() {
         let skip_go = Arc::new(SkipGoClient::mainnet());
         let solver = EurekaSolver::new("test", skip_go);
-        let adjusted = solver.get_fronting_quote(Uint128::new(1_000_000));
-        // Default 50 bps premium = 0.5% = 5000 deducted
-        assert_eq!(adjusted, Uint128::new(995_000));
-    }
-
-    #[test]
-    fn test_assess_fronting_positive() {
-        let skip_go = Arc::new(SkipGoClient::mainnet());
-        let solver = EurekaSolver::new("test", skip_go);
+        // Solver receives 1M from escrow, pays out 950k to user (5% profit)
         let assessment = solver.assess_fronting(
-            Uint128::new(1_000_000),
-            Uint128::new(1_100_000), // 10% profit
+            Uint128::new(1_000_000), // fronted_amount (what solver gets)
+            Uint128::new(950_000),   // solver_bid (what solver pays user)
         );
         assert!(assessment.should_front);
+        assert!(assessment.expected_value > 0);
+    }
+
+    #[test]
+    fn test_assess_fronting_unprofitable_bid() {
+        let skip_go = Arc::new(SkipGoClient::mainnet());
+        let solver = EurekaSolver::new("test", skip_go);
+        // Solver receives 1M from escrow but bid to pay 1.1M (losing money)
+        let assessment = solver.assess_fronting(Uint128::new(1_000_000), Uint128::new(1_100_000));
+        assert!(!assessment.should_front);
     }
 
     #[test]
@@ -665,8 +665,8 @@ mod tests {
         let custom_pricing = SettlementRiskPricing::conservative();
         let solver = EurekaSolver::new("test", skip_go).with_risk_pricing(custom_pricing);
 
-        // Conservative pricing uses 3x multiplier
+        // Conservative pricing uses 2x multiplier (default is 1.5x)
         let bond = solver.calculate_fronting_bond(Uint128::new(1_000_000));
-        assert_eq!(bond, Uint128::new(3_000_000)); // 3x conservative multiplier
+        assert_eq!(bond, Uint128::new(2_000_000)); // 2x conservative multiplier
     }
 }
