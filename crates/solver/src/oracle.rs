@@ -576,7 +576,7 @@ impl AggregatedOracle {
         prices.sort();
         let len = prices.len();
 
-        if len % 2 == 0 {
+        if len.is_multiple_of(2) {
             // Even number: average of two middle values
             let mid1 = prices[len / 2 - 1];
             let mid2 = prices[len / 2];

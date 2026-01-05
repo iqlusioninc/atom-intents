@@ -22,6 +22,7 @@ pub enum OraclePriceRequirement {
 
 /// Cached price data
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 struct CachedPrice {
     price: Decimal,
     pair: TradingPair,

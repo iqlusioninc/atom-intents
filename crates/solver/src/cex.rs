@@ -513,6 +513,7 @@ impl CexBackstopSolver {
     }
 
     /// Update inventory tracking (legacy - used in tests)
+    #[allow(dead_code)]
     fn update_inventory(&self, input_denom: &str, output_denom: &str, amount: i128) {
         if let Ok(mut inventory) = self.inventory.write() {
             inventory.update(input_denom, -amount); // Sold
@@ -1318,12 +1319,8 @@ impl CexClient for BinanceClient {
         let amount_decimal = Decimal::from_i128_with_scale(amount as i128, 6);
 
         // Determine network based on asset
-        let network = match asset {
-            "ATOM" => "ATOM",
-            "OSMO" => "OSMO",
-            "USDC" => "USDC", // May need to be more specific like "USDC-NOBLE"
-            _ => asset,
-        };
+        // TODO: May need to be more specific for certain assets like "USDC-NOBLE"
+        let network = asset;
 
         let params = vec![
             ("coin", asset.to_string()),

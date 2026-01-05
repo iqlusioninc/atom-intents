@@ -56,6 +56,7 @@ struct RouteRequest {
 }
 
 #[derive(Debug, Deserialize)]
+#[allow(dead_code)]
 struct RouteResponse {
     amount_in: String,
     amount_out: String,
@@ -80,6 +81,7 @@ struct Operation {
 }
 
 #[derive(Debug, Deserialize)]
+#[allow(dead_code)]
 struct TransferOperation {
     port: String,
     channel: String,
@@ -99,12 +101,14 @@ struct SwapOperation {
 }
 
 #[derive(Debug, Deserialize)]
+#[allow(dead_code)]
 struct SwapAsset {
     denom: String,
     amount: Option<String>,
 }
 
 #[derive(Debug, Deserialize, Clone)]
+#[allow(dead_code)]
 struct SwapVenue {
     name: String,
     chain_id: String,
@@ -121,7 +125,8 @@ struct ChainAssets {
 }
 
 #[derive(Debug, Deserialize, Clone)]
-struct Asset {
+#[allow(dead_code)]
+pub struct Asset {
     denom: String,
     chain_id: String,
     origin_denom: String,
@@ -151,6 +156,7 @@ pub struct EurekaRouteResponse {
 }
 
 #[derive(Debug, Deserialize)]
+#[allow(dead_code)]
 pub struct EurekaOperation {
     pub op_type: String,
     pub from_chain_id: String,
@@ -220,6 +226,7 @@ impl DexClient for SkipGoClient {
             .map_err(|e| DexError::QueryFailed(format!("Invalid amount_out: {}", e)))?;
 
         // Convert operations to DexSwapSteps
+        #[allow(clippy::manual_map)]
         let steps: Vec<DexSwapStep> = route
             .operations
             .iter()
@@ -260,7 +267,7 @@ impl DexClient for SkipGoClient {
         })
     }
 
-    async fn get_pools(&self, pair: &TradingPair) -> Result<Vec<PoolInfo>, DexError> {
+    async fn get_pools(&self, _pair: &TradingPair) -> Result<Vec<PoolInfo>, DexError> {
         // Skip Go doesn't expose pools directly - it aggregates across venues
         // Return empty since we rely on route queries for liquidity
         Ok(vec![])
