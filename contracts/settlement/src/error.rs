@@ -38,4 +38,36 @@ pub enum ContractError {
 
     #[error("Insufficient funds: required {required}, provided {provided}")]
     InsufficientFunds { required: String, provided: String },
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    // ON-CHAIN ORDER ERRORS
+    // ═══════════════════════════════════════════════════════════════════════════
+
+    #[error("No funds sent with message")]
+    NoFundsSent {},
+
+    #[error("Multiple denominations not supported")]
+    MultipleDenominations {},
+
+    #[error("Invalid timeout: must be between {min} and {max} seconds, got {provided}")]
+    InvalidTimeout { min: u64, max: u64, provided: u64 },
+
+    #[error("Order already exists: {id}")]
+    OrderAlreadyExists { id: String },
+
+    #[error("Order not found: {id}")]
+    OrderNotFound { id: String },
+
+    #[error("Order not open: {id} (status: {status})")]
+    OrderNotOpen { id: String, status: String },
+
+    #[error("Order expired: {id}")]
+    OrderExpired { id: String },
+
+    #[error("Order not expired: {id} (expires_at: {expires_at}, current: {current_time})")]
+    OrderNotExpired {
+        id: String,
+        expires_at: u64,
+        current_time: u64,
+    },
 }

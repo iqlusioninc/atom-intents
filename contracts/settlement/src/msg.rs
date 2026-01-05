@@ -96,6 +96,44 @@ pub enum ExecuteMsg {
         start_after: Option<String>,
         limit: Option<u32>,
     },
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    // ON-CHAIN ORDER FALLBACK
+    // ═══════════════════════════════════════════════════════════════════════════
+
+    /// Submit an order directly on-chain (censorship-resistant fallback)
+    /// User sends funds with this message which are locked until fill/expiry
+    SubmitOrder {
+        /// Minimum output amount user will accept
+        min_output_amount: Uint128,
+        /// Output denomination
+        output_denom: String,
+        /// Destination chain ID (empty string for same-chain)
+        destination_chain: String,
+        /// Recipient address on destination chain
+        recipient: String,
+        /// Order timeout in seconds from now
+        timeout_seconds: u64,
+    },
+
+    /// Fill an on-chain order (solvers call this)
+    /// Solver sends output funds with this message
+    FillOrder {
+        /// Order ID to fill
+        order_id: String,
+    },
+
+    /// Refund an expired order (anyone can call after expiry)
+    RefundExpiredOrder {
+        /// Order ID to refund
+        order_id: String,
+    },
+
+    /// Cancel an open order (only order creator can call)
+    CancelOrder {
+        /// Order ID to cancel
+        order_id: String,
+    },
 }
 
 #[cw_serde]
@@ -142,6 +180,29 @@ pub enum QueryMsg {
     /// Query inflight (non-terminal) settlements
     #[returns(InflightSettlementsResponse)]
     InflightSettlements {
+        start_after: Option<String>,
+        limit: Option<u32>,
+    },
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    // ON-CHAIN ORDER QUERIES
+    // ═══════════════════════════════════════════════════════════════════════════
+
+    /// Query a specific order by ID
+    #[returns(OrderResponse)]
+    Order { order_id: String },
+
+    /// Query all open orders (for solvers to monitor)
+    #[returns(OrdersResponse)]
+    OpenOrders {
+        start_after: Option<String>,
+        limit: Option<u32>,
+    },
+
+    /// Query orders by user
+    #[returns(OrdersResponse)]
+    OrdersByUser {
+        user: String,
         start_after: Option<String>,
         limit: Option<u32>,
     },
@@ -287,4 +348,30 @@ pub struct InflightSettlementsResponse {
     pub settlement_ids: Vec<String>,
     /// Total count
     pub count: u64,
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// ON-CHAIN ORDER RESPONSES
+// ═══════════════════════════════════════════════════════════════════════════
+
+#[cw_serde]
+pub struct OrderResponse {
+    pub id: String,
+    pub user: String,
+    pub input_amount: Uint128,
+    pub input_denom: String,
+    pub min_output_amount: Uint128,
+    pub output_denom: String,
+    pub destination_chain: String,
+    pub recipient: String,
+    pub status: String,
+    pub created_at: u64,
+    pub expires_at: u64,
+    pub settlement_id: Option<String>,
+}
+
+#[cw_serde]
+pub struct OrdersResponse {
+    pub orders: Vec<OrderResponse>,
+    pub total: u64,
 }

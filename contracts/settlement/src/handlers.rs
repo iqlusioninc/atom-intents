@@ -5,8 +5,8 @@ use cosmwasm_std::{
 
 use crate::error::ContractError;
 use crate::state::{
-    RegisteredSolver, Settlement, SettlementStatus, SolverReputation, CONFIG,
-    INTENT_SETTLEMENTS, REPUTATIONS, SETTLEMENTS, SOLVERS,
+    Order, OrderStatus, RegisteredSolver, Settlement, SettlementStatus, SolverReputation, CONFIG,
+    INTENT_SETTLEMENTS, ORDERS, REPUTATIONS, SETTLEMENTS, SOLVERS, USER_ORDERS,
 };
 
 // Escrow contract execute messages
@@ -944,4 +944,370 @@ pub fn execute_decay_reputation(
     }
 
     Ok(response)
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// ON-CHAIN ORDER FALLBACK HANDLERS
+// ═══════════════════════════════════════════════════════════════════════════
+
+/// Submit an order directly on-chain (censorship-resistant fallback)
+///
+/// Users call this when they can't or don't want to use the off-chain coordinator.
+/// Funds are locked in the contract until a solver fills the order or it expires.
+pub fn execute_submit_order(
+    deps: DepsMut,
+    env: Env,
+    info: MessageInfo,
+    min_output_amount: Uint128,
+    output_denom: String,
+    destination_chain: String,
+    recipient: String,
+    timeout_seconds: u64,
+) -> Result<Response, ContractError> {
+    // Validate funds sent
+    if info.funds.is_empty() {
+        return Err(ContractError::NoFundsSent {});
+    }
+
+    // For now, only support single denomination orders
+    if info.funds.len() > 1 {
+        return Err(ContractError::MultipleDenominations {});
+    }
+
+    let input_coin = &info.funds[0];
+    if input_coin.amount.is_zero() {
+        return Err(ContractError::NoFundsSent {});
+    }
+
+    // Validate timeout (between 1 minute and 24 hours)
+    if timeout_seconds < 60 || timeout_seconds > 86400 {
+        return Err(ContractError::InvalidTimeout {
+            min: 60,
+            max: 86400,
+            provided: timeout_seconds,
+        });
+    }
+
+    // Generate order ID from hash of order details
+    let order_id = generate_order_id(
+        &info.sender,
+        &input_coin.amount,
+        &input_coin.denom,
+        &min_output_amount,
+        &output_denom,
+        env.block.time.nanos(),
+    );
+
+    // Check order doesn't already exist
+    if ORDERS.has(deps.storage, &order_id) {
+        return Err(ContractError::OrderAlreadyExists { id: order_id });
+    }
+
+    let expires_at = env.block.time.seconds() + timeout_seconds;
+
+    let order = Order {
+        id: order_id.clone(),
+        user: info.sender.clone(),
+        input_amount: input_coin.amount,
+        input_denom: input_coin.denom.clone(),
+        min_output_amount,
+        output_denom: output_denom.clone(),
+        destination_chain: destination_chain.clone(),
+        recipient: recipient.clone(),
+        status: OrderStatus::Open,
+        created_at: env.block.time.seconds(),
+        expires_at,
+        settlement_id: None,
+    };
+
+    // Save order
+    ORDERS.save(deps.storage, &order_id, &order)?;
+
+    // Index by user
+    USER_ORDERS.save(deps.storage, (&info.sender, &order_id), &())?;
+
+    Ok(Response::new()
+        .add_attribute("action", "submit_order")
+        .add_attribute("order_id", order_id)
+        .add_attribute("user", info.sender)
+        .add_attribute("input_amount", input_coin.amount)
+        .add_attribute("input_denom", &input_coin.denom)
+        .add_attribute("min_output_amount", min_output_amount)
+        .add_attribute("output_denom", output_denom)
+        .add_attribute("destination_chain", destination_chain)
+        .add_attribute("recipient", recipient)
+        .add_attribute("expires_at", expires_at.to_string()))
+}
+
+/// Fill an on-chain order (solvers call this)
+///
+/// The solver sends the output funds with this message.
+/// For same-chain orders, funds are transferred directly.
+/// For cross-chain orders, a settlement is created for IBC transfer.
+pub fn execute_fill_order(
+    deps: DepsMut,
+    env: Env,
+    info: MessageInfo,
+    order_id: String,
+) -> Result<Response, ContractError> {
+    // Load order
+    let mut order = ORDERS
+        .load(deps.storage, &order_id)
+        .map_err(|_| ContractError::OrderNotFound { id: order_id.clone() })?;
+
+    // Check order is open
+    match &order.status {
+        OrderStatus::Open => {}
+        _ => {
+            return Err(ContractError::OrderNotOpen {
+                id: order_id,
+                status: order.status.as_str().to_string(),
+            });
+        }
+    }
+
+    // Check not expired
+    if env.block.time.seconds() > order.expires_at {
+        return Err(ContractError::OrderExpired { id: order_id });
+    }
+
+    // Verify solver is registered
+    let solver = SOLVERS
+        .range(deps.storage, None, None, cosmwasm_std::Order::Ascending)
+        .find(|r| {
+            if let Ok((_, s)) = r {
+                s.operator == info.sender && s.active
+            } else {
+                false
+            }
+        })
+        .map(|r| r.map(|(_, s)| s))
+        .transpose()
+        .map_err(|_| ContractError::Unauthorized {})?
+        .ok_or(ContractError::Unauthorized {})?;
+
+    // Verify solver sent sufficient output funds
+    let sent_amount: Uint128 = info
+        .funds
+        .iter()
+        .filter(|c| c.denom == order.output_denom)
+        .map(|c| c.amount)
+        .sum();
+
+    if sent_amount < order.min_output_amount {
+        return Err(ContractError::InsufficientFunds {
+            required: order.min_output_amount.to_string(),
+            provided: sent_amount.to_string(),
+        });
+    }
+
+    // Update order status
+    order.status = OrderStatus::Filled {
+        solver_id: solver.id.clone(),
+    };
+
+    // For same-chain orders, do atomic swap
+    // For cross-chain, we need to create a settlement (simplified: treat all as same-chain for now)
+    let is_same_chain = order.destination_chain.is_empty()
+        || order.destination_chain == "provider"
+        || order.destination_chain == env.block.chain_id;
+
+    let mut response = Response::new();
+
+    if is_same_chain {
+        // Atomic same-chain fill:
+        // 1. Transfer solver's output to user/recipient
+        // 2. Transfer user's input (locked in contract) to solver
+
+        let transfer_to_recipient = BankMsg::Send {
+            to_address: order.recipient.clone(),
+            amount: vec![Coin {
+                denom: order.output_denom.clone(),
+                amount: sent_amount,
+            }],
+        };
+
+        let transfer_to_solver = BankMsg::Send {
+            to_address: solver.operator.to_string(),
+            amount: vec![Coin {
+                denom: order.input_denom.clone(),
+                amount: order.input_amount,
+            }],
+        };
+
+        response = response
+            .add_message(transfer_to_recipient)
+            .add_message(transfer_to_solver);
+    } else {
+        // Cross-chain: create a settlement record for IBC handling
+        // This is a simplified implementation - full IBC would need more setup
+        let settlement_id = format!("order_{}", order_id);
+        order.settlement_id = Some(settlement_id.clone());
+
+        // Create settlement record
+        let settlement = Settlement {
+            id: settlement_id.clone(),
+            intent_id: order_id.clone(),
+            solver_id: solver.id.clone(),
+            user: order.user.clone(),
+            user_input_amount: order.input_amount,
+            user_input_denom: order.input_denom.clone(),
+            solver_output_amount: sent_amount,
+            solver_output_denom: order.output_denom.clone(),
+            status: SettlementStatus::SolverLocked,
+            created_at: env.block.time.seconds(),
+            expires_at: order.expires_at,
+            escrow_id: None,
+        };
+
+        SETTLEMENTS.save(deps.storage, &settlement_id, &settlement)?;
+        INTENT_SETTLEMENTS.save(deps.storage, &order_id, &settlement_id)?;
+
+        response = response.add_attribute("settlement_id", settlement_id);
+    }
+
+    ORDERS.save(deps.storage, &order_id, &order)?;
+
+    Ok(response
+        .add_attribute("action", "fill_order")
+        .add_attribute("order_id", order_id)
+        .add_attribute("solver_id", solver.id)
+        .add_attribute("solver", info.sender)
+        .add_attribute("output_amount", sent_amount)
+        .add_attribute("same_chain", is_same_chain.to_string()))
+}
+
+/// Refund an expired order
+///
+/// Anyone can call this after the order expires.
+/// User's locked funds are returned.
+pub fn execute_refund_expired_order(
+    deps: DepsMut,
+    env: Env,
+    _info: MessageInfo,
+    order_id: String,
+) -> Result<Response, ContractError> {
+    let mut order = ORDERS
+        .load(deps.storage, &order_id)
+        .map_err(|_| ContractError::OrderNotFound { id: order_id.clone() })?;
+
+    // Check order is open (can only refund open orders)
+    match &order.status {
+        OrderStatus::Open => {}
+        _ => {
+            return Err(ContractError::OrderNotOpen {
+                id: order_id,
+                status: order.status.as_str().to_string(),
+            });
+        }
+    }
+
+    // Check order is expired
+    if env.block.time.seconds() <= order.expires_at {
+        return Err(ContractError::OrderNotExpired {
+            id: order_id,
+            expires_at: order.expires_at,
+            current_time: env.block.time.seconds(),
+        });
+    }
+
+    // Update status
+    order.status = OrderStatus::Expired;
+    ORDERS.save(deps.storage, &order_id, &order)?;
+
+    // Refund user
+    let refund_msg = BankMsg::Send {
+        to_address: order.user.to_string(),
+        amount: vec![Coin {
+            denom: order.input_denom.clone(),
+            amount: order.input_amount,
+        }],
+    };
+
+    Ok(Response::new()
+        .add_message(refund_msg)
+        .add_attribute("action", "refund_expired_order")
+        .add_attribute("order_id", order_id)
+        .add_attribute("user", order.user)
+        .add_attribute("refund_amount", order.input_amount)
+        .add_attribute("refund_denom", order.input_denom))
+}
+
+/// Cancel an open order
+///
+/// Only the order creator can cancel before it's filled.
+pub fn execute_cancel_order(
+    deps: DepsMut,
+    env: Env,
+    info: MessageInfo,
+    order_id: String,
+) -> Result<Response, ContractError> {
+    let mut order = ORDERS
+        .load(deps.storage, &order_id)
+        .map_err(|_| ContractError::OrderNotFound { id: order_id.clone() })?;
+
+    // Only creator can cancel
+    if info.sender != order.user {
+        return Err(ContractError::Unauthorized {});
+    }
+
+    // Check order is open
+    match &order.status {
+        OrderStatus::Open => {}
+        _ => {
+            return Err(ContractError::OrderNotOpen {
+                id: order_id,
+                status: order.status.as_str().to_string(),
+            });
+        }
+    }
+
+    // Check not expired (use refund for expired orders)
+    if env.block.time.seconds() > order.expires_at {
+        return Err(ContractError::OrderExpired { id: order_id });
+    }
+
+    // Update status
+    order.status = OrderStatus::Cancelled;
+    ORDERS.save(deps.storage, &order_id, &order)?;
+
+    // Refund user
+    let refund_msg = BankMsg::Send {
+        to_address: order.user.to_string(),
+        amount: vec![Coin {
+            denom: order.input_denom.clone(),
+            amount: order.input_amount,
+        }],
+    };
+
+    Ok(Response::new()
+        .add_message(refund_msg)
+        .add_attribute("action", "cancel_order")
+        .add_attribute("order_id", order_id)
+        .add_attribute("user", order.user)
+        .add_attribute("refund_amount", order.input_amount)
+        .add_attribute("refund_denom", order.input_denom))
+}
+
+/// Generate a unique order ID from order details
+fn generate_order_id(
+    sender: &cosmwasm_std::Addr,
+    input_amount: &Uint128,
+    input_denom: &str,
+    output_amount: &Uint128,
+    output_denom: &str,
+    nanos: u64,
+) -> String {
+    use sha2::{Digest, Sha256};
+
+    let mut hasher = Sha256::new();
+    hasher.update(sender.as_bytes());
+    hasher.update(input_amount.to_string().as_bytes());
+    hasher.update(input_denom.as_bytes());
+    hasher.update(output_amount.to_string().as_bytes());
+    hasher.update(output_denom.as_bytes());
+    hasher.update(nanos.to_le_bytes());
+
+    let hash = hasher.finalize();
+    hex::encode(&hash[..16]) // Use first 16 bytes for shorter ID
 }

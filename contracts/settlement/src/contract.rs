@@ -5,10 +5,11 @@ use cosmwasm_std::{
 
 use crate::error::ContractError;
 use crate::handlers::{
-    execute_create_settlement, execute_decay_reputation, execute_deregister_solver,
-    execute_handle_ibc_ack, execute_handle_timeout, execute_mark_completed, execute_mark_executing,
-    execute_mark_failed, execute_mark_solver_locked, execute_mark_user_locked,
-    execute_register_solver, execute_settlement, execute_settlement_local, execute_slash_solver,
+    execute_cancel_order, execute_create_settlement, execute_decay_reputation,
+    execute_deregister_solver, execute_fill_order, execute_handle_ibc_ack, execute_handle_timeout,
+    execute_mark_completed, execute_mark_executing, execute_mark_failed, execute_mark_solver_locked,
+    execute_mark_user_locked, execute_refund_expired_order, execute_register_solver,
+    execute_settlement, execute_settlement_local, execute_slash_solver, execute_submit_order,
     execute_update_config, execute_update_reputation,
 };
 use crate::msg::{
@@ -16,9 +17,9 @@ use crate::msg::{
     MigrationInfoResponse, QueryMsg, StuckSettlementAction,
 };
 use crate::queries::{
-    query_config, query_settlement, query_settlement_by_intent, query_settlements_by_solver,
-    query_solver, query_solver_reputation, query_solvers, query_solvers_by_reputation,
-    query_top_solvers,
+    query_config, query_open_orders, query_order, query_orders_by_user, query_settlement,
+    query_settlement_by_intent, query_settlements_by_solver, query_solver, query_solver_reputation,
+    query_solvers, query_solvers_by_reputation, query_top_solvers,
 };
 use crate::state::{
     Config, MigrationInfo, SettlementStatus, CONFIG, MIGRATION_INFO, SETTLEMENTS,
@@ -134,6 +135,31 @@ pub fn execute(
         ExecuteMsg::DecayReputation { start_after, limit } => {
             execute_decay_reputation(deps, env, start_after, limit)
         }
+
+        // ═══════════════════════════════════════════════════════════════════════════
+        // ON-CHAIN ORDER FALLBACK
+        // ═══════════════════════════════════════════════════════════════════════════
+        ExecuteMsg::SubmitOrder {
+            min_output_amount,
+            output_denom,
+            destination_chain,
+            recipient,
+            timeout_seconds,
+        } => execute_submit_order(
+            deps,
+            env,
+            info,
+            min_output_amount,
+            output_denom,
+            destination_chain,
+            recipient,
+            timeout_seconds,
+        ),
+        ExecuteMsg::FillOrder { order_id } => execute_fill_order(deps, env, info, order_id),
+        ExecuteMsg::RefundExpiredOrder { order_id } => {
+            execute_refund_expired_order(deps, env, info, order_id)
+        }
+        ExecuteMsg::CancelOrder { order_id } => execute_cancel_order(deps, env, info, order_id),
     }
 }
 
@@ -172,6 +198,19 @@ pub fn query(deps: Deps, _env: Env, msg: QueryMsg) -> StdResult<Binary> {
         QueryMsg::InflightSettlements { start_after, limit } => {
             to_json_binary(&query_inflight_settlements(deps, start_after, limit)?)
         }
+
+        // ═══════════════════════════════════════════════════════════════════════════
+        // ON-CHAIN ORDER QUERIES
+        // ═══════════════════════════════════════════════════════════════════════════
+        QueryMsg::Order { order_id } => to_json_binary(&query_order(deps, order_id)?),
+        QueryMsg::OpenOrders { start_after, limit } => {
+            to_json_binary(&query_open_orders(deps, start_after, limit)?)
+        }
+        QueryMsg::OrdersByUser {
+            user,
+            start_after,
+            limit,
+        } => to_json_binary(&query_orders_by_user(deps, user, start_after, limit)?),
     }
 }
 
