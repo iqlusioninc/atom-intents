@@ -1,5 +1,41 @@
 use cosmwasm_schema::cw_serde;
 
+/// User preference for asset delivery
+#[cw_serde]
+pub enum AssetPreference {
+    /// Only accept canonical native denoms (uatom, Noble USDC, etc.)
+    NativeOnly,
+
+    /// Accept bridged representations from specific sources
+    AcceptBridged {
+        allowed_denoms: Vec<String>,
+    },
+
+    /// Accept any fungible equivalent
+    AnyEquivalent,
+}
+
+impl Default for AssetPreference {
+    fn default() -> Self {
+        Self::NativeOnly
+    }
+}
+
+/// User preference for settlement path selection
+#[cw_serde]
+pub enum SettlementPreference {
+    /// Prefer cheapest settlement path (default)
+    Cost,
+    /// Prefer fastest settlement path
+    Latency,
+}
+
+impl Default for SettlementPreference {
+    fn default() -> Self {
+        Self::Cost
+    }
+}
+
 /// Constraints on how intent can be executed
 #[cw_serde]
 pub struct ExecutionConstraints {
@@ -20,6 +56,15 @@ pub struct ExecutionConstraints {
 
     /// Maximum bridge latency acceptable (seconds)
     pub max_bridge_time_secs: Option<u64>,
+
+    /// User preference for asset delivery
+    pub asset_preference: AssetPreference,
+
+    /// User preference for settlement path selection
+    pub settlement_preference: SettlementPreference,
+
+    /// Maximum settlement time constraint (seconds)
+    pub max_settlement_secs: Option<u64>,
 }
 
 impl ExecutionConstraints {
@@ -31,6 +76,9 @@ impl ExecutionConstraints {
             max_solver_fee_bps: Some(50), // 0.5% max
             allow_cross_ecosystem: false, // Cosmos-only by default
             max_bridge_time_secs: None,
+            asset_preference: AssetPreference::default(),
+            settlement_preference: SettlementPreference::default(),
+            max_settlement_secs: None,
         }
     }
 
@@ -56,6 +104,21 @@ impl ExecutionConstraints {
 
     pub fn with_max_bridge_time_secs(mut self, secs: u64) -> Self {
         self.max_bridge_time_secs = Some(secs);
+        self
+    }
+
+    pub fn with_asset_preference(mut self, pref: AssetPreference) -> Self {
+        self.asset_preference = pref;
+        self
+    }
+
+    pub fn with_settlement_preference(mut self, pref: SettlementPreference) -> Self {
+        self.settlement_preference = pref;
+        self
+    }
+
+    pub fn with_max_settlement_secs(mut self, secs: u64) -> Self {
+        self.max_settlement_secs = Some(secs);
         self
     }
 }
@@ -99,4 +162,43 @@ pub struct DexSwapStep {
 
     /// Chain where swap occurs
     pub chain_id: String,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_asset_preference_native_only_default() {
+        let constraints = ExecutionConstraints::default();
+        assert!(matches!(constraints.asset_preference, AssetPreference::NativeOnly));
+    }
+
+    #[test]
+    fn test_asset_preference_accept_bridged() {
+        let constraints = ExecutionConstraints::new(1000)
+            .with_asset_preference(AssetPreference::AcceptBridged {
+                allowed_denoms: vec!["eureka/usdc".to_string()],
+            });
+
+        match &constraints.asset_preference {
+            AssetPreference::AcceptBridged { allowed_denoms } => {
+                assert!(allowed_denoms.contains(&"eureka/usdc".to_string()));
+            }
+            _ => panic!("Expected AcceptBridged"),
+        }
+    }
+
+    #[test]
+    fn test_settlement_preference_default_cost() {
+        let constraints = ExecutionConstraints::default();
+        assert!(matches!(constraints.settlement_preference, SettlementPreference::Cost));
+    }
+
+    #[test]
+    fn test_settlement_preference_latency() {
+        let constraints = ExecutionConstraints::new(1000)
+            .with_settlement_preference(SettlementPreference::Latency);
+        assert!(matches!(constraints.settlement_preference, SettlementPreference::Latency));
+    }
 }
