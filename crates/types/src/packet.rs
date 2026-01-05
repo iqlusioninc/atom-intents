@@ -26,9 +26,7 @@ pub enum EurekaPacketStatus {
     },
 
     /// Packet failed or timed out
-    Failed {
-        reason: String,
-    },
+    Failed { reason: String },
 }
 
 impl EurekaPacketStatus {

@@ -16,10 +16,7 @@ pub enum EscrowStatus {
     Pending,
 
     /// Eureka packet received, awaiting ZK proof finality
-    Received {
-        packet_id: String,
-        received_at: u64,
-    },
+    Received { packet_id: String, received_at: u64 },
 
     /// ZK proof verified, funds fully escrowed
     Finalized {
@@ -228,8 +225,7 @@ mod tests {
 
     #[test]
     fn test_ethereum_escrowed_intent_lifecycle() {
-        let mut escrowed =
-            EthereumEscrowedIntent::new(mock_intent(), "0x1234".to_string(), 300);
+        let mut escrowed = EthereumEscrowedIntent::new(mock_intent(), "0x1234".to_string(), 300);
 
         // Initially pending
         assert!(escrowed.is_pending());
@@ -248,8 +244,7 @@ mod tests {
 
     #[test]
     fn test_ethereum_escrowed_intent_failure() {
-        let mut escrowed =
-            EthereumEscrowedIntent::new(mock_intent(), "0x1234".to_string(), 300);
+        let mut escrowed = EthereumEscrowedIntent::new(mock_intent(), "0x1234".to_string(), 300);
 
         escrowed.mark_failed("packet timed out".to_string());
         assert!(escrowed.is_failed());

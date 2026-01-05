@@ -69,11 +69,9 @@ pub fn execute(
         } => execute_update_config(deps, info, admin, settlement_contract),
 
         // Ethereum escrow messages (to be implemented)
-        ExecuteMsg::RegisterEthereumEscrowIntent { .. } => {
-            Err(ContractError::NotImplemented {
-                feature: "RegisterEthereumEscrowIntent".to_string(),
-            })
-        }
+        ExecuteMsg::RegisterEthereumEscrowIntent { .. } => Err(ContractError::NotImplemented {
+            feature: "RegisterEthereumEscrowIntent".to_string(),
+        }),
         ExecuteMsg::NotifyEurekaPacketReceived { .. } => Err(ContractError::NotImplemented {
             feature: "NotifyEurekaPacketReceived".to_string(),
         }),

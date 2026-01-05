@@ -90,10 +90,7 @@ pub enum ExecuteMsg {
     },
 
     /// Handle Eureka escrow timeout/failure
-    HandleEurekaEscrowFailure {
-        intent_id: String,
-        reason: String,
-    },
+    HandleEurekaEscrowFailure { intent_id: String, reason: String },
 }
 
 #[cw_serde]

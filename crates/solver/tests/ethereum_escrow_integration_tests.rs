@@ -8,9 +8,8 @@
 
 use atom_intents_solver::{EurekaSolver, SkipGoClient, Solver};
 use atom_intents_types::{
-    Asset, AssetPreference, EscrowStatus, EthereumEscrowedIntent, ExecutionConstraints,
-    FillConfig, FrontingRiskAssessment, Intent, OutputSpec, SettlementPreference,
-    SettlementRiskPricing,
+    Asset, AssetPreference, EscrowStatus, EthereumEscrowedIntent, ExecutionConstraints, FillConfig,
+    FrontingRiskAssessment, Intent, OutputSpec, SettlementPreference, SettlementRiskPricing,
 };
 use cosmwasm_std::{Binary, Uint128};
 use std::sync::Arc;
@@ -25,7 +24,7 @@ fn create_ethereum_escrowed_intent() -> EthereumEscrowedIntent {
         input: Asset {
             chain_id: "ethereum-1".to_string(),
             denom: "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48".to_string(), // USDC on Ethereum
-            amount: Uint128::new(1_000_000_000), // 1000 USDC
+            amount: Uint128::new(1_000_000_000),                             // 1000 USDC
         },
         output: OutputSpec {
             chain_id: "cosmoshub-4".to_string(),
@@ -95,7 +94,10 @@ fn test_escrow_status_transitions() {
     // Transition to received
     escrowed.mark_received("pkt-abc".to_string(), 1704067200);
     match &escrowed.escrow_status {
-        EscrowStatus::Received { packet_id, received_at } => {
+        EscrowStatus::Received {
+            packet_id,
+            received_at,
+        } => {
             assert_eq!(packet_id, "pkt-abc");
             assert_eq!(*received_at, 1704067200);
         }
@@ -105,7 +107,10 @@ fn test_escrow_status_transitions() {
     // Transition to finalized
     escrowed.mark_finalized("pkt-abc".to_string(), 1704067300);
     match &escrowed.escrow_status {
-        EscrowStatus::Finalized { packet_id, finalized_at } => {
+        EscrowStatus::Finalized {
+            packet_id,
+            finalized_at,
+        } => {
             assert_eq!(packet_id, "pkt-abc");
             assert_eq!(*finalized_at, 1704067300);
         }
@@ -119,8 +124,8 @@ fn test_escrow_status_transitions() {
 
 #[test]
 fn test_eureka_solver_fronting_setup() {
-    let solver = EurekaSolver::new("fronting-solver", Arc::new(SkipGoClient::mainnet()))
-        .with_fronting(true);
+    let solver =
+        EurekaSolver::new("fronting-solver", Arc::new(SkipGoClient::mainnet())).with_fronting(true);
 
     assert!(solver.capabilities().cross_ecosystem);
 
@@ -144,8 +149,7 @@ fn test_eureka_solver_fronting_disabled() {
 
 #[test]
 fn test_fronting_requires_received_status() {
-    let solver = EurekaSolver::new("test", Arc::new(SkipGoClient::mainnet()))
-        .with_fronting(true);
+    let solver = EurekaSolver::new("test", Arc::new(SkipGoClient::mainnet())).with_fronting(true);
 
     // Pending status - should not be frontable
     let pending_escrowed = create_ethereum_escrowed_intent();
@@ -232,18 +236,17 @@ fn test_fronting_risk_assessment_marginal() {
 
     // With 50bps premium deducted, this might not be profitable
     // The assessment depends on the risk calculation
-    println!("Marginal assessment: should_front={}, ev={}",
-             assessment.should_front, assessment.expected_value);
+    println!(
+        "Marginal assessment: should_front={}, ev={}",
+        assessment.should_front, assessment.expected_value
+    );
 }
 
 #[test]
 fn test_fronting_risk_assessment_struct_fields() {
     let pricing = SettlementRiskPricing::default_eureka();
-    let assessment = FrontingRiskAssessment::assess(
-        &pricing,
-        Uint128::new(1_000_000),
-        Uint128::new(1_100_000),
-    );
+    let assessment =
+        FrontingRiskAssessment::assess(&pricing, Uint128::new(1_000_000), Uint128::new(1_100_000));
 
     // Verify all fields are populated
     assert!(assessment.required_bond > Uint128::zero());
@@ -331,8 +334,7 @@ fn test_escrow_failure_with_reason() {
 
 #[test]
 fn test_failed_escrow_not_frontable() {
-    let solver = EurekaSolver::new("test", Arc::new(SkipGoClient::mainnet()))
-        .with_fronting(true);
+    let solver = EurekaSolver::new("test", Arc::new(SkipGoClient::mainnet())).with_fronting(true);
 
     let mut escrowed = create_ethereum_escrowed_intent();
     escrowed.mark_failed("packet timeout".to_string());
@@ -389,8 +391,8 @@ fn test_risk_pricing_quote_adjustment() {
 
 #[tokio::test]
 async fn test_eureka_solver_capacity_with_fronting() {
-    let solver = EurekaSolver::new("capacity-test", Arc::new(SkipGoClient::mainnet()))
-        .with_fronting(true);
+    let solver =
+        EurekaSolver::new("capacity-test", Arc::new(SkipGoClient::mainnet())).with_fronting(true);
 
     let pair = solver.supported_pairs().first().unwrap().clone();
     let capacity = solver.capacity(&pair).await.unwrap();
@@ -402,8 +404,8 @@ async fn test_eureka_solver_capacity_with_fronting() {
 
 #[tokio::test]
 async fn test_eureka_solver_health_check_with_fronting() {
-    let solver = EurekaSolver::new("health-test", Arc::new(SkipGoClient::mainnet()))
-        .with_fronting(true);
+    let solver =
+        EurekaSolver::new("health-test", Arc::new(SkipGoClient::mainnet())).with_fronting(true);
 
     assert!(solver.health_check().await);
 }
@@ -479,8 +481,8 @@ fn test_complete_fronting_flow() {
     // Simulate a complete fronting scenario
 
     // 1. Create solver with fronting enabled
-    let solver = EurekaSolver::new("fronting-solver", Arc::new(SkipGoClient::mainnet()))
-        .with_fronting(true);
+    let solver =
+        EurekaSolver::new("fronting-solver", Arc::new(SkipGoClient::mainnet())).with_fronting(true);
 
     // 2. Create an escrowed intent
     let mut escrowed = create_ethereum_escrowed_intent();

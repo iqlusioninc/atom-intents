@@ -289,7 +289,9 @@ impl Solver for EurekaSolver {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use atom_intents_types::{Asset, EscrowStatus, EthereumEscrowedIntent, ExecutionConstraints, FillConfig, OutputSpec};
+    use atom_intents_types::{
+        Asset, EscrowStatus, EthereumEscrowedIntent, ExecutionConstraints, FillConfig, OutputSpec,
+    };
     use cosmwasm_std::Binary;
 
     fn create_test_intent_with_constraints(constraints: ExecutionConstraints) -> Intent {
@@ -556,13 +558,10 @@ mod tests {
         let intent = create_test_intent_with_constraints(
             ExecutionConstraints::new(9999999999)
                 .with_cross_ecosystem(true)
-                .with_asset_preference(AssetPreference::AnyEquivalent)
+                .with_asset_preference(AssetPreference::AnyEquivalent),
         );
-        let mut escrowed = EthereumEscrowedIntent::new(
-            intent,
-            "0x1234567890abcdef".to_string(),
-            300,
-        );
+        let mut escrowed =
+            EthereumEscrowedIntent::new(intent, "0x1234567890abcdef".to_string(), 300);
         escrowed.escrow_status = escrow_status;
         escrowed
     }
@@ -577,8 +576,7 @@ mod tests {
     #[test]
     fn test_enable_fronting() {
         let skip_go = Arc::new(SkipGoClient::mainnet());
-        let solver = EurekaSolver::new("test", skip_go)
-            .with_fronting(true);
+        let solver = EurekaSolver::new("test", skip_go).with_fronting(true);
         assert!(solver.enable_fronting);
     }
 
@@ -613,8 +611,7 @@ mod tests {
     #[test]
     fn test_can_front_settlement_when_enabled_and_ready() {
         let skip_go = Arc::new(SkipGoClient::mainnet());
-        let solver = EurekaSolver::new("test", skip_go)
-            .with_fronting(true);
+        let solver = EurekaSolver::new("test", skip_go).with_fronting(true);
 
         // Create an escrowed intent in "Received" status (ready for fronting)
         let escrowed = create_mock_escrowed_intent(EscrowStatus::Received {
@@ -641,8 +638,7 @@ mod tests {
     #[test]
     fn test_cannot_front_when_pending() {
         let skip_go = Arc::new(SkipGoClient::mainnet());
-        let solver = EurekaSolver::new("test", skip_go)
-            .with_fronting(true);
+        let solver = EurekaSolver::new("test", skip_go).with_fronting(true);
 
         let escrowed = create_mock_escrowed_intent(EscrowStatus::Pending);
 
@@ -652,8 +648,7 @@ mod tests {
     #[test]
     fn test_cannot_front_when_finalized() {
         let skip_go = Arc::new(SkipGoClient::mainnet());
-        let solver = EurekaSolver::new("test", skip_go)
-            .with_fronting(true);
+        let solver = EurekaSolver::new("test", skip_go).with_fronting(true);
 
         let escrowed = create_mock_escrowed_intent(EscrowStatus::Finalized {
             packet_id: "pkt-123".to_string(),
@@ -668,8 +663,7 @@ mod tests {
     fn test_with_risk_pricing() {
         let skip_go = Arc::new(SkipGoClient::mainnet());
         let custom_pricing = SettlementRiskPricing::conservative();
-        let solver = EurekaSolver::new("test", skip_go)
-            .with_risk_pricing(custom_pricing);
+        let solver = EurekaSolver::new("test", skip_go).with_risk_pricing(custom_pricing);
 
         // Conservative pricing uses 3x multiplier
         let bond = solver.calculate_fronting_bond(Uint128::new(1_000_000));
