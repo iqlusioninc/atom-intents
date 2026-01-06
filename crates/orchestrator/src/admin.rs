@@ -274,6 +274,13 @@ async fn drain_start(
         .or(request.drain_timeout_secs)
         .unwrap_or(1800);
 
+    tracing::info!(
+        action = "drain_start",
+        reason = %reason,
+        deadline_secs,
+        "admin action"
+    );
+
     state
         .drain_manager
         .start_drain(reason, deadline_secs)
@@ -286,6 +293,7 @@ async fn drain_start(
 async fn drain_cancel(
     State(state): State<Arc<AdminState>>,
 ) -> Result<Json<DrainStatusResponse>, AdminApiError> {
+    tracing::info!(action = "drain_cancel", "admin action");
     state.drain_manager.cancel_drain().await?;
     let status = state.drain_manager.get_status().await;
     Ok(Json(DrainStatusResponse::from_status(status)))
@@ -294,6 +302,7 @@ async fn drain_cancel(
 async fn drain_force(
     State(state): State<Arc<AdminState>>,
 ) -> Result<Json<DrainStatusResponse>, AdminApiError> {
+    tracing::info!(action = "drain_force", "admin action");
     state.drain_manager.force_drain().await?;
     let status = state.drain_manager.get_status().await;
     Ok(Json(DrainStatusResponse::from_status(status)))
@@ -302,6 +311,7 @@ async fn drain_force(
 async fn drain_resume(
     State(state): State<Arc<AdminState>>,
 ) -> Result<Json<DrainStatusResponse>, AdminApiError> {
+    tracing::info!(action = "drain_resume", "admin action");
     state.drain_manager.resume().await?;
     let status = state.drain_manager.get_status().await;
     Ok(Json(DrainStatusResponse::from_status(status)))
@@ -349,6 +359,13 @@ async fn upgrade_start(
         .unwrap_or_else(|| "upgrade".to_string());
     let deadline_secs = request.drain_timeout_secs.unwrap_or(1800);
 
+    tracing::info!(
+        action = "upgrade_start",
+        reason = %reason,
+        deadline_secs,
+        "admin action"
+    );
+
     state
         .drain_manager
         .start_drain(reason, deadline_secs)
@@ -368,6 +385,7 @@ async fn upgrade_status(
 async fn upgrade_abort(
     State(state): State<Arc<AdminState>>,
 ) -> Result<Json<DrainStatusResponse>, AdminApiError> {
+    tracing::info!(action = "upgrade_abort", "admin action");
     state.drain_manager.cancel_drain().await?;
     let status = state.drain_manager.get_status().await;
     Ok(Json(DrainStatusResponse::from_status(status)))

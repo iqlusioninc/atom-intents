@@ -111,6 +111,7 @@ fn create_settlement(
             user_input_denom: "uatom".to_string(),
             solver_output_amount: Uint128::new(10_000_000),
             solver_output_denom: "uusdc".to_string(),
+            expected_ibc_channel: Some("channel-0".to_string()),
             expires_at: env.block.time.seconds() + 3600,
         },
     )
@@ -240,6 +241,7 @@ fn test_attacker_cannot_impersonate_solver() {
             user_input_denom: "uatom".to_string(),
             solver_output_amount: Uint128::new(10_000_000),
             solver_output_denom: "uusdc".to_string(),
+            expected_ibc_channel: Some("channel-0".to_string()),
             expires_at: 9999999999,
         },
     );
@@ -268,6 +270,7 @@ fn test_unregistered_solver_cannot_create_settlement() {
             user_input_denom: "uatom".to_string(),
             solver_output_amount: Uint128::new(10_000_000),
             solver_output_denom: "uusdc".to_string(),
+            expected_ibc_channel: Some("channel-0".to_string()),
             expires_at: 9999999999,
         },
     );
@@ -335,6 +338,7 @@ fn test_duplicate_settlement_id_rejected() {
             user_input_denom: "uatom".to_string(),
             solver_output_amount: Uint128::new(20_000_000),
             solver_output_denom: "uusdc".to_string(),
+            expected_ibc_channel: Some("channel-0".to_string()),
             expires_at: 9999999999,
         },
     );
@@ -675,6 +679,7 @@ fn test_execute_expired_settlement_fails() {
             user_input_denom: "uatom".to_string(),
             solver_output_amount: Uint128::new(10_000_000),
             solver_output_denom: "uusdc".to_string(),
+            expected_ibc_channel: Some("channel-0".to_string()),
             expires_at,
         },
     )

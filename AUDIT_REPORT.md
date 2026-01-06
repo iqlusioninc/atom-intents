@@ -338,24 +338,27 @@ Additional improvements identified during a follow-up audit pass. These are not 
 
 ### 10.1. Persist Expected IBC Channel Per Settlement
 *   **Severity:** **LOW/MEDIUM**
-*   **Status:** 🔶 **OPEN**
+*   **Status:** ✅ **RESOLVED**
 *   **Location:** `contracts/settlement/src/contract.rs`
 *   **Description:** `execute_settlement` validates an allowlisted channel but does not bind a specific channel to each settlement.
 *   **Impact:** Misconfiguration can route a settlement over an unintended (but still allowlisted) channel.
 *   **Recommended Fix:** Persist the channel at settlement creation and enforce equality on settlement execution.
+*   **Resolution:** Added `expected_ibc_channel` to settlements and enforced it during `execute_settlement`.
 
 ### 10.2. Admin Action Audit Logging
 *   **Severity:** **LOW**
-*   **Status:** 🔶 **OPEN**
+*   **Status:** ✅ **RESOLVED**
 *   **Location:** `crates/orchestrator/src/admin.rs`
 *   **Description:** Admin actions are not explicitly logged with structured metadata (actor, endpoint, intent IDs, drain IDs).
 *   **Impact:** Reduced observability and slower incident response.
 *   **Recommended Fix:** Add structured audit logs for all `/admin/*` mutations and include request IDs.
+*   **Resolution:** Added structured logs for all admin mutation endpoints.
 
 ### 10.3. Recovery/Slashing Regression Coverage
 *   **Severity:** **LOW**
-*   **Status:** 🔶 **OPEN**
+*   **Status:** ✅ **RESOLVED**
 *   **Location:** `crates/orchestrator/src/recovery.rs`, `crates/settlement/src/two_phase.rs`
 *   **Description:** Slashing and same-chain delivery paths are minimally covered in end-to-end tests.
 *   **Impact:** Increased risk of regressions in critical recovery paths.
 *   **Recommended Fix:** Add integration tests that assert slashing and same-chain releases move funds as expected.
+*   **Resolution:** Added tests covering recovery slashing and same-chain settlement releases.

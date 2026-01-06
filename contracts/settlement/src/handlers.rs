@@ -110,8 +110,19 @@ pub fn execute_create_settlement(
     user_input_denom: String,
     solver_output_amount: Uint128,
     solver_output_denom: String,
+    expected_ibc_channel: Option<String>,
     expires_at: u64,
 ) -> Result<Response, ContractError> {
+    let config = CONFIG.load(deps.storage)?;
+
+    if let Some(ref channel) = expected_ibc_channel {
+        if !config.allowed_ibc_channels.contains(channel) {
+            return Err(ContractError::InvalidIbcChannel {
+                channel: channel.clone(),
+            });
+        }
+    }
+
     // Verify solver exists and sender is authorized
     let solver =
         SOLVERS
@@ -138,6 +149,7 @@ pub fn execute_create_settlement(
         user_input_denom,
         solver_output_amount,
         solver_output_denom,
+        expected_ibc_channel,
         status: SettlementStatus::Pending,
         created_at: env.block.time.seconds(),
         expires_at,
@@ -466,6 +478,25 @@ pub fn execute_settlement(
     let solver = SOLVERS.load(deps.storage, &settlement.solver_id)?;
     if info.sender != config.admin && info.sender != solver.operator {
         return Err(ContractError::Unauthorized {});
+    }
+
+    if !config.allowed_ibc_channels.contains(&ibc_channel) {
+        return Err(ContractError::InvalidIbcChannel {
+            channel: ibc_channel.clone(),
+        });
+    }
+
+    match settlement.expected_ibc_channel.as_deref() {
+        Some(expected) if expected != ibc_channel => {
+            return Err(ContractError::IbcChannelMismatch {
+                expected: expected.to_string(),
+                provided: ibc_channel.clone(),
+            });
+        }
+        None => {
+            return Err(ContractError::MissingExpectedIbcChannel {});
+        }
+        _ => {}
     }
 
     // Verify settlement is in correct state (SolverLocked means both parties ready)
@@ -1163,6 +1194,7 @@ pub fn execute_fill_order(
             user_input_denom: order.input_denom.clone(),
             solver_output_amount: sent_amount,
             solver_output_denom: order.output_denom.clone(),
+            expected_ibc_channel: None,
             status: SettlementStatus::SolverLocked,
             created_at: env.block.time.seconds(),
             expires_at: order.expires_at,

@@ -72,6 +72,7 @@ pub fn execute(
             user_input_denom,
             solver_output_amount,
             solver_output_denom,
+            expected_ibc_channel,
             expires_at,
         } => execute_create_settlement(
             deps,
@@ -85,6 +86,7 @@ pub fn execute(
             user_input_denom,
             solver_output_amount,
             solver_output_denom,
+            expected_ibc_channel,
             expires_at,
         ),
         ExecuteMsg::MarkUserLocked {
@@ -563,6 +565,7 @@ mod tests {
                 user_input_denom: "uatom".to_string(),
                 solver_output_amount: Uint128::new(1_000_000),
                 solver_output_denom: "uusdc".to_string(),
+                expected_ibc_channel: Some("channel-0".to_string()),
                 expires_at: env.block.time.seconds() + 3600, // 1 hour from now
             },
         )
@@ -699,6 +702,7 @@ mod tests {
                 user_input_denom: "uatom".to_string(),
                 solver_output_amount: Uint128::new(1_000_000),
                 solver_output_denom: "uusdc".to_string(),
+                expected_ibc_channel: Some("channel-0".to_string()),
                 expires_at: env.block.time.seconds() + 3600,
             },
         )
@@ -739,6 +743,7 @@ mod tests {
                 user_input_denom: "uatom".to_string(),
                 solver_output_amount: Uint128::new(1_000_000),
                 solver_output_denom: "uusdc".to_string(),
+                expected_ibc_channel: Some("channel-0".to_string()),
                 expires_at: env.block.time.seconds() + 3600,
             },
         )
@@ -2281,6 +2286,7 @@ mod tests {
                 user_input_denom: "uatom".to_string(),
                 solver_output_amount: Uint128::new(100),
                 solver_output_denom: "uusdc".to_string(),
+                expected_ibc_channel: Some("channel-0".to_string()),
                 expires_at: env.block.time.seconds() + 3600,
             },
         )
@@ -2595,6 +2601,7 @@ mod tests {
                     user_input_denom: "uatom".to_string(),
                     solver_output_amount: Uint128::new(1_000_000),
                     solver_output_denom: "uusdc".to_string(),
+                    expected_ibc_channel: Some("channel-0".to_string()),
                     expires_at: env.block.time.seconds() + 3600,
                 },
             )

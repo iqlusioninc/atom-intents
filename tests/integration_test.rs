@@ -26,6 +26,7 @@ struct MockEscrowContract {
     locks: Arc<Mutex<HashMap<String, EscrowLock>>>,
     next_lock_id: Arc<Mutex<u64>>,
     should_fail: Arc<Mutex<bool>>,
+    release_calls: Arc<Mutex<Vec<String>>>,
 }
 
 impl MockEscrowContract {
@@ -34,6 +35,7 @@ impl MockEscrowContract {
             locks: Arc::new(Mutex::new(HashMap::new())),
             next_lock_id: Arc::new(Mutex::new(1)),
             should_fail: Arc::new(Mutex::new(false)),
+            release_calls: Arc::new(Mutex::new(Vec::new())),
         }
     }
 
@@ -44,6 +46,10 @@ impl MockEscrowContract {
 
     fn get_lock(&self, id: &str) -> Option<EscrowLock> {
         self.locks.lock().unwrap().get(id).cloned()
+    }
+
+    fn release_call_count(&self) -> usize {
+        self.release_calls.lock().unwrap().len()
     }
 }
 
@@ -80,6 +86,7 @@ impl EscrowContract for MockEscrowContract {
 
     async fn release_to(&self, lock: &EscrowLock, _recipient: &str) -> Result<(), SettlementError> {
         self.locks.lock().unwrap().remove(&lock.id);
+        self.release_calls.lock().unwrap().push(lock.id.clone());
         Ok(())
     }
 
@@ -95,6 +102,8 @@ struct MockSolverVault {
     locks: Arc<Mutex<HashMap<String, VaultLock>>>,
     next_lock_id: Arc<Mutex<u64>>,
     should_fail: Arc<Mutex<bool>>,
+    release_calls: Arc<Mutex<Vec<String>>>,
+    complete_calls: Arc<Mutex<Vec<String>>>,
 }
 
 impl MockSolverVault {
@@ -103,6 +112,8 @@ impl MockSolverVault {
             locks: Arc::new(Mutex::new(HashMap::new())),
             next_lock_id: Arc::new(Mutex::new(1)),
             should_fail: Arc::new(Mutex::new(false)),
+            release_calls: Arc::new(Mutex::new(Vec::new())),
+            complete_calls: Arc::new(Mutex::new(Vec::new())),
         }
     }
 
@@ -112,6 +123,14 @@ impl MockSolverVault {
 
     fn get_lock(&self, id: &str) -> Option<VaultLock> {
         self.locks.lock().unwrap().get(id).cloned()
+    }
+
+    fn release_call_count(&self) -> usize {
+        self.release_calls.lock().unwrap().len()
+    }
+
+    fn complete_call_count(&self) -> usize {
+        self.complete_calls.lock().unwrap().len()
     }
 }
 
@@ -148,6 +167,7 @@ impl SolverVaultContract for MockSolverVault {
 
     async fn release_to(&self, lock: &VaultLock, _recipient: &str) -> Result<(), SettlementError> {
         self.locks.lock().unwrap().remove(&lock.id);
+        self.release_calls.lock().unwrap().push(lock.id.clone());
         Ok(())
     }
 
@@ -168,6 +188,7 @@ impl SolverVaultContract for MockSolverVault {
 
     async fn mark_complete(&self, lock: &VaultLock) -> Result<(), SettlementError> {
         self.locks.lock().unwrap().remove(&lock.id);
+        self.complete_calls.lock().unwrap().push(lock.id.clone());
         Ok(())
     }
 }
@@ -372,6 +393,68 @@ async fn test_full_settlement_flow() {
     // Verify locks were created and released
     assert!(escrow.get_lock("escrow-1").is_none()); // Lock should be released
     assert!(vault.get_lock("vault-1").is_none()); // Lock should be released
+}
+
+#[tokio::test]
+async fn test_same_chain_settlement_releases_funds() {
+    let mock_dex = Arc::new(MockDexClient::new("cosmoshub", 100_000_000_000, 0.003));
+    let solver = Arc::new(DexRoutingSolver::new("solver-1", vec![mock_dex]));
+    let oracle = Arc::new(MockOracle::new("test-oracle"));
+    let pair = TradingPair::new("uatom", "uusdc");
+    oracle
+        .set_price(
+            &pair,
+            Decimal::from_str("10.5").unwrap(),
+            Decimal::from_str("0.01").unwrap(),
+        )
+        .await
+        .unwrap();
+    let aggregator = SolutionAggregator::new(vec![solver.clone()], oracle);
+
+    let escrow = MockEscrowContract::new();
+    let vault = MockSolverVault::new();
+    let relayer = MockRelayer::new();
+    let config = TimeoutConfig::default();
+
+    let settlement_engine = TwoPhaseSettlement::new(
+        escrow.clone(),
+        vault.clone(),
+        relayer,
+        config,
+        RouteRegistry::with_mainnet_routes(),
+    );
+
+    let intent = make_test_intent(
+        "intent-same-chain",
+        "user1",
+        "cosmoshub-4",
+        "uatom",
+        10_000_000,
+        "cosmoshub-4",
+        "uusdc",
+        100_000_000,
+        "10.0",
+    );
+
+    let fill_plan = aggregator
+        .aggregate(&intent, Uint128::zero())
+        .await
+        .unwrap();
+    let (solution, _amount) = &fill_plan.selected[0];
+
+    let settlement = settlement_engine
+        .execute(&intent, solution, current_time())
+        .await
+        .unwrap();
+
+    assert!(matches!(
+        settlement.status,
+        atom_intents_types::SettlementStatus::Complete
+    ));
+    assert!(settlement.ibc_transfers.is_empty());
+    assert_eq!(escrow.release_call_count(), 1);
+    assert_eq!(vault.release_call_count(), 1);
+    assert_eq!(vault.complete_call_count(), 1);
 }
 
 #[tokio::test]

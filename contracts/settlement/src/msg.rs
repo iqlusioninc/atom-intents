@@ -28,6 +28,7 @@ pub enum ExecuteMsg {
         user_input_denom: String,
         solver_output_amount: Uint128,
         solver_output_denom: String,
+        expected_ibc_channel: Option<String>,
         expires_at: u64,
     },
 
@@ -245,6 +246,7 @@ pub struct SettlementResponse {
     pub user_input_denom: String,
     pub solver_output_amount: Uint128,
     pub solver_output_denom: String,
+    pub expected_ibc_channel: Option<String>,
     pub status: String,
     pub created_at: u64,
     pub expires_at: u64,

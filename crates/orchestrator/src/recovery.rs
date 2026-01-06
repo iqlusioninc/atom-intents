@@ -660,6 +660,33 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_recover_settlement_slash_solver() {
+        let escrow = MockEscrow::new();
+        let refund_calls = escrow.refund_calls.clone();
+        let vault = MockVault::new();
+        let slash_calls = vault.slash_calls.clone();
+        let manager = RecoveryManager::new(escrow, vault, 600);
+
+        let settlement = make_test_settlement(SettlementPhase::TimedOut, 2000);
+        let action = RecoveryAction::SlashSolver {
+            solver_id: "solver-1".to_string(),
+            amount: Uint128::new(500_000),
+            reason: "timeout".to_string(),
+        };
+
+        let result = manager.recover_settlement(&settlement, action).await;
+        assert!(result.is_ok());
+
+        let refunds = refund_calls.read().await;
+        assert_eq!(refunds.len(), 1);
+        assert_eq!(refunds[0], "lock-1");
+
+        let slashes = slash_calls.read().await;
+        assert_eq!(slashes.len(), 1);
+        assert_eq!(slashes[0], "vault-lock-1");
+    }
+
+    #[tokio::test]
     async fn test_get_recovery_stats() {
         let escrow = MockEscrow::new();
         let vault = MockVault::new();

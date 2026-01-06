@@ -117,6 +117,7 @@ pub fn settlement_to_response(settlement: Settlement) -> SettlementResponse {
         user_input_denom: settlement.user_input_denom,
         solver_output_amount: settlement.solver_output_amount,
         solver_output_denom: settlement.solver_output_denom,
+        expected_ibc_channel: settlement.expected_ibc_channel,
         status,
         created_at: settlement.created_at,
         expires_at: settlement.expires_at,

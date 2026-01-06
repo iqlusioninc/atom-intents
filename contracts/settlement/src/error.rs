@@ -42,6 +42,12 @@ pub enum ContractError {
     #[error("Invalid IBC channel: {channel}")]
     InvalidIbcChannel { channel: String },
 
+    #[error("Missing expected IBC channel binding for settlement")]
+    MissingExpectedIbcChannel {},
+
+    #[error("IBC channel mismatch: expected {expected}, provided {provided}")]
+    IbcChannelMismatch { expected: String, provided: String },
+
     // ═══════════════════════════════════════════════════════════════════════════
     // ON-CHAIN ORDER ERRORS
     // ═══════════════════════════════════════════════════════════════════════════
