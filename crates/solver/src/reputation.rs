@@ -2,7 +2,7 @@ use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
 use cosmwasm_std::Uint128;
 use serde::{Deserialize, Serialize};
 
-use crate::ReputationError;
+use crate::{build_http_client, ReputationError};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SolverReputation {
@@ -57,7 +57,7 @@ impl ReputationClient {
             BASE64.encode(&query)
         );
 
-        let client = reqwest::Client::new();
+        let client = build_http_client();
         let response = client
             .get(&url)
             .send()
@@ -101,7 +101,7 @@ impl ReputationClient {
             BASE64.encode(&query)
         );
 
-        let client = reqwest::Client::new();
+        let client = build_http_client();
         let response = client
             .get(&url)
             .send()
@@ -149,7 +149,7 @@ impl ReputationClient {
             BASE64.encode(&query)
         );
 
-        let client = reqwest::Client::new();
+        let client = build_http_client();
         let response = client
             .get(&url)
             .send()

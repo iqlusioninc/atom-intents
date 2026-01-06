@@ -3,6 +3,8 @@ use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use thiserror::Error;
 
+use crate::build_http_client;
+
 #[derive(Debug, Error)]
 pub enum DenomError {
     #[error("failed to query denom trace: {0}")]
@@ -47,7 +49,7 @@ impl DenomRegistry {
     pub fn new() -> Self {
         let mut registry = Self {
             traces: HashMap::new(),
-            client: reqwest::Client::new(),
+            client: build_http_client(),
             rpc_endpoints: HashMap::new(),
         };
 
@@ -422,8 +424,6 @@ mod tests {
 
     #[test]
     fn test_invalid_ibc_denom_format() {
-        let registry = DenomRegistry::new();
-
         // This would fail in lookup because "notanibc" doesn't start with "ibc/"
         // but won't throw InvalidFormat unless we try to strip the prefix
         let result = DenomRegistry::compute_ibc_denom("transfer/channel-0", "test");

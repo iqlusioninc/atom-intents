@@ -5,6 +5,7 @@ use cosmwasm_std::Uint128;
 pub struct InstantiateMsg {
     pub admin: String,
     pub escrow_contract: String,
+    pub allowed_ibc_channels: Vec<String>,
     pub min_solver_bond: Uint128,
     pub base_slash_bps: u64,
 }
@@ -61,6 +62,7 @@ pub enum ExecuteMsg {
     UpdateConfig {
         admin: Option<String>,
         escrow_contract: Option<String>,
+        allowed_ibc_channels: Option<Vec<String>>,
         min_solver_bond: Option<Uint128>,
         base_slash_bps: Option<u64>,
     },
@@ -212,6 +214,7 @@ pub enum QueryMsg {
 pub struct ConfigResponse {
     pub admin: String,
     pub escrow_contract: String,
+    pub allowed_ibc_channels: Vec<String>,
     pub min_solver_bond: Uint128,
     pub base_slash_bps: u64,
 }
@@ -324,6 +327,7 @@ pub enum StuckSettlementAction {
 pub struct ConfigUpdate {
     pub admin: Option<String>,
     pub escrow_contract: Option<String>,
+    pub allowed_ibc_channels: Option<Vec<String>>,
     pub min_solver_bond: Option<Uint128>,
     pub base_slash_bps: Option<u64>,
 }

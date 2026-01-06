@@ -412,6 +412,7 @@ pub fn execute_update_config(
     info: MessageInfo,
     admin: Option<String>,
     escrow_contract: Option<String>,
+    allowed_ibc_channels: Option<Vec<String>>,
     min_solver_bond: Option<Uint128>,
     base_slash_bps: Option<u64>,
 ) -> Result<Response, ContractError> {
@@ -426,6 +427,14 @@ pub fn execute_update_config(
     }
     if let Some(escrow_contract) = escrow_contract {
         config.escrow_contract = deps.api.addr_validate(&escrow_contract)?;
+    }
+    if let Some(allowed_ibc_channels) = allowed_ibc_channels {
+        if allowed_ibc_channels.is_empty() {
+            return Err(ContractError::InvalidIbcChannel {
+                channel: "missing allowlist".to_string(),
+            });
+        }
+        config.allowed_ibc_channels = allowed_ibc_channels;
     }
     if let Some(min_solver_bond) = min_solver_bond {
         config.min_solver_bond = min_solver_bond;

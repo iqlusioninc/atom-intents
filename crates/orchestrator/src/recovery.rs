@@ -320,11 +320,8 @@ where
 
         // Then slash the solver bond
         if let Some(ref solver_lock) = settlement.solver_lock {
-            // In a real implementation, this would slash the bond rather than just unlock
-            // For now, we'll just unlock to return funds
-            // TODO: Implement actual slashing mechanism
             (&self.solver_vault)
-                .unlock(solver_lock)
+                .slash(solver_lock, amount, reason)
                 .await
                 .map_err(|e| RecoveryError::SlashFailed {
                     reason: e.to_string(),
@@ -476,12 +473,16 @@ mod tests {
     // Mock vault contract
     struct MockVault {
         unlock_calls: Arc<RwLock<Vec<String>>>,
+        slash_calls: Arc<RwLock<Vec<String>>>,
+        release_calls: Arc<RwLock<Vec<String>>>,
     }
 
     impl MockVault {
         fn new() -> Self {
             Self {
                 unlock_calls: Arc::new(RwLock::new(Vec::new())),
+                slash_calls: Arc::new(RwLock::new(Vec::new())),
+                release_calls: Arc::new(RwLock::new(Vec::new())),
             }
         }
     }
@@ -498,8 +499,27 @@ mod tests {
             unimplemented!()
         }
 
+        async fn release_to(
+            &self,
+            lock: &VaultLock,
+            _recipient: &str,
+        ) -> Result<(), SettlementError> {
+            self.release_calls.write().await.push(lock.id.clone());
+            Ok(())
+        }
+
         async fn unlock(&self, lock: &VaultLock) -> Result<(), SettlementError> {
             self.unlock_calls.write().await.push(lock.id.clone());
+            Ok(())
+        }
+
+        async fn slash(
+            &self,
+            lock: &VaultLock,
+            _amount: Uint128,
+            _reason: &str,
+        ) -> Result<(), SettlementError> {
+            self.slash_calls.write().await.push(lock.id.clone());
             Ok(())
         }
 

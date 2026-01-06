@@ -508,6 +508,8 @@ wasmd query wasm contract-state smart $CONTRACT_ADDR '{"config": {}}'
 
 ### API Endpoints
 
+All admin endpoints require the `x-admin-token` header configured for the admin server.
+
 | Endpoint | Method | Description |
 |----------|--------|-------------|
 | `/admin/drain/start` | POST | Start drain mode |

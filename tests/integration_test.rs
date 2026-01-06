@@ -146,7 +146,22 @@ impl SolverVaultContract for MockSolverVault {
         Ok(lock)
     }
 
+    async fn release_to(&self, lock: &VaultLock, _recipient: &str) -> Result<(), SettlementError> {
+        self.locks.lock().unwrap().remove(&lock.id);
+        Ok(())
+    }
+
     async fn unlock(&self, lock: &VaultLock) -> Result<(), SettlementError> {
+        self.locks.lock().unwrap().remove(&lock.id);
+        Ok(())
+    }
+
+    async fn slash(
+        &self,
+        lock: &VaultLock,
+        _amount: Uint128,
+        _reason: &str,
+    ) -> Result<(), SettlementError> {
         self.locks.lock().unwrap().remove(&lock.id);
         Ok(())
     }

@@ -275,3 +275,57 @@ During the continued audit following the initial resolution, one additional high
     *   Updated `ExecuteMsg::DecayReputation` to accept optional `start_after` (String) and `limit` (u32) parameters.
     *   Refactored `execute_decay_reputation` to use `cw_storage_plus` range pagination.
     *   Added `test_reputation_decay_pagination` to verify the new functionality.
+
+---
+
+## 9. Re-Audit Findings (Full Scope)
+
+A follow-up audit covering security, spec compliance, and operational readiness identified the following issues.
+
+### 9.1. Admin API Missing Authentication
+*   **Severity:** **HIGH**
+*   **Status:** ✅ **RESOLVED**
+*   **Location:** `crates/orchestrator/src/admin.rs`
+*   **Description:** Admin endpoints (`/admin/*`) are exposed without authentication or network binding constraints. Any client could start/abort drains, inspect inflight state, or disrupt upgrades.
+*   **Impact:** Service availability and upgrade integrity can be compromised.
+*   **Recommended Fix:** Add authentication middleware (token or mTLS) and document required headers/controls.
+
+### 9.2. Same-Chain Settlement Does Not Transfer Output
+*   **Severity:** **HIGH**
+*   **Status:** ✅ **RESOLVED**
+*   **Location:** `crates/settlement/src/two_phase.rs`
+*   **Description:** Same-chain flows return success without moving solver output to the user. The current interface lacks a same-chain transfer path.
+*   **Impact:** Users can receive no funds while settlement reports completion.
+*   **Recommended Fix:** Add a same-chain transfer mechanism or vault release method and test delivery.
+
+### 9.3. IBC Channel Not Validated
+*   **Severity:** **MEDIUM**
+*   **Status:** ✅ **RESOLVED**
+*   **Location:** `contracts/settlement/src/handlers.rs`
+*   **Description:** `execute_settlement` accepts any `ibc_channel` string from the caller without validation.
+*   **Impact:** Misrouting or malicious channel usage could cause loss or delay.
+*   **Recommended Fix:** Add channel allowlist or persist expected channel at settlement creation.
+
+### 9.4. IBC Escrow Accepts Extra Non-IBC Funds
+*   **Severity:** **MEDIUM**
+*   **Status:** ✅ **RESOLVED**
+*   **Location:** `contracts/escrow/src/contract.rs`
+*   **Description:** `execute_lock_from_ibc` validates presence of IBC funds but does not reject extra non-IBC funds in the same call.
+*   **Impact:** Users can accidentally trap funds.
+*   **Recommended Fix:** Require exactly one IBC coin and reject all other funds.
+
+### 9.5. Recovery Slashing Is Non-Functional
+*   **Severity:** **MEDIUM**
+*   **Status:** ✅ **RESOLVED**
+*   **Location:** `crates/orchestrator/src/recovery.rs`
+*   **Description:** The slashing path unlocks solver funds and has a TODO instead of enforcing penalties.
+*   **Impact:** Misbehavior is not penalized; solver incentives weakened.
+*   **Recommended Fix:** Implement vault-level slashing or integrate with on-chain settlement slashing.
+
+### 9.6. Gas Price Query Stub
+*   **Severity:** **LOW**
+*   **Status:** ✅ **RESOLVED**
+*   **Location:** `crates/solver/src/fees.rs`
+*   **Description:** Gas price queries return configured defaults; no live RPC query.
+*   **Impact:** Fee estimates can drift and degrade solver competitiveness.
+*   **Recommended Fix:** Implement chain RPC fee query or clearly gate behind feature flag.

@@ -14,7 +14,7 @@ use std::str::FromStr;
 use std::sync::{Arc, RwLock};
 use thiserror::Error;
 
-use crate::{SolveError, Solver};
+use crate::{build_http_client, SolveError, Solver};
 
 // ============================================================================
 // Error Types
@@ -973,7 +973,7 @@ impl BinanceClient {
     pub fn new(config: BinanceConfig) -> Self {
         Self {
             config,
-            http_client: reqwest::Client::new(),
+            http_client: build_http_client(),
         }
     }
 

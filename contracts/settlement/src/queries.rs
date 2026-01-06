@@ -17,6 +17,7 @@ pub fn query_config(deps: Deps) -> StdResult<ConfigResponse> {
     Ok(ConfigResponse {
         admin: config.admin.to_string(),
         escrow_contract: config.escrow_contract.to_string(),
+        allowed_ibc_channels: config.allowed_ibc_channels,
         min_solver_bond: config.min_solver_bond,
         base_slash_bps: config.base_slash_bps,
     })

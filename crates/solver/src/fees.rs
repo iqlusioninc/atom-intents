@@ -35,6 +35,7 @@
 //! println!("Total multi-hop fee: {} {}", total.fee_amount, total.fee_denom);
 //! ```
 
+use async_trait::async_trait;
 use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -61,6 +62,7 @@ pub struct FeeEstimator {
     chain_configs: HashMap<String, ChainFeeConfig>,
     gas_prices: HashMap<String, GasPrice>,
     gas_costs: GasCosts,
+    gas_price_provider: Option<std::sync::Arc<dyn GasPriceProvider>>,
 }
 
 /// Configuration for a specific chain's fee parameters
@@ -82,6 +84,11 @@ pub struct GasPrice {
     pub average: Decimal,
     pub high: Decimal,
     pub updated_at: u64,
+}
+
+#[async_trait]
+pub trait GasPriceProvider: Send + Sync {
+    async fn query_gas_prices(&self, chain_id: &str) -> Result<GasPrice, FeeError>;
 }
 
 /// Complete fee estimate for an operation
@@ -236,7 +243,17 @@ impl FeeEstimator {
             chain_configs,
             gas_prices: HashMap::new(),
             gas_costs: GasCosts::default(),
+            gas_price_provider: None,
         }
+    }
+
+    /// Create a fee estimator with a custom gas price provider.
+    pub fn with_gas_price_provider(
+        provider: std::sync::Arc<dyn GasPriceProvider>,
+    ) -> Self {
+        let mut estimator = Self::new();
+        estimator.gas_price_provider = Some(provider);
+        estimator
     }
 
     /// Add or update a chain configuration
@@ -429,9 +446,12 @@ impl FeeEstimator {
         fee.ceil().to_string().parse::<u128>().unwrap_or(0)
     }
 
-    /// Query current gas prices from chain (mock implementation)
-    /// In production, this would query the chain's fee market
+    /// Query current gas prices from the provider when configured, otherwise fall back to defaults.
     pub async fn query_gas_prices(&self, chain_id: &str) -> Result<GasPrice, FeeError> {
+        if let Some(provider) = &self.gas_price_provider {
+            return provider.query_gas_prices(chain_id).await;
+        }
+
         let config = self.get_chain_config(chain_id)?;
 
         // TODO: Implement actual chain query via RPC
@@ -729,7 +749,7 @@ mod tests {
 
         // Should use the updated gas price
         let expected_fee = 300_000u128 * 10_000_000_000u128 / 1_000_000_000_000u128; // 0.01 * 300_000
-        assert_eq!(fee.fee_amount, 3000);
+        assert_eq!(fee.fee_amount, expected_fee);
     }
 
     #[test]

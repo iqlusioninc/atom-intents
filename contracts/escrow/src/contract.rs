@@ -150,18 +150,18 @@ fn execute_lock_from_ibc(
         });
     }
 
-    // Verify exactly one IBC coin was sent
-    let ibc_funds: Vec<_> = info
-        .funds
-        .iter()
-        .filter(|c| c.denom.starts_with("ibc/"))
-        .collect();
-
-    if ibc_funds.len() != 1 {
-        return Err(ContractError::NotIbcFunds {});
+    // Verify exactly one IBC coin was sent (reject any extra funds)
+    if info.funds.len() != 1 {
+        return Err(ContractError::InvalidFunds {
+            expected: "exactly one ibc coin".to_string(),
+            got: format!("{} coins", info.funds.len()),
+        });
     }
 
-    let coin = ibc_funds[0];
+    let coin = &info.funds[0];
+    if !coin.denom.starts_with("ibc/") {
+        return Err(ContractError::NotIbcFunds {});
+    }
 
     // Generate escrow ID from intent ID for predictability
     let escrow_id = format!("esc_{}", intent_id);

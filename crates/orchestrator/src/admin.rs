@@ -1,6 +1,8 @@
 use axum::{
+    body::Body,
     extract::{Path, State},
-    http::StatusCode,
+    http::{Request, StatusCode},
+    middleware::{from_fn_with_state, Next},
     response::{IntoResponse, Response},
     routing::{get, post},
     Json, Router,
@@ -16,6 +18,7 @@ pub struct AdminServer {
     addr: String,
     drain_manager: Arc<DrainModeManager>,
     inflight_tracker: Arc<InflightTracker>,
+    auth_token: String,
 }
 
 impl AdminServer {
@@ -23,11 +26,17 @@ impl AdminServer {
         drain_manager: Arc<DrainModeManager>,
         inflight_tracker: Arc<InflightTracker>,
         addr: String,
+        auth_token: String,
     ) -> Self {
+        assert!(
+            !auth_token.trim().is_empty(),
+            "admin auth token must be non-empty"
+        );
         Self {
             addr,
             drain_manager,
             inflight_tracker,
+            auth_token,
         }
     }
 
@@ -35,6 +44,7 @@ impl AdminServer {
         let state = Arc::new(AdminState {
             drain_manager: self.drain_manager,
             inflight_tracker: self.inflight_tracker,
+            auth_token: self.auth_token,
         });
 
         let app = Router::new()
@@ -48,6 +58,7 @@ impl AdminServer {
             .route("/admin/upgrade/start", post(upgrade_start))
             .route("/admin/upgrade/status", get(upgrade_status))
             .route("/admin/upgrade/abort", post(upgrade_abort))
+            .layer(from_fn_with_state(state.clone(), require_admin_auth))
             .with_state(state);
 
         let listener = TcpListener::bind(&self.addr)
@@ -68,6 +79,7 @@ impl AdminServer {
 struct AdminState {
     drain_manager: Arc<DrainModeManager>,
     inflight_tracker: Arc<InflightTracker>,
+    auth_token: String,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -100,6 +112,23 @@ impl IntoResponse for AdminApiError {
 
         (status, message).into_response()
     }
+}
+
+async fn require_admin_auth(
+    State(state): State<Arc<AdminState>>,
+    req: Request<Body>,
+    next: Next,
+) -> Result<Response, StatusCode> {
+    let token = req
+        .headers()
+        .get("x-admin-token")
+        .and_then(|value| value.to_str().ok());
+
+    if token != Some(state.auth_token.as_str()) {
+        return Err(StatusCode::UNAUTHORIZED);
+    }
+
+    Ok(next.run(req).await)
 }
 
 #[derive(Debug, Deserialize)]

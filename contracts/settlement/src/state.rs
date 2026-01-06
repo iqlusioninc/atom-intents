@@ -8,6 +8,8 @@ pub struct Config {
     pub admin: Addr,
     /// Escrow contract address
     pub escrow_contract: Addr,
+    /// Allowed IBC channels for settlement execution
+    pub allowed_ibc_channels: Vec<String>,
     /// Minimum solver bond amount
     pub min_solver_bond: Uint128,
     /// Base slash percentage (e.g., 200 = 2%)

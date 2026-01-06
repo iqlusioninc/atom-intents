@@ -101,7 +101,14 @@ pub trait SolverVaultContract: Send + Sync {
         denom: &str,
         timeout: u64,
     ) -> Result<VaultLock, SettlementError>;
+    async fn release_to(&self, lock: &VaultLock, recipient: &str) -> Result<(), SettlementError>;
     async fn unlock(&self, lock: &VaultLock) -> Result<(), SettlementError>;
+    async fn slash(
+        &self,
+        lock: &VaultLock,
+        amount: Uint128,
+        reason: &str,
+    ) -> Result<(), SettlementError>;
     async fn mark_complete(&self, lock: &VaultLock) -> Result<(), SettlementError>;
 }
 
@@ -225,20 +232,36 @@ where
         // PHASE 2: EXECUTE - Transfer funds
         // ═══════════════════════════════════════════════════════════════════
 
+        if route.hops.is_empty() {
+            // Same-chain settlement: transfer solver output directly and release escrow.
+            self.solver_vault
+                .release_to(&solver_lock, &intent.output.recipient)
+                .await?;
+            self.user_escrow
+                .release_to(&user_lock, &solution.solver_id)
+                .await?;
+            self.solver_vault.mark_complete(&solver_lock).await?;
+
+            return Ok(Settlement {
+                intent_id: intent.id.clone(),
+                solver_id: solution.solver_id.clone(),
+                user_input: intent.input.amount,
+                solver_output: solution.fill.output_amount,
+                ibc_transfers: vec![],
+                status: SettlementStatus::Complete,
+            });
+        }
+
         // Build IBC transfer for output to user
-        let (channel, memo, needs_relayer) = if route.hops.is_empty() {
-            ("local".to_string(), None, false)
+        let memo = if route.hops.len() > 1 {
+            Some(build_route_pfm_memo(
+                &route.hops,
+                &intent.output.recipient,
+            ))
         } else {
-            let memo = if route.hops.len() > 1 {
-                Some(build_route_pfm_memo(
-                    &route.hops,
-                    &intent.output.recipient,
-                ))
-            } else {
-                None
-            };
-            (route.hops[0].channel_id.clone(), memo, true)
+            None
         };
+        let channel = route.hops[0].channel_id.clone();
 
         let mut output_builder = IbcTransferBuilder::new(
             &intent.input.chain_id,
@@ -257,17 +280,13 @@ where
 
         let output_transfer = output_builder.build(current_time);
 
-        let result = if needs_relayer {
-            // Track with relayer for priority handling
-            self.relayer
-                .track_settlement(&intent.id, &[output_transfer.clone()])
-                .await?;
+        // Track with relayer for priority handling
+        self.relayer
+            .track_settlement(&intent.id, &[output_transfer.clone()])
+            .await?;
 
-            // Wait for IBC confirmation
-            self.relayer.wait_for_ibc(&output_transfer).await?
-        } else {
-            IbcResult::Success { ack: Vec::new() }
-        };
+        // Wait for IBC confirmation
+        let result = self.relayer.wait_for_ibc(&output_transfer).await?;
 
         match result {
             IbcResult::Success { .. } => {

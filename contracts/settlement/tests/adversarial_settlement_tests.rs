@@ -52,6 +52,7 @@ fn setup_contract() -> (
     let msg = InstantiateMsg {
         admin: addrs.admin.to_string(),
         escrow_contract: addrs.escrow.to_string(),
+        allowed_ibc_channels: vec!["channel-0".to_string()],
         min_solver_bond: Uint128::new(1_000_000),
         base_slash_bps: 1000, // 10%
     };
@@ -739,6 +740,7 @@ fn test_non_admin_cannot_update_config() {
         ExecuteMsg::UpdateConfig {
             admin: Some(addrs.attacker.to_string()),
             escrow_contract: None,
+            allowed_ibc_channels: None,
             min_solver_bond: None,
             base_slash_bps: None,
         },
@@ -762,6 +764,7 @@ fn test_non_admin_cannot_change_escrow() {
         ExecuteMsg::UpdateConfig {
             admin: None,
             escrow_contract: Some(fake_escrow.to_string()),
+            allowed_ibc_channels: None,
             min_solver_bond: None,
             base_slash_bps: None,
         },
@@ -784,6 +787,7 @@ fn test_non_admin_cannot_reduce_bond() {
         ExecuteMsg::UpdateConfig {
             admin: None,
             escrow_contract: None,
+            allowed_ibc_channels: None,
             min_solver_bond: Some(Uint128::zero()),
             base_slash_bps: None,
         },

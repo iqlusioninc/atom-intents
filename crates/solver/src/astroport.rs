@@ -9,7 +9,7 @@ use std::time::{Duration, Instant};
 use tokio::sync::RwLock;
 use tracing::{debug, warn};
 
-use crate::{DexClient, DexError, DexQuote, PoolInfo};
+use crate::{build_http_client, DexClient, DexError, DexQuote, PoolInfo};
 
 /// Astroport DEX Client - queries Astroport for swap quotes
 /// Supports multiple chains: Neutron, Injective, Terra, etc.
@@ -29,7 +29,7 @@ impl AstroportClient {
     ) -> Self {
         Self {
             base_url: base_url.into(),
-            client: reqwest::Client::new(),
+            client: build_http_client(),
             chain_id: chain_id.into(),
             rpc_url: rpc_url.into(),
             pool_cache: Arc::new(RwLock::new(PoolCache::new(Duration::from_secs(60)))),

@@ -1012,7 +1012,22 @@ mod tests {
             ) -> Result<VaultLock, SettlementError> {
                 unimplemented!()
             }
+            async fn release_to(
+                &self,
+                _lock: &VaultLock,
+                _recipient: &str,
+            ) -> Result<(), SettlementError> {
+                unimplemented!()
+            }
             async fn unlock(&self, _lock: &VaultLock) -> Result<(), SettlementError> {
+                unimplemented!()
+            }
+            async fn slash(
+                &self,
+                _lock: &VaultLock,
+                _amount: Uint128,
+                _reason: &str,
+            ) -> Result<(), SettlementError> {
                 unimplemented!()
             }
             async fn mark_complete(&self, _lock: &VaultLock) -> Result<(), SettlementError> {
@@ -1126,7 +1141,22 @@ mod tests {
             ) -> Result<VaultLock, SettlementError> {
                 unimplemented!()
             }
+            async fn release_to(
+                &self,
+                _lock: &VaultLock,
+                _recipient: &str,
+            ) -> Result<(), SettlementError> {
+                unimplemented!()
+            }
             async fn unlock(&self, _lock: &VaultLock) -> Result<(), SettlementError> {
+                unimplemented!()
+            }
+            async fn slash(
+                &self,
+                _lock: &VaultLock,
+                _amount: Uint128,
+                _reason: &str,
+            ) -> Result<(), SettlementError> {
                 unimplemented!()
             }
             async fn mark_complete(&self, _lock: &VaultLock) -> Result<(), SettlementError> {
@@ -1220,7 +1250,22 @@ mod tests {
             ) -> Result<VaultLock, SettlementError> {
                 unimplemented!()
             }
+            async fn release_to(
+                &self,
+                _lock: &VaultLock,
+                _recipient: &str,
+            ) -> Result<(), SettlementError> {
+                unimplemented!()
+            }
             async fn unlock(&self, _lock: &VaultLock) -> Result<(), SettlementError> {
+                unimplemented!()
+            }
+            async fn slash(
+                &self,
+                _lock: &VaultLock,
+                _amount: Uint128,
+                _reason: &str,
+            ) -> Result<(), SettlementError> {
                 unimplemented!()
             }
             async fn mark_complete(&self, _lock: &VaultLock) -> Result<(), SettlementError> {
@@ -1385,7 +1430,22 @@ mod tests {
             ) -> Result<VaultLock, SettlementError> {
                 unimplemented!()
             }
+            async fn release_to(
+                &self,
+                _lock: &VaultLock,
+                _recipient: &str,
+            ) -> Result<(), SettlementError> {
+                unimplemented!()
+            }
             async fn unlock(&self, _lock: &VaultLock) -> Result<(), SettlementError> {
+                unimplemented!()
+            }
+            async fn slash(
+                &self,
+                _lock: &VaultLock,
+                _amount: Uint128,
+                _reason: &str,
+            ) -> Result<(), SettlementError> {
                 unimplemented!()
             }
             async fn mark_complete(&self, _lock: &VaultLock) -> Result<(), SettlementError> {

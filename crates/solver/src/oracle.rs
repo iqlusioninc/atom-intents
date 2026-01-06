@@ -10,6 +10,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use thiserror::Error;
 use tokio::sync::RwLock;
 
+use crate::build_http_client;
+
 /// Helper function to compute 10^exp for Decimal
 fn decimal_pow10(exp: i32) -> Decimal {
     if exp >= 0 {
@@ -216,7 +218,7 @@ impl PythOracle {
 
         Self {
             id: "pyth".to_string(),
-            client: Client::new(),
+            client: build_http_client(),
             base_url: base_url.into(),
             feed_ids,
         }
@@ -333,7 +335,7 @@ impl ChainlinkOracle {
     pub fn new(rpc_endpoint: impl Into<String>) -> Self {
         Self {
             id: "chainlink".to_string(),
-            client: Client::new(),
+            client: build_http_client(),
             rpc_endpoint: rpc_endpoint.into(),
             contract_addresses: HashMap::new(),
         }
@@ -454,7 +456,7 @@ impl SlinkyOracle {
     pub fn new(rpc_endpoint: impl Into<String>) -> Self {
         Self {
             id: "slinky".to_string(),
-            client: Client::new(),
+            client: build_http_client(),
             rpc_endpoint: rpc_endpoint.into(),
         }
     }

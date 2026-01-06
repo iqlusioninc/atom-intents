@@ -3,7 +3,7 @@ use atom_intents_types::{DexSwapStep, TradingPair};
 use serde::Deserialize;
 use tracing::{debug, warn};
 
-use crate::{DexClient, DexError, DexQuote, PoolInfo};
+use crate::{build_http_client, DexClient, DexError, DexQuote, PoolInfo};
 
 /// Osmosis DEX Client - queries Osmosis SQS (Sidecar Query Server) for quotes
 pub struct OsmosisClient {
@@ -16,7 +16,7 @@ impl OsmosisClient {
     pub fn new(base_url: impl Into<String>, chain_id: impl Into<String>) -> Self {
         Self {
             base_url: base_url.into(),
-            client: reqwest::Client::new(),
+            client: build_http_client(),
             chain_id: chain_id.into(),
         }
     }

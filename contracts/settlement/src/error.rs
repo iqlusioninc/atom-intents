@@ -39,6 +39,9 @@ pub enum ContractError {
     #[error("Insufficient funds: required {required}, provided {provided}")]
     InsufficientFunds { required: String, provided: String },
 
+    #[error("Invalid IBC channel: {channel}")]
+    InvalidIbcChannel { channel: String },
+
     // ═══════════════════════════════════════════════════════════════════════════
     // ON-CHAIN ORDER ERRORS
     // ═══════════════════════════════════════════════════════════════════════════

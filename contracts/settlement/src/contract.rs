@@ -35,9 +35,15 @@ pub fn instantiate(
     let config = Config {
         admin: deps.api.addr_validate(&msg.admin)?,
         escrow_contract: deps.api.addr_validate(&msg.escrow_contract)?,
+        allowed_ibc_channels: msg.allowed_ibc_channels,
         min_solver_bond: msg.min_solver_bond,
         base_slash_bps: msg.base_slash_bps,
     };
+    if config.allowed_ibc_channels.is_empty() {
+        return Err(ContractError::InvalidIbcChannel {
+            channel: "missing allowlist".to_string(),
+        });
+    }
     CONFIG.save(deps.storage, &config)?;
 
     Ok(Response::new().add_attribute("action", "instantiate"))
@@ -105,6 +111,7 @@ pub fn execute(
         ExecuteMsg::UpdateConfig {
             admin,
             escrow_contract,
+            allowed_ibc_channels,
             min_solver_bond,
             base_slash_bps,
         } => execute_update_config(
@@ -112,6 +119,7 @@ pub fn execute(
             info,
             admin,
             escrow_contract,
+            allowed_ibc_channels,
             min_solver_bond,
             base_slash_bps,
         ),
@@ -371,6 +379,14 @@ fn apply_config_update<A: cosmwasm_std::Api + ?Sized>(
     if let Some(ref escrow) = update.escrow_contract {
         config.escrow_contract = api.addr_validate(escrow)?;
     }
+    if let Some(ref allowed_channels) = update.allowed_ibc_channels {
+        if allowed_channels.is_empty() {
+            return Err(ContractError::InvalidIbcChannel {
+                channel: "missing allowlist".to_string(),
+            });
+        }
+        config.allowed_ibc_channels = allowed_channels.clone();
+    }
     if let Some(bond) = update.min_solver_bond {
         config.min_solver_bond = bond;
     }
@@ -488,6 +504,7 @@ mod tests {
         let msg = InstantiateMsg {
             admin: addrs.admin.to_string(),
             escrow_contract: addrs.escrow.to_string(),
+            allowed_ibc_channels: vec!["channel-0".to_string()],
             min_solver_bond: Uint128::new(1_000_000),
             base_slash_bps: 200,
         };
@@ -1302,6 +1319,7 @@ mod tests {
             ExecuteMsg::UpdateConfig {
                 admin: Some(addrs.new_admin.to_string()),
                 escrow_contract: Some(addrs.new_escrow.to_string()),
+                allowed_ibc_channels: Some(vec!["channel-0".to_string()]),
                 min_solver_bond: Some(Uint128::new(5_000_000)),
                 base_slash_bps: Some(500),
             },
@@ -1327,6 +1345,7 @@ mod tests {
             ExecuteMsg::UpdateConfig {
                 admin: Some(addrs.new_admin.to_string()),
                 escrow_contract: None,
+                allowed_ibc_channels: None,
                 min_solver_bond: None,
                 base_slash_bps: None,
             },
@@ -2505,6 +2524,7 @@ mod tests {
                 new_config: Some(ConfigUpdate {
                     admin: Some(addrs.new_admin.to_string()),
                     escrow_contract: None,
+                    allowed_ibc_channels: None,
                     min_solver_bond: Some(Uint128::new(5_000_000)),
                     base_slash_bps: Some(500),
                 }),

@@ -5,7 +5,7 @@ use std::sync::Arc;
 use tokio::sync::Mutex;
 use tracing::{debug, warn};
 
-use crate::{DenomRegistry, DexClient, DexError, DexQuote, PoolInfo};
+use crate::{build_http_client, DenomRegistry, DexClient, DexError, DexQuote, PoolInfo};
 
 /// Skip Go API Client - cross-chain routing aggregator
 /// Provides optimal routes across Cosmos chains via DEX aggregation and IBC
@@ -19,7 +19,7 @@ impl SkipGoClient {
     pub fn new(base_url: impl Into<String>) -> Self {
         Self {
             base_url: base_url.into(),
-            client: reqwest::Client::new(),
+            client: build_http_client(),
             denom_registry: Arc::new(Mutex::new(DenomRegistry::new())),
         }
     }
@@ -33,7 +33,7 @@ impl SkipGoClient {
     pub fn with_denom_registry(base_url: impl Into<String>, registry: DenomRegistry) -> Self {
         Self {
             base_url: base_url.into(),
-            client: reqwest::Client::new(),
+            client: build_http_client(),
             denom_registry: Arc::new(Mutex::new(registry)),
         }
     }
