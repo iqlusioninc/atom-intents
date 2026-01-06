@@ -493,6 +493,16 @@ Error: Inflight settlements exist: 5 settlements must complete before migration
 wasmd query wasm contract-state smart $CONTRACT_ADDR '{"config": {}}'
 ```
 
+### Problem: Solver Tests Fail on macOS with Proxy Errors
+
+**Symptoms:**
+- Test panics mentioning "Attempted to create a NULL object"
+- Cascading `once_cell` poisoned errors
+
+**Resolution:**
+- Ensure you're on the latest commit where solver tests disable system proxy lookups.
+- If failures persist, unset proxy environment variables or set `NO_PROXY=*` before running tests.
+
 ---
 
 ## Quick Reference

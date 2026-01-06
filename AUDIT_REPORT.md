@@ -329,3 +329,33 @@ A follow-up audit covering security, spec compliance, and operational readiness 
 *   **Description:** Gas price queries return configured defaults; no live RPC query.
 *   **Impact:** Fee estimates can drift and degrade solver competitiveness.
 *   **Recommended Fix:** Implement chain RPC fee query or clearly gate behind feature flag.
+
+---
+
+## 10. Follow-Up Hardening Ideas
+
+Additional improvements identified during a follow-up audit pass. These are not blocking issues but would improve safety, operability, or correctness.
+
+### 10.1. Persist Expected IBC Channel Per Settlement
+*   **Severity:** **LOW/MEDIUM**
+*   **Status:** 🔶 **OPEN**
+*   **Location:** `contracts/settlement/src/contract.rs`
+*   **Description:** `execute_settlement` validates an allowlisted channel but does not bind a specific channel to each settlement.
+*   **Impact:** Misconfiguration can route a settlement over an unintended (but still allowlisted) channel.
+*   **Recommended Fix:** Persist the channel at settlement creation and enforce equality on settlement execution.
+
+### 10.2. Admin Action Audit Logging
+*   **Severity:** **LOW**
+*   **Status:** 🔶 **OPEN**
+*   **Location:** `crates/orchestrator/src/admin.rs`
+*   **Description:** Admin actions are not explicitly logged with structured metadata (actor, endpoint, intent IDs, drain IDs).
+*   **Impact:** Reduced observability and slower incident response.
+*   **Recommended Fix:** Add structured audit logs for all `/admin/*` mutations and include request IDs.
+
+### 10.3. Recovery/Slashing Regression Coverage
+*   **Severity:** **LOW**
+*   **Status:** 🔶 **OPEN**
+*   **Location:** `crates/orchestrator/src/recovery.rs`, `crates/settlement/src/two_phase.rs`
+*   **Description:** Slashing and same-chain delivery paths are minimally covered in end-to-end tests.
+*   **Impact:** Increased risk of regressions in critical recovery paths.
+*   **Recommended Fix:** Add integration tests that assert slashing and same-chain releases move funds as expected.
