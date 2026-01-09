@@ -1,4 +1,5 @@
 pub mod chain;
+pub mod eureka_monitor;
 #[cfg(feature = "grpc")]
 pub mod grpc;
 pub mod priority;
@@ -18,6 +19,9 @@ pub use service::{
     ChainConfig, MockChainClient, PacketDetails, PacketProof, RelayerConfig, RelayerError,
     SolverRelayer,
 };
+
+// Re-export from eureka_monitor module
+pub use eureka_monitor::{EurekaPacketMonitor, MockEurekaMonitor};
 
 #[cfg(feature = "grpc")]
 pub use grpc::GrpcChainClient;

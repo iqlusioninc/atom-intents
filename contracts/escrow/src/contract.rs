@@ -5,10 +5,12 @@ use cosmwasm_std::{
 
 use crate::error::ContractError;
 use crate::msg::{
-    ConfigResponse, EscrowResponse, EscrowsResponse, ExecuteMsg, InstantiateMsg, QueryMsg,
+    ConfigResponse, EscrowResponse, EscrowsResponse, EthereumEscrowStatusResponse, ExecuteMsg,
+    InstantiateMsg, QueryMsg,
 };
 use crate::state::{
-    Config, Escrow, EscrowStatus, CONFIG, ESCROWS, ESCROWS_BY_INTENT, USER_ESCROWS,
+    Config, Escrow, EscrowStatus, EthereumEscrow, EthereumEscrowStatus, FrontingInfo, CONFIG,
+    ESCROWS, ESCROWS_BY_INTENT, ETHEREUM_ESCROWS, USER_ESCROWS,
 };
 
 #[entry_point]
@@ -66,6 +68,46 @@ pub fn execute(
             admin,
             settlement_contract,
         } => execute_update_config(deps, info, admin, settlement_contract),
+
+        // Ethereum escrow messages (via Eureka)
+        ExecuteMsg::RegisterEthereumEscrowIntent {
+            intent,
+            eth_sender,
+            expected_amount,
+            eureka_timeout_secs,
+        } => execute_register_ethereum_escrow_intent(
+            deps,
+            env,
+            info,
+            *intent,
+            eth_sender,
+            expected_amount,
+            eureka_timeout_secs,
+        ),
+        ExecuteMsg::NotifyEurekaPacketReceived {
+            intent_id,
+            packet_id,
+            amount,
+            sender,
+        } => execute_notify_eureka_packet_received(deps, env, info, intent_id, packet_id, amount, sender),
+        ExecuteMsg::NotifyEurekaFinalized {
+            intent_id,
+            packet_id,
+            proof_block,
+        } => execute_notify_eureka_finalized(deps, env, info, intent_id, packet_id, proof_block),
+        ExecuteMsg::FrontSettlement {
+            intent_id,
+            solver_id,
+            output_amount,
+            risk_bond,
+        } => execute_front_settlement(deps, env, info, intent_id, solver_id, output_amount, risk_bond),
+        ExecuteMsg::ClaimEurekaEscrow {
+            intent_id,
+            packet_id,
+        } => execute_claim_eureka_escrow(deps, env, info, intent_id, packet_id),
+        ExecuteMsg::HandleEurekaEscrowFailure { intent_id, reason } => {
+            execute_handle_eureka_escrow_failure(deps, env, info, intent_id, reason)
+        }
     }
 }
 
@@ -433,6 +475,396 @@ fn execute_update_config(
     Ok(Response::new().add_attribute("action", "update_config"))
 }
 
+// ═══════════════════════════════════════════════════════════════════════════════
+// ETHEREUM ESCROW HANDLERS (via Eureka)
+// ═══════════════════════════════════════════════════════════════════════════════
+
+/// Register an intent that will be funded via Ethereum escrow through Eureka
+///
+/// This is called when a user initiates a transfer from Ethereum. The intent is
+/// registered as pending, waiting for the Eureka packet to arrive.
+#[allow(clippy::too_many_arguments)]
+fn execute_register_ethereum_escrow_intent(
+    deps: DepsMut,
+    env: Env,
+    info: MessageInfo,
+    intent: atom_intents_types::Intent,
+    eth_sender: String,
+    expected_amount: cosmwasm_std::Uint128,
+    eureka_timeout_secs: u64,
+) -> Result<Response, ContractError> {
+    let config = CONFIG.load(deps.storage)?;
+
+    // Only settlement contract or admin can register Ethereum escrow intents
+    if info.sender != config.settlement_contract && info.sender != config.admin {
+        return Err(ContractError::Unauthorized {});
+    }
+
+    let intent_id = intent.id.clone();
+
+    // Verify no existing escrow for this intent
+    if ETHEREUM_ESCROWS.has(deps.storage, &intent_id) {
+        return Err(ContractError::IntentAlreadyEscrowed { intent_id });
+    }
+
+    // Derive expected denom from intent input (e.g., ibc/... for bridged ETH/ERC20)
+    let expected_denom = intent.input.denom.clone();
+
+    let escrow = EthereumEscrow {
+        intent_id: intent_id.clone(),
+        eth_sender: eth_sender.clone(),
+        expected_amount,
+        expected_denom: expected_denom.clone(),
+        registered_at: env.block.time.seconds(),
+        eureka_timeout: env.block.time.seconds() + eureka_timeout_secs,
+        status: EthereumEscrowStatus::Pending,
+        packet_id: None,
+        received_amount: None,
+        finalized_at_block: None,
+        fronting: None,
+    };
+
+    ETHEREUM_ESCROWS.save(deps.storage, &intent_id, &escrow)?;
+
+    Ok(Response::new()
+        .add_attribute("action", "register_ethereum_escrow_intent")
+        .add_attribute("intent_id", intent_id)
+        .add_attribute("eth_sender", eth_sender)
+        .add_attribute("expected_amount", expected_amount)
+        .add_attribute("expected_denom", expected_denom)
+        .add_attribute("eureka_timeout_secs", eureka_timeout_secs.to_string()))
+}
+
+/// Notify that an Eureka packet has been received
+///
+/// Called by the relayer when the Eureka IBC packet arrives on the Hub.
+/// The escrow moves to "Received" status, waiting for ZK proof finality.
+fn execute_notify_eureka_packet_received(
+    deps: DepsMut,
+    env: Env,
+    info: MessageInfo,
+    intent_id: String,
+    packet_id: String,
+    amount: cosmwasm_std::Uint128,
+    sender: String,
+) -> Result<Response, ContractError> {
+    let config = CONFIG.load(deps.storage)?;
+
+    // Only admin (relayer role) can notify
+    if info.sender != config.admin {
+        return Err(ContractError::Unauthorized {});
+    }
+
+    let mut escrow = ETHEREUM_ESCROWS
+        .load(deps.storage, &intent_id)
+        .map_err(|_| ContractError::EthereumEscrowNotFound {
+            intent_id: intent_id.clone(),
+        })?;
+
+    // Verify escrow is in Pending status
+    if !matches!(escrow.status, EthereumEscrowStatus::Pending) {
+        return Err(ContractError::InvalidEthereumEscrowStatus {
+            expected: "Pending".to_string(),
+            actual: format!("{:?}", escrow.status),
+        });
+    }
+
+    // Verify sender matches expected Ethereum sender
+    if sender != escrow.eth_sender {
+        return Err(ContractError::EthereumSenderMismatch {
+            expected: escrow.eth_sender.clone(),
+            actual: sender,
+        });
+    }
+
+    // Check timeout hasn't passed
+    if env.block.time.seconds() > escrow.eureka_timeout {
+        return Err(ContractError::EurekaTimeout {
+            intent_id: intent_id.clone(),
+        });
+    }
+
+    // Update escrow status
+    escrow.status = EthereumEscrowStatus::Received;
+    escrow.packet_id = Some(packet_id.clone());
+    escrow.received_amount = Some(amount);
+
+    ETHEREUM_ESCROWS.save(deps.storage, &intent_id, &escrow)?;
+
+    Ok(Response::new()
+        .add_attribute("action", "notify_eureka_packet_received")
+        .add_attribute("intent_id", intent_id)
+        .add_attribute("packet_id", packet_id)
+        .add_attribute("amount", amount)
+        .add_attribute("sender", escrow.eth_sender))
+}
+
+/// Notify that an Eureka packet has been finalized with ZK proof
+///
+/// Called by the relayer when the ZK proof verifies on the Hub.
+/// The escrow moves to "Finalized" status and can now be claimed by the solver.
+fn execute_notify_eureka_finalized(
+    deps: DepsMut,
+    _env: Env,
+    info: MessageInfo,
+    intent_id: String,
+    packet_id: String,
+    proof_block: u64,
+) -> Result<Response, ContractError> {
+    let config = CONFIG.load(deps.storage)?;
+
+    // Only admin (relayer role) can notify
+    if info.sender != config.admin {
+        return Err(ContractError::Unauthorized {});
+    }
+
+    let mut escrow = ETHEREUM_ESCROWS
+        .load(deps.storage, &intent_id)
+        .map_err(|_| ContractError::EthereumEscrowNotFound {
+            intent_id: intent_id.clone(),
+        })?;
+
+    // Verify escrow is in Received or Fronted status (can finalize after fronting)
+    let valid_status = matches!(
+        escrow.status,
+        EthereumEscrowStatus::Received | EthereumEscrowStatus::Fronted
+    );
+    if !valid_status {
+        return Err(ContractError::InvalidEthereumEscrowStatus {
+            expected: "Received or Fronted".to_string(),
+            actual: format!("{:?}", escrow.status),
+        });
+    }
+
+    // Verify packet_id matches
+    if escrow.packet_id.as_ref() != Some(&packet_id) {
+        return Err(ContractError::PacketIdMismatch {
+            expected: escrow.packet_id.clone().unwrap_or_default(),
+            actual: packet_id,
+        });
+    }
+
+    // Update status (if already Fronted, move to Finalized so solver can claim)
+    let was_fronted = matches!(escrow.status, EthereumEscrowStatus::Fronted);
+    escrow.status = EthereumEscrowStatus::Finalized;
+    escrow.finalized_at_block = Some(proof_block);
+
+    ETHEREUM_ESCROWS.save(deps.storage, &intent_id, &escrow)?;
+
+    Ok(Response::new()
+        .add_attribute("action", "notify_eureka_finalized")
+        .add_attribute("intent_id", intent_id)
+        .add_attribute("proof_block", proof_block.to_string())
+        .add_attribute("was_fronted", was_fronted.to_string()))
+}
+
+/// Solver fronts settlement before Eureka finality
+///
+/// The solver pays the user immediately and takes on settlement risk.
+/// They post a bond and will claim the escrowed funds after finality.
+fn execute_front_settlement(
+    deps: DepsMut,
+    env: Env,
+    info: MessageInfo,
+    intent_id: String,
+    solver_id: String,
+    output_amount: cosmwasm_std::Uint128,
+    risk_bond: cosmwasm_std::Uint128,
+) -> Result<Response, ContractError> {
+    let mut escrow = ETHEREUM_ESCROWS
+        .load(deps.storage, &intent_id)
+        .map_err(|_| ContractError::EthereumEscrowNotFound {
+            intent_id: intent_id.clone(),
+        })?;
+
+    // Verify escrow is in Received status (not already fronted/finalized)
+    if !matches!(escrow.status, EthereumEscrowStatus::Received) {
+        return Err(ContractError::InvalidEthereumEscrowStatus {
+            expected: "Received".to_string(),
+            actual: format!("{:?}", escrow.status),
+        });
+    }
+
+    // Verify sender has attached the required bond
+    let bond_funds: cosmwasm_std::Uint128 = info
+        .funds
+        .iter()
+        .filter(|c| c.denom == escrow.expected_denom || c.denom == "uatom")
+        .map(|c| c.amount)
+        .sum();
+
+    if bond_funds < risk_bond {
+        return Err(ContractError::InsufficientBond {
+            required: risk_bond,
+            provided: bond_funds,
+        });
+    }
+
+    // Record fronting info
+    escrow.fronting = Some(FrontingInfo {
+        solver_id: solver_id.clone(),
+        solver_addr: info.sender.clone(),
+        fronted_at: env.block.time.seconds(),
+        bond_amount: risk_bond,
+        output_amount,
+    });
+    escrow.status = EthereumEscrowStatus::Fronted;
+
+    ETHEREUM_ESCROWS.save(deps.storage, &intent_id, &escrow)?;
+
+    Ok(Response::new()
+        .add_attribute("action", "front_settlement")
+        .add_attribute("intent_id", intent_id)
+        .add_attribute("solver_id", solver_id)
+        .add_attribute("solver_addr", info.sender)
+        .add_attribute("output_amount", output_amount)
+        .add_attribute("risk_bond", risk_bond))
+}
+
+/// Claim escrowed funds after Eureka finality
+///
+/// Called by the solver after ZK proof verifies. The solver receives
+/// the escrowed funds plus their bond back.
+fn execute_claim_eureka_escrow(
+    deps: DepsMut,
+    _env: Env,
+    info: MessageInfo,
+    intent_id: String,
+    packet_id: String,
+) -> Result<Response, ContractError> {
+    let mut escrow = ETHEREUM_ESCROWS
+        .load(deps.storage, &intent_id)
+        .map_err(|_| ContractError::EthereumEscrowNotFound {
+            intent_id: intent_id.clone(),
+        })?;
+
+    // Verify escrow is finalized
+    if !matches!(escrow.status, EthereumEscrowStatus::Finalized) {
+        return Err(ContractError::InvalidEthereumEscrowStatus {
+            expected: "Finalized".to_string(),
+            actual: format!("{:?}", escrow.status),
+        });
+    }
+
+    // Verify packet_id matches
+    if escrow.packet_id.as_ref() != Some(&packet_id) {
+        return Err(ContractError::PacketIdMismatch {
+            expected: escrow.packet_id.clone().unwrap_or_default(),
+            actual: packet_id,
+        });
+    }
+
+    // Get fronting info - only the solver who fronted can claim
+    let fronting = escrow.fronting.as_ref().ok_or(ContractError::NotFronted {
+        intent_id: intent_id.clone(),
+    })?;
+
+    // Verify caller is the solver who fronted
+    if info.sender != fronting.solver_addr {
+        return Err(ContractError::Unauthorized {});
+    }
+
+    // Calculate amounts to send
+    let received = escrow
+        .received_amount
+        .unwrap_or(escrow.expected_amount);
+    let bond = fronting.bond_amount;
+    let total_to_solver = received + bond;
+
+    // Update status
+    escrow.status = EthereumEscrowStatus::Claimed;
+    ETHEREUM_ESCROWS.save(deps.storage, &intent_id, &escrow)?;
+
+    // Send escrowed funds + bond back to solver
+    let send_msg = BankMsg::Send {
+        to_address: fronting.solver_addr.to_string(),
+        amount: vec![Coin {
+            denom: escrow.expected_denom.clone(),
+            amount: total_to_solver,
+        }],
+    };
+
+    Ok(Response::new()
+        .add_message(send_msg)
+        .add_attribute("action", "claim_eureka_escrow")
+        .add_attribute("intent_id", intent_id)
+        .add_attribute("solver", fronting.solver_addr.to_string())
+        .add_attribute("received_amount", received)
+        .add_attribute("bond_returned", bond)
+        .add_attribute("total_sent", total_to_solver))
+}
+
+/// Handle Eureka escrow failure (timeout, invalid packet, etc.)
+///
+/// Called by admin when an escrow cannot be completed. If a solver fronted,
+/// their bond may be slashed depending on the failure reason.
+fn execute_handle_eureka_escrow_failure(
+    deps: DepsMut,
+    _env: Env,
+    info: MessageInfo,
+    intent_id: String,
+    reason: String,
+) -> Result<Response, ContractError> {
+    let config = CONFIG.load(deps.storage)?;
+
+    // Only admin can mark escrows as failed
+    if info.sender != config.admin {
+        return Err(ContractError::Unauthorized {});
+    }
+
+    let mut escrow = ETHEREUM_ESCROWS
+        .load(deps.storage, &intent_id)
+        .map_err(|_| ContractError::EthereumEscrowNotFound {
+            intent_id: intent_id.clone(),
+        })?;
+
+    // Cannot fail an already claimed or failed escrow
+    if matches!(
+        escrow.status,
+        EthereumEscrowStatus::Claimed | EthereumEscrowStatus::Failed { .. }
+    ) {
+        return Err(ContractError::InvalidEthereumEscrowStatus {
+            expected: "Pending, Received, or Fronted".to_string(),
+            actual: format!("{:?}", escrow.status),
+        });
+    }
+
+    // If solver fronted, determine bond handling based on failure reason
+    let mut messages = vec![];
+    let mut bond_action = "none".to_string();
+
+    if let Some(fronting) = &escrow.fronting {
+        // If failure was not due to solver fault, return their bond
+        // For now, we return the bond on any failure (could be more sophisticated)
+        let send_msg = BankMsg::Send {
+            to_address: fronting.solver_addr.to_string(),
+            amount: vec![Coin {
+                denom: escrow.expected_denom.clone(),
+                amount: fronting.bond_amount,
+            }],
+        };
+        messages.push(send_msg);
+        bond_action = "returned".to_string();
+    }
+
+    escrow.status = EthereumEscrowStatus::Failed {
+        reason: reason.clone(),
+    };
+    ETHEREUM_ESCROWS.save(deps.storage, &intent_id, &escrow)?;
+
+    let mut response = Response::new()
+        .add_attribute("action", "handle_eureka_escrow_failure")
+        .add_attribute("intent_id", intent_id)
+        .add_attribute("reason", reason)
+        .add_attribute("bond_action", bond_action);
+
+    for msg in messages {
+        response = response.add_message(msg);
+    }
+
+    Ok(response)
+}
+
 #[entry_point]
 pub fn query(deps: Deps, _env: Env, msg: QueryMsg) -> StdResult<Binary> {
     match msg {
@@ -445,6 +877,9 @@ pub fn query(deps: Deps, _env: Env, msg: QueryMsg) -> StdResult<Binary> {
         } => to_json_binary(&query_escrows_by_user(deps, user, start_after, limit)?),
         QueryMsg::EscrowByIntent { intent_id } => {
             to_json_binary(&query_escrow_by_intent(deps, intent_id)?)
+        }
+        QueryMsg::EthereumEscrowStatus { intent_id } => {
+            to_json_binary(&query_ethereum_escrow_status(deps, intent_id)?)
         }
     }
 }
@@ -466,6 +901,42 @@ fn query_escrow_by_intent(deps: Deps, intent_id: String) -> StdResult<EscrowResp
     let escrow_id = ESCROWS_BY_INTENT.load(deps.storage, &intent_id)?;
     let escrow = ESCROWS.load(deps.storage, &escrow_id)?;
     Ok(escrow_to_response(escrow))
+}
+
+/// Query Ethereum escrow status
+fn query_ethereum_escrow_status(
+    deps: Deps,
+    intent_id: String,
+) -> StdResult<EthereumEscrowStatusResponse> {
+    let escrow = ETHEREUM_ESCROWS
+        .load(deps.storage, &intent_id)
+        .map_err(|_| {
+            cosmwasm_std::StdError::not_found(format!("Ethereum escrow for intent {}", intent_id))
+        })?;
+
+    let escrow_status = match &escrow.status {
+        EthereumEscrowStatus::Pending => "pending".to_string(),
+        EthereumEscrowStatus::Received => "received".to_string(),
+        EthereumEscrowStatus::Finalized => "finalized".to_string(),
+        EthereumEscrowStatus::Fronted => "fronted".to_string(),
+        EthereumEscrowStatus::Claimed => "claimed".to_string(),
+        EthereumEscrowStatus::Failed { reason } => format!("failed: {}", reason),
+    };
+
+    let (fronted_by, fronted_at) = match &escrow.fronting {
+        Some(f) => (Some(f.solver_id.clone()), Some(f.fronted_at)),
+        None => (None, None),
+    };
+
+    Ok(EthereumEscrowStatusResponse {
+        intent_id: escrow.intent_id,
+        eth_sender: escrow.eth_sender,
+        expected_amount: escrow.expected_amount,
+        escrow_status,
+        packet_id: escrow.packet_id,
+        fronted_by,
+        fronted_at,
+    })
 }
 
 fn query_escrows_by_user(

@@ -41,4 +41,31 @@ pub enum ContractError {
 
     #[error("IBC refund failed for escrow: {id}")]
     IbcRefundFailed { id: String },
+
+    #[error("Feature not implemented: {feature}")]
+    NotImplemented { feature: String },
+
+    #[error("Ethereum escrow not found for intent: {intent_id}")]
+    EthereumEscrowNotFound { intent_id: String },
+
+    #[error("Invalid Ethereum escrow status: expected {expected}, got {actual}")]
+    InvalidEthereumEscrowStatus { expected: String, actual: String },
+
+    #[error("Ethereum sender mismatch: expected {expected}, got {actual}")]
+    EthereumSenderMismatch { expected: String, actual: String },
+
+    #[error("Eureka timeout for intent: {intent_id}")]
+    EurekaTimeout { intent_id: String },
+
+    #[error("Packet ID mismatch: expected {expected}, got {actual}")]
+    PacketIdMismatch { expected: String, actual: String },
+
+    #[error("Escrow not fronted for intent: {intent_id}")]
+    NotFronted { intent_id: String },
+
+    #[error("Insufficient bond: required {required}, provided {provided}")]
+    InsufficientBond {
+        required: cosmwasm_std::Uint128,
+        provided: cosmwasm_std::Uint128,
+    },
 }

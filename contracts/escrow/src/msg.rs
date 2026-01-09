@@ -1,3 +1,4 @@
+use atom_intents_types::Intent;
 use cosmwasm_schema::{cw_serde, QueryResponses};
 use cosmwasm_std::Uint128;
 
@@ -45,6 +46,51 @@ pub enum ExecuteMsg {
         admin: Option<String>,
         settlement_contract: Option<String>,
     },
+
+    // ═══════════════════════════════════════════════════════════════════════════════
+    // ETHEREUM ESCROW MESSAGES (via Eureka)
+    // ═══════════════════════════════════════════════════════════════════════════════
+    /// Register an intent with pending Ethereum escrow via Eureka
+    RegisterEthereumEscrowIntent {
+        intent: Box<Intent>,
+        eth_sender: String,
+        expected_amount: Uint128,
+        eureka_timeout_secs: u64,
+    },
+
+    /// Notify that an Eureka packet has been received (called by relayer)
+    NotifyEurekaPacketReceived {
+        intent_id: String,
+        packet_id: String,
+        amount: Uint128,
+        sender: String,
+    },
+
+    /// Notify that an Eureka packet has been finalized with ZK proof (called by relayer)
+    NotifyEurekaFinalized {
+        intent_id: String,
+        packet_id: String,
+        proof_block: u64,
+    },
+
+    /// Solver fronts settlement before Eureka finality
+    FrontSettlement {
+        intent_id: String,
+        /// The solver's ID
+        solver_id: String,
+        output_amount: Uint128,
+        /// Additional bond for settlement risk
+        risk_bond: Uint128,
+    },
+
+    /// Claim escrowed funds after Eureka finality (called by solver)
+    ClaimEurekaEscrow {
+        intent_id: String,
+        packet_id: String,
+    },
+
+    /// Handle Eureka escrow timeout/failure
+    HandleEurekaEscrowFailure { intent_id: String, reason: String },
 }
 
 #[cw_serde]
@@ -65,6 +111,10 @@ pub enum QueryMsg {
 
     #[returns(EscrowResponse)]
     EscrowByIntent { intent_id: String },
+
+    /// Query Ethereum escrow status
+    #[returns(EthereumEscrowStatusResponse)]
+    EthereumEscrowStatus { intent_id: String },
 }
 
 #[cw_serde]
@@ -93,4 +143,16 @@ pub struct EscrowResponse {
 #[cw_serde]
 pub struct EscrowsResponse {
     pub escrows: Vec<EscrowResponse>,
+}
+
+#[cw_serde]
+pub struct EthereumEscrowStatusResponse {
+    pub intent_id: String,
+    pub eth_sender: String,
+    pub expected_amount: Uint128,
+    /// Status: "pending", "received", "finalized", "failed"
+    pub escrow_status: String,
+    pub packet_id: Option<String>,
+    pub fronted_by: Option<String>,
+    pub fronted_at: Option<u64>,
 }
