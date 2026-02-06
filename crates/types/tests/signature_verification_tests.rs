@@ -1,14 +1,21 @@
 use atom_intents_types::{
-    derive_public_key, sign_message, verify_intent_signature, Asset, ExecutionConstraints,
-    FillConfig, Intent, OutputSpec, VerificationError,
+    derive_public_key, pubkey_to_bech32_address, sign_message, verify_intent_signature, Asset,
+    ExecutionConstraints, FillConfig, Intent, OutputSpec, VerificationError,
 };
 use cosmwasm_std::Uint128;
 
-/// Create a test intent with standard test data
-fn create_test_intent_unsigned(
+/// Derive the correct bech32 address for a test private key
+fn test_address(private_key: &[u8], prefix: &str) -> String {
+    let pubkey = derive_public_key(private_key).unwrap();
+    pubkey_to_bech32_address(&pubkey, prefix).unwrap()
+}
+
+/// Create a test intent with standard test data using the given user address
+fn create_test_intent_unsigned_for(
+    user: &str,
 ) -> Result<atom_intents_types::UnsignedIntent, atom_intents_types::IntentBuildError> {
     Intent::builder()
-        .user("cosmos1user123")
+        .user(user)
         .input(Asset {
             chain_id: "cosmoshub-4".to_string(),
             denom: "uatom".to_string(),
@@ -29,15 +36,16 @@ fn create_test_intent_unsigned(
 
 #[test]
 fn test_complete_signing_and_verification_flow() {
-    // Create an unsigned intent
-    let unsigned = create_test_intent_unsigned().unwrap();
-
     // Use a test private key
     let private_key = [
         0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e, 0x0f,
         0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17, 0x18, 0x19, 0x1a, 0x1b, 0x1c, 0x1d, 0x1e,
         0x1f, 0x20,
     ];
+    let user_addr = test_address(&private_key, "cosmos");
+
+    // Create an unsigned intent with derived address
+    let unsigned = create_test_intent_unsigned_for(&user_addr).unwrap();
 
     // Sign the intent
     let signed = unsigned.sign_with_key(&private_key).unwrap();
@@ -57,8 +65,9 @@ fn test_complete_signing_and_verification_flow() {
 
 #[test]
 fn test_signature_verification_rejects_tampered_intent() {
-    let unsigned = create_test_intent_unsigned().unwrap();
     let private_key = [0x42; 32];
+    let user_addr = test_address(&private_key, "cosmos");
+    let unsigned = create_test_intent_unsigned_for(&user_addr).unwrap();
 
     let mut signed = unsigned.sign_with_key(&private_key).unwrap();
 
@@ -73,8 +82,9 @@ fn test_signature_verification_rejects_tampered_intent() {
 
 #[test]
 fn test_signature_verification_rejects_different_input_amount() {
-    let unsigned = create_test_intent_unsigned().unwrap();
     let private_key = [0x42; 32];
+    let user_addr = test_address(&private_key, "cosmos");
+    let unsigned = create_test_intent_unsigned_for(&user_addr).unwrap();
 
     let mut signed = unsigned.sign_with_key(&private_key).unwrap();
 
@@ -89,8 +99,9 @@ fn test_signature_verification_rejects_different_input_amount() {
 
 #[test]
 fn test_signature_verification_rejects_different_output() {
-    let unsigned = create_test_intent_unsigned().unwrap();
     let private_key = [0x42; 32];
+    let user_addr = test_address(&private_key, "cosmos");
+    let unsigned = create_test_intent_unsigned_for(&user_addr).unwrap();
 
     let mut signed = unsigned.sign_with_key(&private_key).unwrap();
 
@@ -105,8 +116,9 @@ fn test_signature_verification_rejects_different_output() {
 
 #[test]
 fn test_signature_verification_accepts_unchanged_metadata() {
-    let unsigned = create_test_intent_unsigned().unwrap();
     let private_key = [0x42; 32];
+    let user_addr = test_address(&private_key, "cosmos");
+    let unsigned = create_test_intent_unsigned_for(&user_addr).unwrap();
 
     let signed = unsigned.sign_with_key(&private_key).unwrap();
 
@@ -122,11 +134,12 @@ fn test_signature_verification_accepts_unchanged_metadata() {
 #[test]
 fn test_multiple_intents_with_same_key() {
     let private_key = [0x42; 32];
+    let user_addr = test_address(&private_key, "cosmos");
 
     // Create two different intents
-    let unsigned1 = create_test_intent_unsigned().unwrap();
+    let unsigned1 = create_test_intent_unsigned_for(&user_addr).unwrap();
 
-    let mut unsigned2 = create_test_intent_unsigned().unwrap();
+    let mut unsigned2 = create_test_intent_unsigned_for(&user_addr).unwrap();
     unsigned2.nonce = 100; // Different nonce
 
     // Sign both with the same key
@@ -148,14 +161,16 @@ fn test_multiple_intents_with_same_key() {
 fn test_different_keys_produce_different_signatures() {
     let private_key1 = [0x42; 32];
     let private_key2 = [0x43; 32];
+    let user_addr1 = test_address(&private_key1, "cosmos");
+    let user_addr2 = test_address(&private_key2, "cosmos");
 
-    let unsigned1 = create_test_intent_unsigned().unwrap();
-    let unsigned2 = create_test_intent_unsigned().unwrap();
+    let unsigned1 = create_test_intent_unsigned_for(&user_addr1).unwrap();
+    let unsigned2 = create_test_intent_unsigned_for(&user_addr2).unwrap();
 
     let signed1 = unsigned1.sign_with_key(&private_key1).unwrap();
     let signed2 = unsigned2.sign_with_key(&private_key2).unwrap();
 
-    // Both should verify
+    // Both should verify (each with their own derived address)
     assert!(signed1.verify().unwrap());
     assert!(signed2.verify().unwrap());
 
@@ -169,9 +184,10 @@ fn test_different_keys_produce_different_signatures() {
 #[test]
 fn test_replay_attack_prevention_with_nonce() {
     let private_key = [0x42; 32];
+    let user_addr = test_address(&private_key, "cosmos");
 
-    let unsigned1 = create_test_intent_unsigned().unwrap();
-    let mut unsigned2 = create_test_intent_unsigned().unwrap();
+    let unsigned1 = create_test_intent_unsigned_for(&user_addr).unwrap();
+    let mut unsigned2 = create_test_intent_unsigned_for(&user_addr).unwrap();
     unsigned2.nonce = 43; // Different nonce
 
     let signed1 = unsigned1.sign_with_key(&private_key).unwrap();
@@ -187,8 +203,8 @@ fn test_replay_attack_prevention_with_nonce() {
 
 #[test]
 fn test_signing_bytes_are_deterministic() {
-    let unsigned1 = create_test_intent_unsigned().unwrap();
-    let unsigned2 = create_test_intent_unsigned().unwrap();
+    let unsigned1 = create_test_intent_unsigned_for("cosmos1anyuser").unwrap();
+    let unsigned2 = create_test_intent_unsigned_for("cosmos1anyuser").unwrap();
 
     // Same intent data should produce same signing bytes
     assert_eq!(unsigned1.signing_bytes(), unsigned2.signing_bytes());
@@ -196,8 +212,8 @@ fn test_signing_bytes_are_deterministic() {
 
 #[test]
 fn test_signing_bytes_change_with_content() {
-    let unsigned1 = create_test_intent_unsigned().unwrap();
-    let mut unsigned2 = create_test_intent_unsigned().unwrap();
+    let unsigned1 = create_test_intent_unsigned_for("cosmos1anyuser").unwrap();
+    let mut unsigned2 = create_test_intent_unsigned_for("cosmos1anyuser").unwrap();
     unsigned2.nonce = 999;
 
     // Different intent data should produce different signing bytes
@@ -206,8 +222,9 @@ fn test_signing_bytes_change_with_content() {
 
 #[test]
 fn test_manual_signature_verification_low_level() {
-    let unsigned = create_test_intent_unsigned().unwrap();
     let private_key = [0x42; 32];
+    let user_addr = test_address(&private_key, "cosmos");
+    let unsigned = create_test_intent_unsigned_for(&user_addr).unwrap();
 
     // Get signing bytes and public key manually
     let message = unsigned.signing_bytes();
@@ -223,8 +240,11 @@ fn test_manual_signature_verification_low_level() {
 
 #[test]
 fn test_intent_with_different_chains() {
+    let private_key = [0x55; 32];
+    let user_addr = test_address(&private_key, "cosmos");
+
     let unsigned = Intent::builder()
-        .user("cosmos1user123")
+        .user(&user_addr)
         .input(Asset {
             chain_id: "juno-1".to_string(),
             denom: "ujuno".to_string(),
@@ -243,7 +263,6 @@ fn test_intent_with_different_chains() {
         .build(200, 3000)
         .unwrap();
 
-    let private_key = [0x55; 32];
     let signed = unsigned.sign_with_key(&private_key).unwrap();
 
     assert!(signed.verify().unwrap());
@@ -251,8 +270,11 @@ fn test_intent_with_different_chains() {
 
 #[test]
 fn test_large_amounts() {
+    let private_key = [0x77; 32];
+    let user_addr = test_address(&private_key, "cosmos");
+
     let unsigned = Intent::builder()
-        .user("cosmos1user123")
+        .user(&user_addr)
         .input(Asset {
             chain_id: "cosmoshub-4".to_string(),
             denom: "uatom".to_string(),
@@ -271,7 +293,6 @@ fn test_large_amounts() {
         .build(u64::MAX, u64::MAX)
         .unwrap();
 
-    let private_key = [0x77; 32];
     let signed = unsigned.sign_with_key(&private_key).unwrap();
 
     assert!(signed.verify().unwrap());
@@ -279,8 +300,9 @@ fn test_large_amounts() {
 
 #[test]
 fn test_verify_directly_without_helper() {
-    let unsigned = create_test_intent_unsigned().unwrap();
     let private_key = [0x42; 32];
+    let user_addr = test_address(&private_key, "cosmos");
+    let unsigned = create_test_intent_unsigned_for(&user_addr).unwrap();
     let signed = unsigned.sign_with_key(&private_key).unwrap();
 
     // Verify using the module-level function
@@ -293,9 +315,11 @@ fn test_verify_directly_without_helper() {
 fn test_cross_intent_signature_substitution_fails() {
     let private_key1 = [0x42; 32];
     let private_key2 = [0x43; 32];
+    let user_addr1 = test_address(&private_key1, "cosmos");
+    let user_addr2 = test_address(&private_key2, "cosmos");
 
-    let unsigned1 = create_test_intent_unsigned().unwrap();
-    let unsigned2 = create_test_intent_unsigned().unwrap();
+    let unsigned1 = create_test_intent_unsigned_for(&user_addr1).unwrap();
+    let unsigned2 = create_test_intent_unsigned_for(&user_addr2).unwrap();
 
     let signed1 = unsigned1.sign_with_key(&private_key1).unwrap();
     let signed2 = unsigned2.sign_with_key(&private_key2).unwrap();

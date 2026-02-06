@@ -32,6 +32,9 @@ pub enum SettlementError {
     #[error("route not found: {0} -> {1}")]
     RouteNotFound(String, String),
 
+    #[error("rollback failed: {0}")]
+    RollbackFailed(String),
+
     #[error("channel error: {0}")]
     ChannelError(#[from] ChannelError),
 }

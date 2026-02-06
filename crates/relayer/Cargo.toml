@@ -34,3 +34,4 @@ prost-types = { version = "0.13", optional = true }
 [features]
 default = []
 grpc = ["tonic", "prost", "prost-types"]
+testutils = []

@@ -19,3 +19,5 @@ hex = "0.4"
 k256 = { workspace = true }
 secp256k1 = { workspace = true }
 getrandom = { workspace = true }
+ripemd = "0.1"
+bech32 = "0.11"
