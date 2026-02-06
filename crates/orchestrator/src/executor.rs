@@ -382,8 +382,59 @@ pub enum ExecutionError {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use atom_intents_types::{Asset, ExecutionConstraints, FillConfig, FillStrategy, OutputSpec};
+    use atom_intents_types::{
+        Asset, ExecutionConstraints, ExecutionPlan, FillConfig, FillStrategy, OutputSpec,
+        ProposedFill, Settlement, SettlementStatus,
+    };
     use cosmwasm_std::Binary;
+    use rust_decimal::Decimal;
+    use std::collections::HashSet;
+    use std::str::FromStr;
+
+    // ═══════════════════════════════════════════════════════════════════
+    // MOCK SETTLEMENT MANAGER
+    // ═══════════════════════════════════════════════════════════════════
+
+    struct MockSettlementMgr {
+        status: SettlementStatus,
+    }
+
+    impl MockSettlementMgr {
+        fn completing() -> Self {
+            Self {
+                status: SettlementStatus::Complete,
+            }
+        }
+
+        fn timing_out() -> Self {
+            Self {
+                status: SettlementStatus::TimedOut,
+            }
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl SettlementManager for MockSettlementMgr {
+        async fn execute_settlement(
+            &self,
+            intent: &Intent,
+            solution: &Solution,
+            _current_time: u64,
+        ) -> Result<Settlement, SettlementError> {
+            Ok(Settlement {
+                intent_id: intent.id.clone(),
+                solver_id: solution.solver_id.clone(),
+                user_input: intent.input.amount,
+                solver_output: solution.fill.output_amount,
+                ibc_transfers: vec![],
+                status: self.status.clone(),
+            })
+        }
+    }
+
+    // ═══════════════════════════════════════════════════════════════════
+    // HELPERS
+    // ═══════════════════════════════════════════════════════════════════
 
     fn make_test_intent(
         id: &str,
@@ -419,6 +470,57 @@ mod tests {
         }
     }
 
+    fn make_solution(solver_id: &str, intent_id: &str, input: u128, output: u128) -> Solution {
+        Solution {
+            solver_id: solver_id.to_string(),
+            intent_id: intent_id.to_string(),
+            fill: ProposedFill {
+                input_amount: Uint128::new(input),
+                output_amount: Uint128::new(output),
+                price: "10.5".to_string(),
+            },
+            execution: ExecutionPlan::DexRoute { steps: vec![] },
+            valid_until: 9999999999,
+            bond: Uint128::new(input * 15 / 10),
+        }
+    }
+
+    fn make_coordinator(settlement_mgr: MockSettlementMgr) -> ExecutionCoordinator {
+        let mut pairs = HashSet::new();
+        pairs.insert(atom_intents_types::TradingPair::new("uatom", "uusdc"));
+        pairs.insert(atom_intents_types::TradingPair::new("uosmo", "uusdc"));
+        let validator = Arc::new(IntentValidator::new(
+            pairs,
+            86400,
+            Uint128::new(1000),
+        ));
+
+        let matching_engine = Arc::new(tokio::sync::Mutex::new(
+            atom_intents_matching_engine::MatchingEngine::new(),
+        ));
+
+        let oracle = Arc::new(atom_intents_solver::MockOracle::new("test-oracle"));
+        let aggregator = Arc::new(atom_intents_solver::SolutionAggregator::with_price_requirement(
+            vec![],
+            oracle,
+            atom_intents_solver::OraclePriceRequirement::Optional(
+                Decimal::from_str("10.5").unwrap(),
+            ),
+        ));
+
+        ExecutionCoordinator::new(
+            validator,
+            matching_engine,
+            aggregator,
+            Arc::new(settlement_mgr),
+            TimeoutConfig::default(),
+        )
+    }
+
+    // ═══════════════════════════════════════════════════════════════════
+    // BASIC TYPE TESTS
+    // ═══════════════════════════════════════════════════════════════════
+
     #[test]
     fn test_execution_stage_equality() {
         assert_eq!(ExecutionStage::Validating, ExecutionStage::Validating);
@@ -436,5 +538,333 @@ mod tests {
         assert_eq!(fill_info.solver_id, "solver-1");
         assert_eq!(fill_info.input_amount, Uint128::new(1_000_000));
         assert_eq!(fill_info.output_amount, Uint128::new(10_000_000));
+    }
+
+    // ═══════════════════════════════════════════════════════════════════
+    // SELECT EXECUTION PATH TESTS
+    // ═══════════════════════════════════════════════════════════════════
+
+    #[test]
+    fn test_fully_matched_path() {
+        let coord = make_coordinator(MockSettlementMgr::completing());
+        let intent = make_test_intent("i1", 1_000_000, 10_000_000, true);
+
+        // Fully matched: no solver solutions, total_input >= input.amount
+        let plan = OptimalFillPlan {
+            selected: vec![],
+            total_input: Uint128::new(1_000_000),
+        };
+
+        let result = coord.select_execution_path(&intent, &plan);
+        assert!(result.is_ok());
+        match result.unwrap() {
+            ExecutionPath::FullyMatched { amount } => {
+                assert_eq!(amount, Uint128::new(1_000_000));
+            }
+            _ => panic!("Expected FullyMatched"),
+        }
+    }
+
+    #[test]
+    fn test_no_viable_solver() {
+        let coord = make_coordinator(MockSettlementMgr::completing());
+        let intent = make_test_intent("i1", 1_000_000, 10_000_000, true);
+
+        // No solutions, total_input < input.amount
+        let plan = OptimalFillPlan {
+            selected: vec![],
+            total_input: Uint128::new(500_000),
+        };
+
+        let result = coord.select_execution_path(&intent, &plan);
+        assert!(result.is_err());
+        assert!(matches!(
+            result.unwrap_err(),
+            ExecutionError::NoViableSolver { .. }
+        ));
+    }
+
+    #[test]
+    fn test_requires_solver_path() {
+        let coord = make_coordinator(MockSettlementMgr::completing());
+        let intent = make_test_intent("i1", 1_000_000, 10_000_000, true);
+        let solution = make_solution("solver-1", "i1", 1_000_000, 10_500_000);
+
+        let plan = OptimalFillPlan {
+            selected: vec![(solution, Uint128::new(1_000_000))],
+            total_input: Uint128::new(1_000_000),
+        };
+
+        let result = coord.select_execution_path(&intent, &plan);
+        assert!(result.is_ok());
+        match result.unwrap() {
+            ExecutionPath::RequiresSolver {
+                matched_amount,
+                solver_solutions,
+            } => {
+                assert_eq!(matched_amount, Uint128::new(1_000_000));
+                assert_eq!(solver_solutions.len(), 1);
+                assert_eq!(solver_solutions[0].solver_id, "solver-1");
+            }
+            _ => panic!("Expected RequiresSolver"),
+        }
+    }
+
+    // ═══════════════════════════════════════════════════════════════════
+    // FILL STRATEGY TESTS
+    // ═══════════════════════════════════════════════════════════════════
+
+    #[test]
+    fn test_all_or_nothing_insufficient() {
+        let coord = make_coordinator(MockSettlementMgr::completing());
+        let mut intent = make_test_intent("i1", 1_000_000, 10_000_000, true);
+        intent.fill_config.strategy = FillStrategy::AllOrNothing;
+        let solution = make_solution("s1", "i1", 500_000, 5_000_000);
+
+        let plan = OptimalFillPlan {
+            selected: vec![(solution, Uint128::new(500_000))],
+            total_input: Uint128::new(500_000), // Only half filled
+        };
+
+        let result = coord.select_execution_path(&intent, &plan);
+        assert!(result.is_err());
+        assert!(matches!(
+            result.unwrap_err(),
+            ExecutionError::InsufficientFill { .. }
+        ));
+    }
+
+    #[test]
+    fn test_all_or_nothing_sufficient() {
+        let coord = make_coordinator(MockSettlementMgr::completing());
+        let mut intent = make_test_intent("i1", 1_000_000, 10_000_000, true);
+        intent.fill_config.strategy = FillStrategy::AllOrNothing;
+        let solution = make_solution("s1", "i1", 1_000_000, 10_500_000);
+
+        let plan = OptimalFillPlan {
+            selected: vec![(solution, Uint128::new(1_000_000))],
+            total_input: Uint128::new(1_000_000), // Fully filled
+        };
+
+        let result = coord.select_execution_path(&intent, &plan);
+        assert!(result.is_ok());
+        match result.unwrap() {
+            ExecutionPath::RequiresSolver { matched_amount, .. } => {
+                assert_eq!(matched_amount, Uint128::new(1_000_000));
+            }
+            _ => panic!("Expected RequiresSolver"),
+        }
+    }
+
+    #[test]
+    fn test_partial_not_allowed_insufficient() {
+        let coord = make_coordinator(MockSettlementMgr::completing());
+        // allow_partial=false but strategy is Eager (requires_full_fill = true)
+        let intent = make_test_intent("i1", 1_000_000, 10_000_000, false);
+        let solution = make_solution("s1", "i1", 500_000, 5_000_000);
+
+        let plan = OptimalFillPlan {
+            selected: vec![(solution, Uint128::new(500_000))],
+            total_input: Uint128::new(500_000),
+        };
+
+        let result = coord.select_execution_path(&intent, &plan);
+        assert!(result.is_err());
+        assert!(matches!(
+            result.unwrap_err(),
+            ExecutionError::InsufficientFill { .. }
+        ));
+    }
+
+    #[test]
+    fn test_eager_partial_below_min_amount() {
+        let coord = make_coordinator(MockSettlementMgr::completing());
+        let mut intent = make_test_intent("i1", 1_000_000, 10_000_000, true);
+        // min_fill_amount is 500_000 (input/2), send less
+        intent.fill_config.min_fill_amount = Uint128::new(500_000);
+        let solution = make_solution("s1", "i1", 100_000, 1_000_000);
+
+        let plan = OptimalFillPlan {
+            selected: vec![(solution, Uint128::new(100_000))],
+            total_input: Uint128::new(100_000), // Below min_fill_amount
+        };
+
+        let result = coord.select_execution_path(&intent, &plan);
+        assert!(result.is_err());
+        assert!(matches!(
+            result.unwrap_err(),
+            ExecutionError::InsufficientFill { .. }
+        ));
+    }
+
+    #[test]
+    fn test_eager_partial_below_min_pct() {
+        let coord = make_coordinator(MockSettlementMgr::completing());
+        let mut intent = make_test_intent("i1", 1_000_000, 10_000_000, true);
+        intent.fill_config.min_fill_amount = Uint128::zero(); // No min amount
+        intent.fill_config.min_fill_pct = "0.5".to_string(); // 50% minimum
+        let solution = make_solution("s1", "i1", 400_000, 4_000_000);
+
+        let plan = OptimalFillPlan {
+            selected: vec![(solution, Uint128::new(400_000))],
+            total_input: Uint128::new(400_000), // 40% < 50%
+        };
+
+        let result = coord.select_execution_path(&intent, &plan);
+        assert!(result.is_err());
+        assert!(matches!(
+            result.unwrap_err(),
+            ExecutionError::InsufficientFill { .. }
+        ));
+    }
+
+    #[test]
+    fn test_eager_partial_above_min_pct() {
+        let coord = make_coordinator(MockSettlementMgr::completing());
+        let mut intent = make_test_intent("i1", 1_000_000, 10_000_000, true);
+        intent.fill_config.min_fill_amount = Uint128::zero();
+        intent.fill_config.min_fill_pct = "0.5".to_string();
+        let solution = make_solution("s1", "i1", 600_000, 6_000_000);
+
+        let plan = OptimalFillPlan {
+            selected: vec![(solution, Uint128::new(600_000))],
+            total_input: Uint128::new(600_000), // 60% > 50%
+        };
+
+        let result = coord.select_execution_path(&intent, &plan);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_minimum_then_eager_below_strategy_pct() {
+        let coord = make_coordinator(MockSettlementMgr::completing());
+        let mut intent = make_test_intent("i1", 1_000_000, 10_000_000, true);
+        intent.fill_config.min_fill_amount = Uint128::zero();
+        intent.fill_config.min_fill_pct = "0.3".to_string(); // Base 30%
+        intent.fill_config.strategy = FillStrategy::MinimumThenEager {
+            min_pct: "0.8".to_string(), // Strategy requires 80%
+        };
+        let solution = make_solution("s1", "i1", 500_000, 5_000_000);
+
+        let plan = OptimalFillPlan {
+            selected: vec![(solution, Uint128::new(500_000))],
+            total_input: Uint128::new(500_000), // 50% < max(80%, 30%) = 80%
+        };
+
+        let result = coord.select_execution_path(&intent, &plan);
+        assert!(result.is_err());
+        assert!(matches!(
+            result.unwrap_err(),
+            ExecutionError::InsufficientFill { .. }
+        ));
+    }
+
+    #[test]
+    fn test_minimum_then_eager_above_strategy_pct() {
+        let coord = make_coordinator(MockSettlementMgr::completing());
+        let mut intent = make_test_intent("i1", 1_000_000, 10_000_000, true);
+        intent.fill_config.min_fill_amount = Uint128::zero();
+        intent.fill_config.min_fill_pct = "0.3".to_string();
+        intent.fill_config.strategy = FillStrategy::MinimumThenEager {
+            min_pct: "0.8".to_string(),
+        };
+        let solution = make_solution("s1", "i1", 900_000, 9_000_000);
+
+        let plan = OptimalFillPlan {
+            selected: vec![(solution, Uint128::new(900_000))],
+            total_input: Uint128::new(900_000), // 90% > 80%
+        };
+
+        let result = coord.select_execution_path(&intent, &plan);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_solver_discretion_accepts_any() {
+        let coord = make_coordinator(MockSettlementMgr::completing());
+        let mut intent = make_test_intent("i1", 1_000_000, 10_000_000, true);
+        intent.fill_config.min_fill_amount = Uint128::zero();
+        intent.fill_config.min_fill_pct = "0.1".to_string(); // 10% minimum
+        intent.fill_config.strategy = FillStrategy::SolverDiscretion;
+        let solution = make_solution("s1", "i1", 200_000, 2_000_000);
+
+        let plan = OptimalFillPlan {
+            selected: vec![(solution, Uint128::new(200_000))],
+            total_input: Uint128::new(200_000), // 20% > 10%
+        };
+
+        let result = coord.select_execution_path(&intent, &plan);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_multiple_solver_solutions() {
+        let coord = make_coordinator(MockSettlementMgr::completing());
+        let intent = make_test_intent("i1", 1_000_000, 10_000_000, true);
+        let solution1 = make_solution("s1", "i1", 600_000, 6_300_000);
+        let solution2 = make_solution("s2", "i1", 400_000, 4_200_000);
+
+        let plan = OptimalFillPlan {
+            selected: vec![
+                (solution1, Uint128::new(600_000)),
+                (solution2, Uint128::new(400_000)),
+            ],
+            total_input: Uint128::new(1_000_000),
+        };
+
+        let result = coord.select_execution_path(&intent, &plan);
+        assert!(result.is_ok());
+        match result.unwrap() {
+            ExecutionPath::RequiresSolver {
+                solver_solutions, ..
+            } => {
+                assert_eq!(solver_solutions.len(), 2);
+            }
+            _ => panic!("Expected RequiresSolver"),
+        }
+    }
+
+    #[test]
+    fn test_invalid_min_fill_pct_returns_error() {
+        let coord = make_coordinator(MockSettlementMgr::completing());
+        let mut intent = make_test_intent("i1", 1_000_000, 10_000_000, true);
+        intent.fill_config.min_fill_pct = "not_a_number".to_string();
+        let solution = make_solution("s1", "i1", 1_000_000, 10_500_000);
+
+        let plan = OptimalFillPlan {
+            selected: vec![(solution, Uint128::new(1_000_000))],
+            total_input: Uint128::new(1_000_000),
+        };
+
+        let result = coord.select_execution_path(&intent, &plan);
+        assert!(result.is_err());
+        assert!(matches!(
+            result.unwrap_err(),
+            ExecutionError::InvalidConfiguration { .. }
+        ));
+    }
+
+    #[test]
+    fn test_invalid_strategy_min_pct_returns_error() {
+        let coord = make_coordinator(MockSettlementMgr::completing());
+        let mut intent = make_test_intent("i1", 1_000_000, 10_000_000, true);
+        intent.fill_config.min_fill_amount = Uint128::zero();
+        intent.fill_config.min_fill_pct = "0.3".to_string();
+        intent.fill_config.strategy = FillStrategy::MinimumThenEager {
+            min_pct: "bad_value".to_string(),
+        };
+        let solution = make_solution("s1", "i1", 1_000_000, 10_500_000);
+
+        let plan = OptimalFillPlan {
+            selected: vec![(solution, Uint128::new(1_000_000))],
+            total_input: Uint128::new(1_000_000),
+        };
+
+        let result = coord.select_execution_path(&intent, &plan);
+        assert!(result.is_err());
+        assert!(matches!(
+            result.unwrap_err(),
+            ExecutionError::InvalidConfiguration { .. }
+        ));
     }
 }
