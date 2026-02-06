@@ -142,6 +142,31 @@ pub enum SettlementStatus {
     TimedOut,
 }
 
+impl SettlementStatus {
+    /// SECURITY FIX (ST-H1): Validate state machine transitions.
+    /// Returns true if transitioning from self to `next` is allowed.
+    pub fn can_transition_to(&self, next: &SettlementStatus) -> bool {
+        matches!(
+            (self, next),
+            // Happy path: Pending -> UserLocked -> SolverLocked -> Executing -> Complete
+            (SettlementStatus::Pending, SettlementStatus::UserLocked)
+                | (SettlementStatus::UserLocked, SettlementStatus::SolverLocked)
+                | (SettlementStatus::SolverLocked, SettlementStatus::Executing)
+                | (SettlementStatus::Executing, SettlementStatus::Complete)
+                // Failure from Executing
+                | (SettlementStatus::Executing, SettlementStatus::Failed { .. })
+                | (SettlementStatus::Executing, SettlementStatus::TimedOut)
+                // Failure/timeout from any active (non-terminal) state
+                | (SettlementStatus::Pending, SettlementStatus::Failed { .. })
+                | (SettlementStatus::UserLocked, SettlementStatus::Failed { .. })
+                | (SettlementStatus::SolverLocked, SettlementStatus::Failed { .. })
+                | (SettlementStatus::Pending, SettlementStatus::TimedOut)
+                | (SettlementStatus::UserLocked, SettlementStatus::TimedOut)
+                | (SettlementStatus::SolverLocked, SettlementStatus::TimedOut)
+        )
+    }
+}
+
 /// Slashing configuration
 #[cw_serde]
 pub struct SlashingConfig {

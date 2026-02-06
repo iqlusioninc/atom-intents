@@ -1,3 +1,4 @@
+use cosmwasm_std::Uint128;
 use rust_decimal::Decimal;
 use thiserror::Error;
 
@@ -82,4 +83,18 @@ pub enum MatchingError {
         expires_at: u64,
         current_time: u64,
     },
+}
+
+/// SECURITY FIX (ME-C3): Safe decimal-to-Uint128 conversion that returns an error
+/// instead of silently returning 0 on overflow or negative values.
+pub fn safe_decimal_to_uint128(d: Decimal) -> Result<Uint128, MatchingError> {
+    if d.is_sign_negative() {
+        return Err(MatchingError::InvalidPrice("negative amount".into()));
+    }
+    let truncated = d.trunc();
+    let value = truncated
+        .to_string()
+        .parse::<u128>()
+        .map_err(|_| MatchingError::InvalidPrice(format!("amount overflow: {}", d)))?;
+    Ok(Uint128::new(value))
 }

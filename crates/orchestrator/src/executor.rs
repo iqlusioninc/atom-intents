@@ -97,9 +97,13 @@ impl ExecutionCoordinator {
 
         // 3. Get solver quotes for remaining amount
         info!(intent_id = %intent.id, stage = ?ExecutionStage::SolvingForQuotes, "Getting solver quotes");
+        let current_time = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
         let fill_plan = self
             .solution_aggregator
-            .aggregate(&intent, matched_amount)
+            .aggregate(&intent, matched_amount, current_time)
             .await
             .map_err(|e| ExecutionError::SolverAggregation {
                 reason: e.to_string(),

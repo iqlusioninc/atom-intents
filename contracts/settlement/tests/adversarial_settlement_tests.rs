@@ -189,8 +189,8 @@ fn test_state_cannot_go_backwards() {
     )
     .unwrap();
 
-    // Mark solver locked
-    let info = message_info(&addrs.solver_operator, &[]);
+    // Mark solver locked (with required funds)
+    let info = message_info(&addrs.solver_operator, &[Coin::new(10_000_000u128, "uusdc")]);
     execute(
         deps.as_mut(),
         env.clone(),
@@ -369,7 +369,7 @@ fn test_double_completion_behavior() {
     )
     .unwrap();
 
-    let info = message_info(&addrs.solver_operator, &[]);
+    let info = message_info(&addrs.solver_operator, &[Coin::new(10_000_000u128, "uusdc")]);
     execute(
         deps.as_mut(),
         env.clone(),
@@ -464,7 +464,7 @@ fn test_non_admin_cannot_call_timeout() {
     )
     .unwrap();
 
-    let info = message_info(&addrs.solver_operator, &[]);
+    let info = message_info(&addrs.solver_operator, &[Coin::new(10_000_000u128, "uusdc")]);
     execute(
         deps.as_mut(),
         env.clone(),
@@ -721,7 +721,7 @@ fn test_execute_expired_settlement_fails() {
     )
     .unwrap();
 
-    let info = message_info(&addrs.solver_operator, &[]);
+    let info = message_info(&addrs.solver_operator, &[Coin::new(10_000_000u128, "uusdc")]);
     execute(
         deps.as_mut(),
         env.clone(),
@@ -848,7 +848,7 @@ fn test_deregister_with_active_settlement_fails() {
     )
     .unwrap();
 
-    let info = message_info(&addrs.solver_operator, &[]);
+    let info = message_info(&addrs.solver_operator, &[Coin::new(10_000_000u128, "uusdc")]);
     execute(
         deps.as_mut(),
         env.clone(),
@@ -896,7 +896,7 @@ fn test_deregister_after_settlements_complete_succeeds() {
     )
     .unwrap();
 
-    let info = message_info(&addrs.solver_operator, &[]);
+    let info = message_info(&addrs.solver_operator, &[Coin::new(10_000_000u128, "uusdc")]);
     execute(
         deps.as_mut(),
         env.clone(),
@@ -987,7 +987,7 @@ fn test_settlement_execute_at_exact_expiry_blocked() {
     )
     .unwrap();
 
-    let info = message_info(&addrs.solver_operator, &[]);
+    let info = message_info(&addrs.solver_operator, &[Coin::new(10_000_000u128, "uusdc")]);
     execute(
         deps.as_mut(),
         env.clone(),

@@ -255,6 +255,21 @@ pub fn execute_mark_solver_locked(
         });
     }
 
+    // Verify the solver attached the required output funds
+    let provided = info
+        .funds
+        .iter()
+        .find(|c| c.denom == settlement.solver_output_denom)
+        .map(|c| c.amount)
+        .unwrap_or(Uint128::zero());
+
+    if provided < settlement.solver_output_amount {
+        return Err(ContractError::InsufficientFunds {
+            required: settlement.solver_output_amount.to_string(),
+            provided: provided.to_string(),
+        });
+    }
+
     settlement.status = target_status;
     SETTLEMENTS.save(deps.storage, &settlement_id, &settlement)?;
 
@@ -864,9 +879,16 @@ pub fn execute_handle_ibc_ack(
 pub fn execute_update_reputation(
     deps: DepsMut,
     env: Env,
+    info: MessageInfo,
     solver_id: String,
 ) -> Result<Response, ContractError> {
     use crate::helpers::calculate_reputation_score;
+
+    // Only admin can update reputation scores
+    let config = CONFIG.load(deps.storage)?;
+    if info.sender != config.admin {
+        return Err(ContractError::Unauthorized {});
+    }
 
     // Load solver to ensure it exists
     let _solver =
@@ -960,9 +982,16 @@ pub fn execute_update_reputation(
 pub fn execute_decay_reputation(
     deps: DepsMut,
     env: Env,
+    info: MessageInfo,
     start_after: Option<String>,
     limit: Option<u32>,
 ) -> Result<Response, ContractError> {
+    // Only admin can trigger reputation decay
+    let config = CONFIG.load(deps.storage)?;
+    if info.sender != config.admin {
+        return Err(ContractError::Unauthorized {});
+    }
+
     // Decay rate: 1% per day (86400 seconds)
     const DECAY_PERIOD: u64 = 86400; // 1 day in seconds
     const DECAY_BPS: u64 = 100; // 1% decay

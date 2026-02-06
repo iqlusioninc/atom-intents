@@ -67,7 +67,7 @@ anyhow = "1.0"
 reqwest = { version = "0.11", features = ["json"] }
 
 # Database (optional for production)
-sqlx = { version = "0.7", features = ["runtime-tokio", "postgres", "chrono", "uuid"], optional = true }
+sqlx = { version = "0.7", default-features = false, features = ["runtime-tokio", "postgres", "chrono", "uuid"], optional = true }
 
 # Redis for rate limiting and caching
 redis = { version = "0.24", features = ["tokio-comp", "connection-manager"] }

@@ -4,7 +4,7 @@ use rust_decimal::Decimal;
 use std::collections::{BTreeMap, VecDeque};
 use std::str::FromStr;
 
-use crate::MatchingError;
+use crate::{safe_decimal_to_uint128, MatchingError};
 
 /// Central limit order book for a trading pair
 pub struct OrderBook {
@@ -20,11 +20,14 @@ pub struct OrderBook {
     sequence: u64,
 }
 
-/// Wrapper for price that implements correct ordering
+/// Wrapper for price that implements correct ordering.
+///
+/// SECURITY FIX (ME-C1): Always uses ascending price order to satisfy
+/// BTreeMap's Ord antisymmetry requirement. Callers iterate in reverse
+/// for bids (highest = best bid first).
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct OrderedPrice {
     price: Decimal,
-    is_bid: bool,
 }
 
 impl PartialOrd for OrderedPrice {
@@ -35,13 +38,7 @@ impl PartialOrd for OrderedPrice {
 
 impl Ord for OrderedPrice {
     fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-        if self.is_bid {
-            // Bids: higher price = better = comes first
-            other.price.cmp(&self.price)
-        } else {
-            // Asks: lower price = better = comes first
-            self.price.cmp(&other.price)
-        }
+        self.price.cmp(&other.price)
     }
 }
 
@@ -96,10 +93,22 @@ impl OrderBook {
             Side::Sell => &mut self.bids,
         };
 
+        // SECURITY FIX (ME-C1): Collect price levels in best-first order.
+        // Asks: ascending (lowest = best ask first).
+        // Bids: descending (highest = best bid first).
+        let price_keys: Vec<OrderedPrice> = match side {
+            Side::Buy => opposite.keys().cloned().collect(),
+            Side::Sell => opposite.keys().rev().cloned().collect(),
+        };
+
         // Walk the book at each price level
         let mut exhausted_levels = Vec::new();
 
-        for (price_level, entries) in opposite.iter_mut() {
+        for price_level in &price_keys {
+            let entries = match opposite.get_mut(price_level) {
+                Some(e) => e,
+                None => continue,
+            };
             // Check if prices cross
             if !Self::prices_cross(limit_price, price_level.price, side) {
                 break;
@@ -119,12 +128,12 @@ impl OrderBook {
                 let (taker_base, maker_base) = match side {
                     Side::Buy => {
                         // Taker input is USDC, maker amount is ATOM
-                        let taker = Self::quote_to_base(remaining, price_level.price);
+                        let taker = Self::quote_to_base(remaining, price_level.price)?;
                         (taker, entry.remaining_amount)
                     }
                     Side::Sell => {
                         // Taker input is ATOM, maker amount is USDC
-                        let maker = Self::quote_to_base(entry.remaining_amount, price_level.price);
+                        let maker = Self::quote_to_base(entry.remaining_amount, price_level.price)?;
                         (remaining, maker)
                     }
                 };
@@ -141,12 +150,32 @@ impl OrderBook {
                         continue;
                     }
 
+                    // SECURITY FIX (ME-H2): Enforce minimum fill constraints
+                    if !maker_fully_filled {
+                        // Check minimum fill amount
+                        if !entry.fill_config.min_fill_amount.is_zero()
+                            && match_amount_base < entry.fill_config.min_fill_amount
+                        {
+                            continue;
+                        }
+                        // Check minimum fill percentage (string "0.1" = 10%)
+                        if let Ok(min_pct) = Decimal::from_str(&entry.fill_config.min_fill_pct) {
+                            if min_pct > Decimal::ZERO && !entry.original_amount.is_zero() {
+                                let fill_ratio = Decimal::from(match_amount_base.u128())
+                                    / Decimal::from(entry.original_amount.u128());
+                                if fill_ratio < min_pct {
+                                    continue;
+                                }
+                            }
+                        }
+                    }
+
                     // Calculate amounts in original units
                     let (taker_consumed, maker_consumed, fill_input, fill_output) = match side {
                         Side::Buy => {
                             // Taker gives USDC, gets ATOM
                             let taker_usdc =
-                                Self::base_to_quote(match_amount_base, price_level.price);
+                                Self::base_to_quote(match_amount_base, price_level.price)?;
                             let maker_atom = match_amount_base;
                             (taker_usdc, maker_atom, taker_usdc, match_amount_base)
                         }
@@ -154,7 +183,7 @@ impl OrderBook {
                             // Taker gives ATOM, gets USDC
                             let taker_atom = match_amount_base;
                             let maker_usdc =
-                                Self::base_to_quote(match_amount_base, price_level.price);
+                                Self::base_to_quote(match_amount_base, price_level.price)?;
                             (taker_atom, maker_usdc, match_amount_base, maker_usdc)
                         }
                     };
@@ -218,20 +247,24 @@ impl OrderBook {
     }
 
     /// Convert quote amount (USDC) to base amount (ATOM) at given price
-    fn quote_to_base(quote: Uint128, price: Decimal) -> Uint128 {
+    ///
+    /// SECURITY FIX (ME-C3): Returns Result instead of silently returning 0 on overflow.
+    fn quote_to_base(quote: Uint128, price: Decimal) -> Result<Uint128, MatchingError> {
         if price.is_zero() {
-            return Uint128::zero();
+            return Ok(Uint128::zero());
         }
         let quote_dec = Decimal::from(quote.u128());
         let base = quote_dec / price;
-        Uint128::new(base.trunc().to_string().parse::<u128>().unwrap_or(0))
+        safe_decimal_to_uint128(base)
     }
 
     /// Convert base amount (ATOM) to quote amount (USDC) at given price
-    fn base_to_quote(base: Uint128, price: Decimal) -> Uint128 {
+    ///
+    /// SECURITY FIX (ME-C3): Returns Result instead of silently returning 0 on overflow.
+    fn base_to_quote(base: Uint128, price: Decimal) -> Result<Uint128, MatchingError> {
         let base_dec = Decimal::from(base.u128());
         let quote = base_dec * price;
-        Uint128::new(quote.trunc().to_string().parse::<u128>().unwrap_or(0))
+        safe_decimal_to_uint128(quote)
     }
 
     fn add_to_book(
@@ -258,7 +291,6 @@ impl OrderBook {
 
         let price_key = OrderedPrice {
             price: limit_price,
-            is_bid: matches!(side, Side::Buy),
         };
 
         let book = match side {
@@ -271,9 +303,9 @@ impl OrderBook {
             .push_back(entry);
     }
 
-    /// Get best bid price
+    /// Get best bid price (highest bid = last in ascending BTreeMap)
     pub fn best_bid(&self) -> Option<Decimal> {
-        self.bids.keys().next().map(|k| k.price)
+        self.bids.keys().next_back().map(|k| k.price)
     }
 
     /// Get best ask price

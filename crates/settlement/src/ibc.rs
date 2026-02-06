@@ -562,11 +562,13 @@ mod tests {
                     chain_id: "stride-1".to_string(),
                     channel_id: "channel-391".to_string(),
                     port_id: "transfer".to_string(),
+                    pfm_receiver: None,
                 },
                 RouteHop {
                     chain_id: "osmosis-1".to_string(),
                     channel_id: "channel-5".to_string(),
                     port_id: "transfer".to_string(),
+                    pfm_receiver: None,
                 },
             ],
             estimated_time_seconds: 20,

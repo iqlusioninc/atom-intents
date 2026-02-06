@@ -35,6 +35,9 @@ pub struct RouteHop {
     pub channel_id: String,
     /// Port ID (typically "transfer")
     pub port_id: String,
+    /// PFM receiver address for intermediate hops. If None, uses the standard
+    /// PFM module address "pfm" which most PFM implementations accept.
+    pub pfm_receiver: Option<String>,
 }
 
 impl RouteRegistry {
@@ -62,11 +65,13 @@ impl RouteRegistry {
                     chain_id: "stride-1".to_string(),
                     channel_id: "channel-391".to_string(), // hub -> stride
                     port_id: "transfer".to_string(),
+                    pfm_receiver: None,
                 },
                 RouteHop {
                     chain_id: "osmosis-1".to_string(),
                     channel_id: "channel-5".to_string(), // stride -> osmosis
                     port_id: "transfer".to_string(),
+                    pfm_receiver: None,
                 },
             ],
             estimated_time_seconds: 20,
@@ -82,11 +87,13 @@ impl RouteRegistry {
                     chain_id: "cosmoshub-4".to_string(),
                     channel_id: "channel-1".to_string(), // neutron -> hub
                     port_id: "transfer".to_string(),
+                    pfm_receiver: None,
                 },
                 RouteHop {
                     chain_id: "osmosis-1".to_string(),
                     channel_id: "channel-141".to_string(), // hub -> osmosis
                     port_id: "transfer".to_string(),
+                    pfm_receiver: None,
                 },
             ],
             estimated_time_seconds: 20,
@@ -102,11 +109,13 @@ impl RouteRegistry {
                     chain_id: "cosmoshub-4".to_string(),
                     channel_id: "channel-1".to_string(), // neutron -> hub
                     port_id: "transfer".to_string(),
+                    pfm_receiver: None,
                 },
                 RouteHop {
                     chain_id: "stride-1".to_string(),
                     channel_id: "channel-391".to_string(), // hub -> stride
                     port_id: "transfer".to_string(),
+                    pfm_receiver: None,
                 },
             ],
             estimated_time_seconds: 20,
@@ -122,11 +131,13 @@ impl RouteRegistry {
                     chain_id: "cosmoshub-4".to_string(),
                     channel_id: "channel-0".to_string(), // osmosis -> hub
                     port_id: "transfer".to_string(),
+                    pfm_receiver: None,
                 },
                 RouteHop {
                     chain_id: "stride-1".to_string(),
                     channel_id: "channel-391".to_string(), // hub -> stride
                     port_id: "transfer".to_string(),
+                    pfm_receiver: None,
                 },
             ],
             estimated_time_seconds: 20,
@@ -142,11 +153,13 @@ impl RouteRegistry {
                     chain_id: "cosmoshub-4".to_string(),
                     channel_id: "channel-0".to_string(), // osmosis -> hub
                     port_id: "transfer".to_string(),
+                    pfm_receiver: None,
                 },
                 RouteHop {
                     chain_id: "neutron-1".to_string(),
                     channel_id: "channel-569".to_string(), // hub -> neutron
                     port_id: "transfer".to_string(),
+                    pfm_receiver: None,
                 },
             ],
             estimated_time_seconds: 20,
@@ -162,11 +175,13 @@ impl RouteRegistry {
                     chain_id: "cosmoshub-4".to_string(),
                     channel_id: "channel-0".to_string(), // stride -> hub
                     port_id: "transfer".to_string(),
+                    pfm_receiver: None,
                 },
                 RouteHop {
                     chain_id: "neutron-1".to_string(),
                     channel_id: "channel-569".to_string(), // hub -> neutron
                     port_id: "transfer".to_string(),
+                    pfm_receiver: None,
                 },
             ],
             estimated_time_seconds: 20,
@@ -205,6 +220,7 @@ impl RouteRegistry {
                     chain_id: dest_chain.to_string(),
                     channel_id: channel_info.channel_id.clone(),
                     port_id: channel_info.port_id.clone(),
+                    pfm_receiver: None,
                 }],
                 estimated_time_seconds: 6, // Direct IBC ~6 seconds
                 estimated_cost_units: 50000,
@@ -250,6 +266,7 @@ impl RouteRegistry {
                     chain_id: dest_chain.to_string(),
                     channel_id: channel_info.channel_id.clone(),
                     port_id: channel_info.port_id.clone(),
+                    pfm_receiver: None,
                 }],
                 estimated_time_seconds: 6,
                 estimated_cost_units: 50000,
@@ -318,6 +335,7 @@ impl RouteRegistry {
                     chain_id: dst.clone(),
                     channel_id: channel_info.channel_id.clone(),
                     port_id: channel_info.port_id.clone(),
+                    pfm_receiver: None,
                 });
 
                 // Found the destination
@@ -362,8 +380,9 @@ pub fn build_pfm_memo(hops: &[RouteHop], final_receiver: &str) -> String {
         let hop = &hops[index];
         let is_last = index == hops.len() - 1;
 
+        let intermediate_receiver = hop.pfm_receiver.as_deref().unwrap_or("pfm");
         let mut forward = serde_json::json!({
-            "receiver": if is_last { final_receiver } else { hop.chain_id.as_str() },
+            "receiver": if is_last { final_receiver } else { intermediate_receiver },
             "port": hop.port_id,
             "channel": hop.channel_id,
         });
@@ -395,8 +414,8 @@ pub fn route_hops_to_pfm_hops(route_hops: &[RouteHop], final_receiver: &str) -> 
                 receiver: if i == route_hops.len() - 1 {
                     final_receiver.to_string()
                 } else {
-                    // Intermediate hops use the next chain's address
-                    hop.chain_id.clone()
+                    // Intermediate hops use the PFM receiver address, defaulting to "pfm"
+                    hop.pfm_receiver.clone().unwrap_or_else(|| "pfm".to_string())
                 },
                 channel: hop.channel_id.clone(),
             }
@@ -487,11 +506,13 @@ mod tests {
                     chain_id: "stride-1".to_string(),
                     channel_id: "channel-391".to_string(),
                     port_id: "transfer".to_string(),
+                    pfm_receiver: None,
                 },
                 RouteHop {
                     chain_id: "osmosis-1".to_string(),
                     channel_id: "channel-5".to_string(),
                     port_id: "transfer".to_string(),
+                    pfm_receiver: None,
                 },
             ],
             estimated_time_seconds: 20,
@@ -512,11 +533,13 @@ mod tests {
                     chain_id: "stride-1".to_string(),
                     channel_id: "channel-391".to_string(),
                     port_id: "transfer".to_string(),
+                    pfm_receiver: None,
                 },
                 RouteHop {
                     chain_id: "osmosis-1".to_string(),
                     channel_id: "channel-5".to_string(),
                     port_id: "transfer".to_string(),
+                    pfm_receiver: None,
                 },
             ],
             estimated_time_seconds: 20,
@@ -533,6 +556,7 @@ mod tests {
             chain_id: "osmosis-1".to_string(),
             channel_id: "channel-141".to_string(),
             port_id: "transfer".to_string(),
+            pfm_receiver: None,
         }];
 
         let memo = build_pfm_memo(&hops, "osmo1receiver");
@@ -550,19 +574,21 @@ mod tests {
                 chain_id: "stride-1".to_string(),
                 channel_id: "channel-391".to_string(),
                 port_id: "transfer".to_string(),
+                pfm_receiver: None,
             },
             RouteHop {
                 chain_id: "osmosis-1".to_string(),
                 channel_id: "channel-5".to_string(),
                 port_id: "transfer".to_string(),
+                pfm_receiver: None,
             },
         ];
 
         let memo = build_pfm_memo(&hops, "osmo1finalreceiver");
         let parsed: serde_json::Value = serde_json::from_str(&memo).unwrap();
 
-        // First hop should forward to stride-1
-        assert_eq!(parsed["forward"]["receiver"], "stride-1");
+        // First hop (intermediate) should use PFM default receiver, not chain ID
+        assert_eq!(parsed["forward"]["receiver"], "pfm");
         assert_eq!(parsed["forward"]["channel"], "channel-391");
         assert_eq!(parsed["forward"]["port"], "transfer");
 
@@ -589,18 +615,21 @@ mod tests {
                 chain_id: "stride-1".to_string(),
                 channel_id: "channel-391".to_string(),
                 port_id: "transfer".to_string(),
+                pfm_receiver: None,
             },
             RouteHop {
                 chain_id: "osmosis-1".to_string(),
                 channel_id: "channel-5".to_string(),
                 port_id: "transfer".to_string(),
+                pfm_receiver: None,
             },
         ];
 
         let pfm_hops = route_hops_to_pfm_hops(&route_hops, "osmo1finalreceiver");
 
         assert_eq!(pfm_hops.len(), 2);
-        assert_eq!(pfm_hops[0].receiver, "stride-1");
+        // Intermediate hop uses default PFM receiver, not raw chain ID
+        assert_eq!(pfm_hops[0].receiver, "pfm");
         assert_eq!(pfm_hops[0].channel, "channel-391");
         assert_eq!(pfm_hops[1].receiver, "osmo1finalreceiver");
         assert_eq!(pfm_hops[1].channel, "channel-5");
@@ -649,6 +678,7 @@ mod tests {
                 chain_id: "custom-chain-2".to_string(),
                 channel_id: "channel-999".to_string(),
                 port_id: "transfer".to_string(),
+                pfm_receiver: None,
             }],
             estimated_time_seconds: 6,
             estimated_cost_units: 50000,
@@ -661,5 +691,59 @@ mod tests {
 
         let route = route.unwrap();
         assert_eq!(route.hops[0].channel_id, "channel-999");
+    }
+
+    #[test]
+    fn test_pfm_intermediate_receiver_not_chain_id() {
+        // Verify that intermediate hops use "pfm" (not raw chain IDs) by default,
+        // and use the custom pfm_receiver when set.
+        let hops_default = vec![
+            RouteHop {
+                chain_id: "stride-1".to_string(),
+                channel_id: "channel-391".to_string(),
+                port_id: "transfer".to_string(),
+                pfm_receiver: None,
+            },
+            RouteHop {
+                chain_id: "osmosis-1".to_string(),
+                channel_id: "channel-5".to_string(),
+                port_id: "transfer".to_string(),
+                pfm_receiver: None,
+            },
+        ];
+
+        // Default: intermediate receiver should be "pfm", not a chain ID
+        let memo = build_pfm_memo(&hops_default, "osmo1final");
+        let parsed: serde_json::Value = serde_json::from_str(&memo).unwrap();
+        let intermediate_receiver = parsed["forward"]["receiver"].as_str().unwrap();
+        assert_eq!(intermediate_receiver, "pfm");
+        assert_ne!(intermediate_receiver, "stride-1", "intermediate receiver must not be a raw chain ID");
+
+        let pfm_hops = route_hops_to_pfm_hops(&hops_default, "osmo1final");
+        assert_eq!(pfm_hops[0].receiver, "pfm");
+        assert_ne!(pfm_hops[0].receiver, "stride-1");
+
+        // Custom pfm_receiver: should use the provided address
+        let hops_custom = vec![
+            RouteHop {
+                chain_id: "stride-1".to_string(),
+                channel_id: "channel-391".to_string(),
+                port_id: "transfer".to_string(),
+                pfm_receiver: Some("stride1pfmmoduleaddr".to_string()),
+            },
+            RouteHop {
+                chain_id: "osmosis-1".to_string(),
+                channel_id: "channel-5".to_string(),
+                port_id: "transfer".to_string(),
+                pfm_receiver: None,
+            },
+        ];
+
+        let memo_custom = build_pfm_memo(&hops_custom, "osmo1final");
+        let parsed_custom: serde_json::Value = serde_json::from_str(&memo_custom).unwrap();
+        assert_eq!(parsed_custom["forward"]["receiver"], "stride1pfmmoduleaddr");
+
+        let pfm_hops_custom = route_hops_to_pfm_hops(&hops_custom, "osmo1final");
+        assert_eq!(pfm_hops_custom[0].receiver, "stride1pfmmoduleaddr");
     }
 }

@@ -137,6 +137,14 @@ impl Solver for DexRoutingSolver {
 
         // Calculate fee (10% of surplus over user's limit price)
         let remaining_dec = Decimal::from(ctx.remaining.u128());
+
+        // SECURITY FIX (S-C1): Guard against division by zero when remaining is zero
+        if remaining_dec.is_zero() {
+            return Err(SolveError::InvalidIntent {
+                reason: "zero remaining amount".into(),
+            });
+        }
+
         let user_min_output_dec = remaining_dec * limit_price;
         let output_amount_dec = Decimal::from(best.output_amount);
         let surplus_dec = (output_amount_dec - user_min_output_dec).max(Decimal::ZERO);

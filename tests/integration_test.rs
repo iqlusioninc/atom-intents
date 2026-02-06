@@ -369,7 +369,7 @@ async fn test_full_settlement_flow() {
 
     // Step 3: Get solver solution via aggregator
     let fill_plan = aggregator
-        .aggregate(&intent, Uint128::zero())
+        .aggregate(&intent, Uint128::zero(), current_time)
         .await
         .unwrap();
 
@@ -437,7 +437,7 @@ async fn test_same_chain_settlement_releases_funds() {
     );
 
     let fill_plan = aggregator
-        .aggregate(&intent, Uint128::zero())
+        .aggregate(&intent, Uint128::zero(), current_time())
         .await
         .unwrap();
     let (solution, _amount) = &fill_plan.selected[0];
@@ -696,7 +696,7 @@ async fn test_settlement_failure_and_recovery() {
     engine.process_intent(&intent, current_time).unwrap();
 
     let fill_plan = aggregator
-        .aggregate(&intent, Uint128::zero())
+        .aggregate(&intent, Uint128::zero(), current_time)
         .await
         .unwrap();
 
@@ -767,7 +767,7 @@ async fn test_solver_vault_lock_failure() {
     let aggregator = SolutionAggregator::new(vec![solver], oracle);
 
     let fill_plan = aggregator
-        .aggregate(&intent, Uint128::zero())
+        .aggregate(&intent, Uint128::zero(), current_time())
         .await
         .unwrap();
 
@@ -926,7 +926,7 @@ async fn test_multiple_solvers_aggregation() {
     );
 
     let fill_plan = aggregator
-        .aggregate(&intent, Uint128::zero())
+        .aggregate(&intent, Uint128::zero(), current_time())
         .await
         .unwrap();
 
@@ -1122,7 +1122,7 @@ async fn test_settlement_rejects_max_hops_constraint() {
     intent.constraints.max_hops = Some(1);
 
     let fill_plan = aggregator
-        .aggregate(&intent, Uint128::zero())
+        .aggregate(&intent, Uint128::zero(), current_time())
         .await
         .unwrap();
     let (solution, _) = &fill_plan.selected[0];
@@ -1182,7 +1182,7 @@ async fn test_settlement_rejects_max_bridge_time_constraint() {
     intent.constraints.max_bridge_time_secs = Some(10);
 
     let fill_plan = aggregator
-        .aggregate(&intent, Uint128::zero())
+        .aggregate(&intent, Uint128::zero(), current_time())
         .await
         .unwrap();
     let (solution, _) = &fill_plan.selected[0];

@@ -274,6 +274,9 @@ pub struct CexBackstopConfig {
 
     /// IBC transfer time estimate (seconds)
     pub ibc_transfer_time_secs: u64,
+
+    /// Token decimal precision per denom (defaults to 6 if not specified)
+    pub token_decimals: HashMap<String, u32>,
 }
 
 impl Default for CexBackstopConfig {
@@ -289,6 +292,7 @@ impl Default for CexBackstopConfig {
             max_position_usd: 1_000_000,
             surplus_capture_rate: Decimal::from_str("0.10").unwrap(), // 10%
             ibc_transfer_time_secs: 300,                              // 5 minutes
+            token_decimals: HashMap::new(),
         }
     }
 }
@@ -363,6 +367,18 @@ pub struct CexBackstopSolver {
     client: Arc<dyn CexClient>,
     config: CexBackstopConfig,
     inventory: Arc<RwLock<InventoryPosition>>,
+}
+
+impl CexBackstopConfig {
+    /// Get decimal precision for a denom, defaulting to 6
+    fn get_decimals(&self, denom: &str) -> u32 {
+        *self.token_decimals.get(denom).unwrap_or(&6)
+    }
+
+    /// Get the scale factor (10^decimals) for a denom
+    fn scale_factor(&self, denom: &str) -> u128 {
+        10u128.pow(self.get_decimals(denom))
+    }
 }
 
 impl CexBackstopSolver {
@@ -441,8 +457,9 @@ impl CexBackstopSolver {
             .await
             .map_err(|e| SolveError::CexQueryFailed(e.to_string()))?;
 
-        // Convert input amount to decimal (assuming 6 decimals)
-        let input_decimal = Decimal::from_i128_with_scale(input_amount as i128, 6);
+        // Convert input amount to decimal using configured decimals
+        let input_decimals = self.config.get_decimals(input_denom);
+        let input_decimal = Decimal::from_i128_with_scale(input_amount as i128, input_decimals);
 
         // Determine if we're buying or selling the base asset
         let base_asset = self.denom_to_asset(input_denom);
@@ -468,13 +485,15 @@ impl CexBackstopSolver {
         let after_trading_fee = output_before_fees * (Decimal::ONE - self.config.cex_fee_rate);
 
         // Apply withdrawal fee
+        let output_decimals = self.config.get_decimals(output_denom);
         let withdrawal_fee =
-            Decimal::from_i128_with_scale(self.get_withdrawal_fee(output_denom) as i128, 6);
+            Decimal::from_i128_with_scale(self.get_withdrawal_fee(output_denom) as i128, output_decimals);
 
         let output_after_fees = after_trading_fee - withdrawal_fee;
 
-        // Convert back to base units (multiply by 10^6 to convert from whole units to micro-units)
-        let output_in_base_units = output_after_fees * Decimal::from(1_000_000);
+        // Convert back to base units (multiply by 10^decimals to convert from whole units to base units)
+        let output_scale = self.config.scale_factor(output_denom);
+        let output_in_base_units = output_after_fees * Decimal::from(output_scale);
         let mut scaled = output_in_base_units;
         scaled.rescale(0); // Convert to integer
         let output_amount = scaled
@@ -612,6 +631,14 @@ impl Solver for CexBackstopSolver {
                 })?;
 
         let remaining_dec = Decimal::from(ctx.remaining.u128());
+
+        // SECURITY FIX (S-C1): Guard against division by zero when remaining is zero
+        if remaining_dec.is_zero() {
+            return Err(SolveError::InvalidIntent {
+                reason: "zero remaining amount".into(),
+            });
+        }
+
         let user_min_output_dec = remaining_dec * limit_price;
         let output_amount_dec = Decimal::from(output_amount);
         let surplus_dec = (output_amount_dec - user_min_output_dec).max(Decimal::ZERO);
@@ -626,13 +653,29 @@ impl Solver for CexBackstopSolver {
         let output_to_user_dec = Decimal::from(output_to_user);
         let effective_price = output_to_user_dec / remaining_dec;
 
+        // SECURITY FIX (S-H7): Enforce max_solver_fee_bps in CEX solver (parity with DEX)
+        if let Some(max_fee_bps) = intent.constraints.max_solver_fee_bps {
+            if !output_amount_dec.is_zero() {
+                let fee_bps =
+                    (solver_fee_dec / output_amount_dec) * Decimal::from(10_000u32);
+                if fee_bps > Decimal::from(max_fee_bps) {
+                    return Err(SolveError::NoViableRoute);
+                }
+            }
+        }
+
+        // SECURITY FIX (S-C3): Use checked conversion instead of silent overflow
+        let remaining_i128 = i128::try_from(ctx.remaining.u128()).map_err(|_| {
+            SolveError::Overflow
+        })?;
+
         // SECURITY FIX (1.2): Update inventory with pending tracking for rollback
         // Use intent_id as the pending key - orchestrator will call confirm or rollback
         self.update_inventory_with_pending(
             &intent.id,
             &intent.input.denom,
             &intent.output.denom,
-            ctx.remaining.u128() as i128,
+            remaining_i128,
         );
 
         let current_time = std::time::SystemTime::now()
@@ -684,8 +727,9 @@ impl Solver for CexBackstopSolver {
             }
         }
 
-        // Convert to u128 with 6 decimals (scale and convert)
-        let mut scaled_liquidity = total_liquidity_decimal * Decimal::from(1_000_000);
+        // Convert to base units using quote denom's decimals
+        let quote_scale = self.config.scale_factor(&pair.quote);
+        let mut scaled_liquidity = total_liquidity_decimal * Decimal::from(quote_scale);
         scaled_liquidity.rescale(0);
         let total_liquidity = scaled_liquidity.to_u128().unwrap_or(0);
 
@@ -1630,6 +1674,56 @@ mod tests {
             CexBackstopSolver::new("test-cex-solver", client, CexBackstopConfig::default());
 
         assert!(solver.health_check().await);
+    }
+
+    #[tokio::test]
+    async fn test_cex_respects_token_decimals() {
+        // Verify that different decimal configurations produce different results.
+        // When input uses 8 decimals but output uses 6, the conversion differs from
+        // the case where both use 6 decimals.
+        //
+        // With input=8, output=6: 100_000_000 / 10^8 = 1 ATOM -> sell -> ~10.49 USDC -> * 10^6
+        // With input=6, output=6: 100_000_000 / 10^6 = 100 ATOM -> sell -> ~1049 USDC -> * 10^6
+
+        let mut config_8in = CexBackstopConfig::default();
+        config_8in.token_decimals.insert("uatom".to_string(), 8);
+        // uusdc stays at default 6
+
+        let client = Arc::new(MockCexClient::new().with_orderbook(
+            "ATOMUSDC",
+            MockCexClient::simple_orderbook("ATOMUSDC", 10.5, 0.002, 100000.0),
+        ));
+
+        let solver_8in = CexBackstopSolver::new("test-8in", client.clone(), config_8in);
+        let solver_default = CexBackstopSolver::new("test-default", client, CexBackstopConfig::default());
+
+        let (output_8in, _) = solver_8in
+            .estimate_cex_fill("uatom", "uusdc", 100_000_000)
+            .await
+            .unwrap();
+        let (output_default, _) = solver_default
+            .estimate_cex_fill("uatom", "uusdc", 100_000_000)
+            .await
+            .unwrap();
+
+        // With 8-decimal input: 1 ATOM -> ~10 USDC output
+        // With 6-decimal input: 100 ATOM -> ~1049 USDC output
+        assert!(
+            output_default > output_8in,
+            "default 6-dec input ({}) should produce larger output than 8-dec input ({})",
+            output_default,
+            output_8in
+        );
+
+        // Verify the get_decimals helper works
+        let config = CexBackstopConfig::default();
+        assert_eq!(config.get_decimals("uatom"), 6); // default
+        assert_eq!(config.get_decimals("unknown"), 6); // default for unknown
+
+        let mut config_custom = CexBackstopConfig::default();
+        config_custom.token_decimals.insert("weth".to_string(), 18);
+        assert_eq!(config_custom.get_decimals("weth"), 18);
+        assert_eq!(config_custom.scale_factor("weth"), 10u128.pow(18));
     }
 
     #[test]
