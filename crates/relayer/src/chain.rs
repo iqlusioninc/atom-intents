@@ -38,6 +38,9 @@ pub enum ChainError {
 
     #[error("invalid response: {0}")]
     InvalidResponse(String),
+
+    #[error("not implemented: {0}")]
+    NotImplemented(String),
 }
 
 impl From<ChainError> for RelayerError {
@@ -53,6 +56,7 @@ impl From<ChainError> for RelayerError {
             ChainError::ParseError(msg) | ChainError::EncodingError(msg) => {
                 RelayerError::ProofQueryFailed(msg)
             }
+            ChainError::NotImplemented(msg) => RelayerError::TransactionFailed(msg),
         }
     }
 }
@@ -704,12 +708,18 @@ impl CosmosChainClient {
     }
 
     /// Get account info (account number and sequence) for transaction signing
-    /// In production, this would query the auth module
+    #[cfg(any(test, feature = "testutils"))]
     async fn get_account_info(&self, _address: &str) -> Result<(u64, u64), ChainError> {
-        // Placeholder - in production, query:
-        // /cosmos.auth.v1beta1.Query/Account
-        // or via ABCI query to auth module
+        // Test placeholder - returns dummy values
         Ok((0, 0))
+    }
+
+    /// Get account info (account number and sequence) for transaction signing
+    #[cfg(not(any(test, feature = "testutils")))]
+    async fn get_account_info(&self, _address: &str) -> Result<(u64, u64), ChainError> {
+        Err(ChainError::NotImplemented(
+            "get_account_info requires production auth module query implementation".into(),
+        ))
     }
 
     /// Build fee coins from config
@@ -723,13 +733,9 @@ impl CosmosChainClient {
         }]
     }
 
-    /// Simulate transaction broadcast (placeholder for production implementation)
+    /// Simulate transaction broadcast (test-only placeholder)
+    #[cfg(any(test, feature = "testutils"))]
     async fn simulate_broadcast(&self, _tx_bytes: Vec<u8>) -> Result<TxResponse, ChainError> {
-        // In production, this would be:
-        // let result = self.rpc_client.broadcast_tx_sync(tx_bytes).await?;
-        // Parse result into TxResponse
-
-        // For now, return a simulated successful response
         Ok(TxResponse {
             hash: hex::encode(&[0u8; 32]),
             height: 1,
@@ -737,6 +743,14 @@ impl CosmosChainClient {
             code: 0,
             raw_log: "simulated success".to_string(),
         })
+    }
+
+    /// Simulate transaction broadcast - errors in production builds
+    #[cfg(not(any(test, feature = "testutils")))]
+    async fn simulate_broadcast(&self, _tx_bytes: Vec<u8>) -> Result<TxResponse, ChainError> {
+        Err(ChainError::NotImplemented(
+            "simulate_broadcast is a test placeholder; production requires real RPC broadcast".into(),
+        ))
     }
 
     /// Build a receive packet message
@@ -1426,5 +1440,27 @@ mod tests {
         let reconnect_result = client.reconnect().await;
         assert!(reconnect_result.is_ok());
         assert!(client.is_connected().await);
+    }
+
+    /// O-C4 Regression: NotImplemented error variant exists and maps to RelayerError
+    ///
+    /// In production (non-test, non-testutils) builds, get_account_info and
+    /// simulate_broadcast return ChainError::NotImplemented to prevent silent
+    /// fake-success behavior. This test verifies the error plumbing works.
+    #[test]
+    fn test_not_implemented_error_maps_to_relayer_error() {
+        let chain_err = ChainError::NotImplemented(
+            "placeholder method not available in production".into(),
+        );
+        let relayer_err: RelayerError = chain_err.into();
+        match relayer_err {
+            RelayerError::TransactionFailed(msg) => {
+                assert!(msg.contains("placeholder method"));
+            }
+            other => panic!(
+                "SECURITY REGRESSION O-C4: NotImplemented should map to TransactionFailed, got: {:?}",
+                other
+            ),
+        }
     }
 }

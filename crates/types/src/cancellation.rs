@@ -68,12 +68,26 @@ impl CancellationRequest {
         Ok(self)
     }
 
-    /// Verify the cancellation signature
+    /// Verify the cancellation signature and pubkey-to-address binding
     pub fn verify(&self) -> Result<bool, crate::verification::VerificationError> {
-        use crate::verification::verify_signature;
+        use crate::verification::{
+            extract_bech32_prefix, pubkey_to_bech32_address, verify_signature,
+        };
 
         let message = self.signing_bytes();
-        verify_signature(&message, &self.signature, &self.public_key)
+        verify_signature(&message, &self.signature, &self.public_key)?;
+
+        // Verify pubkey derives the claimed user address (T-C4/T-C5)
+        let prefix = extract_bech32_prefix(&self.user)?;
+        let derived_address = pubkey_to_bech32_address(&self.public_key, &prefix)?;
+        if derived_address != self.user {
+            return Err(crate::verification::VerificationError::AddressMismatch {
+                derived: derived_address,
+                claimed: self.user.clone(),
+            });
+        }
+
+        Ok(true)
     }
 }
 
@@ -168,20 +182,28 @@ mod tests {
 
     #[test]
     fn test_cancellation_sign_and_verify() {
-        let private_key = [0x42u8; 32];
+        use crate::verification::{derive_public_key, pubkey_to_bech32_address};
 
-        let req = CancellationRequest::new("intent-123", "cosmos1user", 1000);
+        let private_key = [0x42u8; 32];
+        let pubkey = derive_public_key(&private_key).unwrap();
+        let correct_address = pubkey_to_bech32_address(&pubkey, "cosmos").unwrap();
+
+        let req = CancellationRequest::new("intent-123", &correct_address, 1000);
         let signed = req.sign(&private_key).expect("signing should succeed");
 
-        // Should verify successfully
+        // Should verify successfully (signature + address binding)
         assert!(signed.verify().expect("verify should not error"));
     }
 
     #[test]
     fn test_cancellation_tampered_fails_verify() {
-        let private_key = [0x42u8; 32];
+        use crate::verification::{derive_public_key, pubkey_to_bech32_address};
 
-        let req = CancellationRequest::new("intent-123", "cosmos1user", 1000);
+        let private_key = [0x42u8; 32];
+        let pubkey = derive_public_key(&private_key).unwrap();
+        let correct_address = pubkey_to_bech32_address(&pubkey, "cosmos").unwrap();
+
+        let req = CancellationRequest::new("intent-123", &correct_address, 1000);
         let mut signed = req.sign(&private_key).expect("signing should succeed");
 
         // Tamper with the intent_id

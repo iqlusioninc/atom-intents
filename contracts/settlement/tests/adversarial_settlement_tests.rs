@@ -633,15 +633,15 @@ fn test_attacker_cannot_deregister_solver() {
     assert!(matches!(result.unwrap_err(), ContractError::Unauthorized {}));
 }
 
-/// Test duplicate solver registration fails
+/// SECURITY FIX (SC-C1): Test duplicate solver registration is rejected
 #[test]
 fn test_duplicate_solver_registration() {
     let (mut deps, env, addrs) = setup_contract();
     register_solver(&mut deps, &env, &addrs, "solver-1", 2_000_000);
 
-    // ATTACK: Try to register same solver again (double bond)
+    // ATTACK: Try to register same solver again (would steal original bond)
     let info = message_info(&addrs.solver_operator, &[Coin::new(2_000_000u128, "uatom")]);
-    let _result = execute(
+    let result = execute(
         deps.as_mut(),
         env,
         info,
@@ -650,7 +650,30 @@ fn test_duplicate_solver_registration() {
         },
     );
 
-    // Should either fail or update (depending on implementation)
+    // REGRESSION SC-C1: Must reject duplicate registration
+    assert!(
+        matches!(result.unwrap_err(), ContractError::SolverAlreadyRegistered { .. }),
+        "SECURITY REGRESSION SC-C1: Duplicate solver registration must be rejected to prevent bond theft"
+    );
+}
+
+/// SECURITY FIX (SC-C1): Different solver IDs can still register
+#[test]
+fn test_register_different_solvers_succeeds() {
+    let (mut deps, env, addrs) = setup_contract();
+    register_solver(&mut deps, &env, &addrs, "solver-1", 2_000_000);
+
+    // Different solver ID should succeed
+    let info = message_info(&addrs.solver_operator, &[Coin::new(2_000_000u128, "uatom")]);
+    let result = execute(
+        deps.as_mut(),
+        env,
+        info,
+        ExecuteMsg::RegisterSolver {
+            solver_id: "solver-2".to_string(),
+        },
+    );
+    assert!(result.is_ok(), "Different solver IDs should be registrable");
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -799,4 +822,199 @@ fn test_non_admin_cannot_reduce_bond() {
     );
 
     assert!(matches!(result.unwrap_err(), ContractError::Unauthorized {}));
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// AUDIT FIX REGRESSION TESTS - SC-C2: Deregistration during active settlements
+// ═══════════════════════════════════════════════════════════════════════════
+
+/// SECURITY FIX (SC-C2): Solver cannot deregister while settlements are active
+#[test]
+fn test_deregister_with_active_settlement_fails() {
+    let (mut deps, env, addrs) = setup_contract();
+    register_solver(&mut deps, &env, &addrs, "solver-1", 2_000_000);
+    create_settlement(&mut deps, &env, &addrs, "settlement-1", "solver-1");
+
+    // Progress settlement to SolverLocked (active)
+    let info = message_info(&addrs.escrow, &[]);
+    execute(
+        deps.as_mut(),
+        env.clone(),
+        info,
+        ExecuteMsg::MarkUserLocked {
+            settlement_id: "settlement-1".to_string(),
+            escrow_id: "escrow-1".to_string(),
+        },
+    )
+    .unwrap();
+
+    let info = message_info(&addrs.solver_operator, &[]);
+    execute(
+        deps.as_mut(),
+        env.clone(),
+        info,
+        ExecuteMsg::MarkSolverLocked {
+            settlement_id: "settlement-1".to_string(),
+        },
+    )
+    .unwrap();
+
+    // ATTACK: Solver tries to deregister and reclaim bond while settlement is active
+    let info = message_info(&addrs.solver_operator, &[]);
+    let result = execute(
+        deps.as_mut(),
+        env,
+        info,
+        ExecuteMsg::DeregisterSolver {
+            solver_id: "solver-1".to_string(),
+        },
+    );
+
+    assert!(
+        matches!(result.unwrap_err(), ContractError::SolverHasActiveSettlements { .. }),
+        "SECURITY REGRESSION SC-C2: Solver must not deregister with active settlements"
+    );
+}
+
+/// SECURITY FIX (SC-C2): Solver CAN deregister after all settlements complete
+#[test]
+fn test_deregister_after_settlements_complete_succeeds() {
+    let (mut deps, env, addrs) = setup_contract();
+    register_solver(&mut deps, &env, &addrs, "solver-1", 2_000_000);
+    create_settlement(&mut deps, &env, &addrs, "settlement-1", "solver-1");
+
+    // Progress settlement to Completed
+    let info = message_info(&addrs.escrow, &[]);
+    execute(
+        deps.as_mut(),
+        env.clone(),
+        info,
+        ExecuteMsg::MarkUserLocked {
+            settlement_id: "settlement-1".to_string(),
+            escrow_id: "escrow-1".to_string(),
+        },
+    )
+    .unwrap();
+
+    let info = message_info(&addrs.solver_operator, &[]);
+    execute(
+        deps.as_mut(),
+        env.clone(),
+        info,
+        ExecuteMsg::MarkSolverLocked {
+            settlement_id: "settlement-1".to_string(),
+        },
+    )
+    .unwrap();
+
+    let info = message_info(&addrs.admin, &[]);
+    execute(
+        deps.as_mut(),
+        env.clone(),
+        info,
+        ExecuteMsg::MarkExecuting {
+            settlement_id: "settlement-1".to_string(),
+        },
+    )
+    .unwrap();
+
+    let info = message_info(&addrs.admin, &[]);
+    execute(
+        deps.as_mut(),
+        env.clone(),
+        info,
+        ExecuteMsg::MarkCompleted {
+            settlement_id: "settlement-1".to_string(),
+        },
+    )
+    .unwrap();
+
+    // Now deregistration should succeed
+    let info = message_info(&addrs.solver_operator, &[]);
+    let result = execute(
+        deps.as_mut(),
+        env,
+        info,
+        ExecuteMsg::DeregisterSolver {
+            solver_id: "solver-1".to_string(),
+        },
+    );
+
+    assert!(result.is_ok(), "Solver should be able to deregister after all settlements complete");
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// AUDIT FIX REGRESSION TESTS - SC-C4: Expiry boundary harmonization
+// ═══════════════════════════════════════════════════════════════════════════
+
+/// SECURITY FIX (SC-C4): Settlement execution at exact expiry must be blocked
+#[test]
+fn test_settlement_execute_at_exact_expiry_blocked() {
+    let (mut deps, mut env, addrs) = setup_contract();
+    register_solver(&mut deps, &env, &addrs, "solver-1", 2_000_000);
+
+    let expires_at = env.block.time.seconds() + 3600;
+    let info = message_info(&addrs.solver_operator, &[]);
+    execute(
+        deps.as_mut(),
+        env.clone(),
+        info,
+        ExecuteMsg::CreateSettlement {
+            settlement_id: "settlement-expiry".to_string(),
+            intent_id: "intent-expiry".to_string(),
+            solver_id: "solver-1".to_string(),
+            user: addrs.user.to_string(),
+            user_input_amount: Uint128::new(1_000_000),
+            user_input_denom: "uatom".to_string(),
+            solver_output_amount: Uint128::new(10_000_000),
+            solver_output_denom: "uusdc".to_string(),
+            expected_ibc_channel: Some("channel-0".to_string()),
+            expires_at,
+        },
+    )
+    .unwrap();
+
+    // Progress to SolverLocked
+    let info = message_info(&addrs.escrow, &[]);
+    execute(
+        deps.as_mut(),
+        env.clone(),
+        info,
+        ExecuteMsg::MarkUserLocked {
+            settlement_id: "settlement-expiry".to_string(),
+            escrow_id: "escrow-expiry".to_string(),
+        },
+    )
+    .unwrap();
+
+    let info = message_info(&addrs.solver_operator, &[]);
+    execute(
+        deps.as_mut(),
+        env.clone(),
+        info,
+        ExecuteMsg::MarkSolverLocked {
+            settlement_id: "settlement-expiry".to_string(),
+        },
+    )
+    .unwrap();
+
+    // Set time to EXACT expiry
+    env.block.time = Timestamp::from_seconds(expires_at);
+
+    // REGRESSION SC-C4: Execute at exact expiry must fail (harmonized with escrow >=)
+    let info = message_info(&addrs.solver_operator, &[]);
+    let result = execute(
+        deps.as_mut(),
+        env,
+        info,
+        ExecuteMsg::ExecuteSettlement {
+            settlement_id: "settlement-expiry".to_string(),
+            ibc_channel: "channel-0".to_string(),
+        },
+    );
+
+    assert!(
+        matches!(result.unwrap_err(), ContractError::SettlementExpired {}),
+        "SECURITY REGRESSION SC-C4: Settlement execution at exact expiry must be blocked to harmonize with escrow"
+    );
 }

@@ -8,14 +8,25 @@
 /// If any of these tests fail, it means that field is NOT protected by the signature,
 /// which is a critical security vulnerability.
 use atom_intents_types::{
-    Asset, ExecutionConstraints, FillConfig, FillStrategy, Intent, OutputSpec,
+    verification::{derive_public_key, pubkey_to_bech32_address},
+    Asset, ExecutionConstraints, FillConfig, FillStrategy, Intent, OutputSpec, Side,
 };
 use cosmwasm_std::Uint128;
 
-/// Helper to create a baseline intent for testing
+/// The standard test private key used by `sign_intent`
+const TEST_PRIVATE_KEY: [u8; 32] = [0x42; 32];
+
+/// Derive the correct bech32 address for a test private key
+fn test_address(private_key: &[u8], prefix: &str) -> String {
+    let pubkey = derive_public_key(private_key).unwrap();
+    pubkey_to_bech32_address(&pubkey, prefix).unwrap()
+}
+
+/// Helper to create a baseline intent for testing (uses standard test key address)
 fn create_baseline_unsigned() -> atom_intents_types::UnsignedIntent {
+    let user_addr = test_address(&TEST_PRIVATE_KEY, "cosmos");
     Intent::builder()
-        .user("cosmos1user123")
+        .user(&user_addr)
         .input(Asset {
             chain_id: "cosmoshub-4".to_string(),
             denom: "uatom".to_string(),
@@ -494,6 +505,300 @@ fn test_attack_scenario_change_fill_strategy() {
     assert!(
         result.is_err(),
         "CRITICAL ATTACK VECTOR: Attacker changed fill strategy!"
+    );
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// AUDIT FIX REGRESSION TESTS - T-C1: Length-prefixed field separators
+// ═══════════════════════════════════════════════════════════════════════════
+
+#[test]
+fn test_field_separator_prevents_collision() {
+    // T-C1 Regression: Without length prefixes, "ab" + "cd" hashes the same as "abc" + "d"
+    // because the raw bytes are identical. Length prefixes prevent this.
+
+    // Intent 1: user="cosmos1ab", chain_id="cd"
+    let unsigned1 = Intent::builder()
+        .user("cosmos1ab")
+        .input(Asset {
+            chain_id: "cd".to_string(),
+            denom: "uatom".to_string(),
+            amount: Uint128::new(1000000),
+        })
+        .output(OutputSpec {
+            chain_id: "osmosis-1".to_string(),
+            denom: "uosmo".to_string(),
+            min_amount: Uint128::new(5000000),
+            limit_price: "5.0".to_string(),
+            recipient: "osmo1user".to_string(),
+        })
+        .fill_config(FillConfig::default())
+        .constraints(ExecutionConstraints::new(1000000))
+        .nonce(1)
+        .build(100, 2000)
+        .unwrap();
+
+    // Intent 2: user="cosmos1abc", chain_id="d"
+    let unsigned2 = Intent::builder()
+        .user("cosmos1abc")
+        .input(Asset {
+            chain_id: "d".to_string(),
+            denom: "uatom".to_string(),
+            amount: Uint128::new(1000000),
+        })
+        .output(OutputSpec {
+            chain_id: "osmosis-1".to_string(),
+            denom: "uosmo".to_string(),
+            min_amount: Uint128::new(5000000),
+            limit_price: "5.0".to_string(),
+            recipient: "osmo1user".to_string(),
+        })
+        .fill_config(FillConfig::default())
+        .constraints(ExecutionConstraints::new(1000000))
+        .nonce(1)
+        .build(100, 2000)
+        .unwrap();
+
+    let signed1 = sign_intent(unsigned1);
+    let signed2 = sign_intent(unsigned2);
+
+    assert_ne!(
+        signed1.signing_hash(),
+        signed2.signing_hash(),
+        "SECURITY REGRESSION T-C1: Field boundary collision detected! Length prefixes missing."
+    );
+}
+
+#[test]
+fn test_signing_hash_deterministic_with_length_prefixes() {
+    // Verify the hash is still deterministic after adding length prefixes
+    let unsigned1 = create_baseline_unsigned();
+    let unsigned2 = create_baseline_unsigned();
+
+    let signed1 = sign_intent(unsigned1);
+    let signed2 = sign_intent(unsigned2);
+
+    assert_eq!(
+        signed1.signing_hash(),
+        signed2.signing_hash(),
+        "Identical intents must produce identical signing hashes"
+    );
+    assert_eq!(
+        signed1.signature, signed2.signature,
+        "Identical intents must produce identical signatures"
+    );
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// AUDIT FIX REGRESSION TESTS - T-C2: Timestamps in signing hash
+// ═══════════════════════════════════════════════════════════════════════════
+
+#[test]
+fn test_changing_created_at_changes_hash() {
+    // T-C2 Regression: created_at MUST be in signing hash
+    let unsigned1 = Intent::builder()
+        .user(&test_address(&TEST_PRIVATE_KEY, "cosmos"))
+        .input(Asset {
+            chain_id: "cosmoshub-4".to_string(),
+            denom: "uatom".to_string(),
+            amount: Uint128::new(1000000),
+        })
+        .output(OutputSpec {
+            chain_id: "osmosis-1".to_string(),
+            denom: "uosmo".to_string(),
+            min_amount: Uint128::new(5000000),
+            limit_price: "5.0".to_string(),
+            recipient: "osmo1user123".to_string(),
+        })
+        .fill_config(FillConfig::default())
+        .constraints(ExecutionConstraints::new(1000000))
+        .nonce(1)
+        .build(100, 2000) // created_at=100
+        .unwrap();
+
+    let unsigned2 = Intent::builder()
+        .user(&test_address(&TEST_PRIVATE_KEY, "cosmos"))
+        .input(Asset {
+            chain_id: "cosmoshub-4".to_string(),
+            denom: "uatom".to_string(),
+            amount: Uint128::new(1000000),
+        })
+        .output(OutputSpec {
+            chain_id: "osmosis-1".to_string(),
+            denom: "uosmo".to_string(),
+            min_amount: Uint128::new(5000000),
+            limit_price: "5.0".to_string(),
+            recipient: "osmo1user123".to_string(),
+        })
+        .fill_config(FillConfig::default())
+        .constraints(ExecutionConstraints::new(1000000))
+        .nonce(1)
+        .build(999, 2000) // created_at=999
+        .unwrap();
+
+    let signed1 = sign_intent(unsigned1);
+    let signed2 = sign_intent(unsigned2);
+
+    assert_ne!(
+        signed1.signing_hash(),
+        signed2.signing_hash(),
+        "SECURITY REGRESSION T-C2: created_at not included in signing hash!"
+    );
+}
+
+#[test]
+fn test_changing_expires_at_changes_hash() {
+    // T-C2 Regression: expires_at MUST be in signing hash
+    let unsigned1 = Intent::builder()
+        .user(&test_address(&TEST_PRIVATE_KEY, "cosmos"))
+        .input(Asset {
+            chain_id: "cosmoshub-4".to_string(),
+            denom: "uatom".to_string(),
+            amount: Uint128::new(1000000),
+        })
+        .output(OutputSpec {
+            chain_id: "osmosis-1".to_string(),
+            denom: "uosmo".to_string(),
+            min_amount: Uint128::new(5000000),
+            limit_price: "5.0".to_string(),
+            recipient: "osmo1user123".to_string(),
+        })
+        .fill_config(FillConfig::default())
+        .constraints(ExecutionConstraints::new(1000000))
+        .nonce(1)
+        .build(100, 2000) // expires_at=2000
+        .unwrap();
+
+    let unsigned2 = Intent::builder()
+        .user(&test_address(&TEST_PRIVATE_KEY, "cosmos"))
+        .input(Asset {
+            chain_id: "cosmoshub-4".to_string(),
+            denom: "uatom".to_string(),
+            amount: Uint128::new(1000000),
+        })
+        .output(OutputSpec {
+            chain_id: "osmosis-1".to_string(),
+            denom: "uosmo".to_string(),
+            min_amount: Uint128::new(5000000),
+            limit_price: "5.0".to_string(),
+            recipient: "osmo1user123".to_string(),
+        })
+        .fill_config(FillConfig::default())
+        .constraints(ExecutionConstraints::new(1000000))
+        .nonce(1)
+        .build(100, 99999) // expires_at=99999
+        .unwrap();
+
+    let signed1 = sign_intent(unsigned1);
+    let signed2 = sign_intent(unsigned2);
+
+    assert_ne!(
+        signed1.signing_hash(),
+        signed2.signing_hash(),
+        "SECURITY REGRESSION T-C2: expires_at not included in signing hash!"
+    );
+}
+
+#[test]
+fn test_attack_scenario_extend_expiry() {
+    // T-C2: Attacker signs with short expiry, then extends it
+    let user_addr = test_address(&TEST_PRIVATE_KEY, "cosmos");
+    let unsigned = Intent::builder()
+        .user(&user_addr)
+        .input(Asset {
+            chain_id: "cosmoshub-4".to_string(),
+            denom: "uatom".to_string(),
+            amount: Uint128::new(1000000),
+        })
+        .output(OutputSpec {
+            chain_id: "osmosis-1".to_string(),
+            denom: "uosmo".to_string(),
+            min_amount: Uint128::new(5000000),
+            limit_price: "5.0".to_string(),
+            recipient: "osmo1user123".to_string(),
+        })
+        .fill_config(FillConfig::default())
+        .constraints(ExecutionConstraints::new(1000000))
+        .nonce(1)
+        .build(100, 200) // Short expiry
+        .unwrap();
+
+    let private_key = [0x42; 32];
+    let mut signed = unsigned.sign_with_key(&private_key).unwrap();
+
+    // Attacker extends expiry
+    signed.expires_at = 999999999;
+
+    let result = signed.verify();
+    assert!(
+        result.is_err(),
+        "CRITICAL ATTACK VECTOR: Attacker extended expires_at after signing!"
+    );
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// AUDIT FIX REGRESSION TESTS - T-C3: Intent::side() correctness
+// ═══════════════════════════════════════════════════════════════════════════
+
+#[test]
+fn test_side_sell_when_input_is_base() {
+    // T-C3 Regression: When input denom sorts before output denom (is base), side=Sell
+    let unsigned = Intent::builder()
+        .user("cosmos1user")
+        .input(Asset {
+            chain_id: "cosmoshub-4".to_string(),
+            denom: "uatom".to_string(), // "uatom" < "uosmo" alphabetically, so uatom is base
+            amount: Uint128::new(1000000),
+        })
+        .output(OutputSpec {
+            chain_id: "osmosis-1".to_string(),
+            denom: "uosmo".to_string(),
+            min_amount: Uint128::new(5000000),
+            limit_price: "5.0".to_string(),
+            recipient: "osmo1user".to_string(),
+        })
+        .fill_config(FillConfig::default())
+        .constraints(ExecutionConstraints::new(1000000))
+        .nonce(1)
+        .build(100, 2000)
+        .unwrap();
+
+    let signed = sign_intent(unsigned);
+    assert_eq!(
+        signed.side(),
+        Side::Sell,
+        "REGRESSION T-C3: Selling base asset (uatom) should return Side::Sell"
+    );
+}
+
+#[test]
+fn test_side_buy_when_input_is_quote() {
+    // T-C3 Regression: When input denom sorts after output denom (is quote), side=Buy
+    let unsigned = Intent::builder()
+        .user("cosmos1user")
+        .input(Asset {
+            chain_id: "osmosis-1".to_string(),
+            denom: "uosmo".to_string(), // "uosmo" > "uatom", so uosmo is quote
+            amount: Uint128::new(5000000),
+        })
+        .output(OutputSpec {
+            chain_id: "cosmoshub-4".to_string(),
+            denom: "uatom".to_string(), // uatom is base
+            min_amount: Uint128::new(1000000),
+            limit_price: "0.2".to_string(),
+            recipient: "cosmos1user".to_string(),
+        })
+        .fill_config(FillConfig::default())
+        .constraints(ExecutionConstraints::new(1000000))
+        .nonce(1)
+        .build(100, 2000)
+        .unwrap();
+
+    let signed = sign_intent(unsigned);
+    assert_eq!(
+        signed.side(),
+        Side::Buy,
+        "REGRESSION T-C3: Spending quote asset (uosmo) to buy base asset (uatom) should return Side::Buy"
     );
 }
 

@@ -44,6 +44,11 @@ pub fn execute_register_solver(
         });
     }
 
+    // SECURITY FIX (SC-C1): Prevent overwriting existing solver registration
+    if SOLVERS.has(deps.storage, &solver_id) {
+        return Err(ContractError::SolverAlreadyRegistered { id: solver_id });
+    }
+
     let solver = RegisteredSolver {
         id: solver_id.clone(),
         operator: info.sender.clone(),
@@ -78,6 +83,28 @@ pub fn execute_deregister_solver(
     // Only operator can deregister
     if info.sender != solver.operator {
         return Err(ContractError::Unauthorized {});
+    }
+
+    // SECURITY FIX (SC-C2): Block deregistration while solver has active settlements
+    let has_active = SETTLEMENTS
+        .range(deps.storage, None, None, cosmwasm_std::Order::Ascending)
+        .any(|r| {
+            if let Ok((_, s)) = r {
+                s.solver_id == solver_id
+                    && matches!(
+                        s.status,
+                        SettlementStatus::Pending
+                            | SettlementStatus::UserLocked
+                            | SettlementStatus::SolverLocked
+                            | SettlementStatus::Executing
+                    )
+            } else {
+                false
+            }
+        });
+
+    if has_active {
+        return Err(ContractError::SolverHasActiveSettlements { id: solver_id });
     }
 
     // Return bond
@@ -510,8 +537,8 @@ pub fn execute_settlement(
         }
     }
 
-    // Check not expired
-    if env.block.time.seconds() > settlement.expires_at {
+    // SECURITY FIX (SC-C4): Harmonize expiry check with escrow contract (use >=)
+    if env.block.time.seconds() >= settlement.expires_at {
         return Err(ContractError::SettlementExpired {});
     }
 
@@ -586,8 +613,8 @@ pub fn execute_settlement_local(
         }
     }
 
-    // Check not expired
-    if env.block.time.seconds() > settlement.expires_at {
+    // SECURITY FIX (SC-C4): Harmonize expiry check with escrow contract (use >=)
+    if env.block.time.seconds() >= settlement.expires_at {
         return Err(ContractError::SettlementExpired {});
     }
 

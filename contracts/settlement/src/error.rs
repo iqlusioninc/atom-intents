@@ -48,6 +48,12 @@ pub enum ContractError {
     #[error("IBC channel mismatch: expected {expected}, provided {provided}")]
     IbcChannelMismatch { expected: String, provided: String },
 
+    #[error("Solver already registered: {id}")]
+    SolverAlreadyRegistered { id: String },
+
+    #[error("Solver has active settlements and cannot deregister: {id}")]
+    SolverHasActiveSettlements { id: String },
+
     // ═══════════════════════════════════════════════════════════════════════════
     // ON-CHAIN ORDER ERRORS
     // ═══════════════════════════════════════════════════════════════════════════
