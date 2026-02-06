@@ -272,3 +272,341 @@ impl DexClient for MockDexClient {
         }])
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use atom_intents_types::{
+        Asset, ExecutionConstraints, FillConfig, OutputSpec,
+    };
+    use cosmwasm_std::Binary;
+
+    fn make_intent(
+        input_denom: &str,
+        output_denom: &str,
+        input_amount: u128,
+        min_output: u128,
+        limit_price: &str,
+    ) -> Intent {
+        Intent {
+            id: "test-1".to_string(),
+            version: "1.0".to_string(),
+            nonce: 1,
+            user: "cosmos1user".to_string(),
+            input: Asset::new("osmosis-1", input_denom, input_amount),
+            output: OutputSpec {
+                chain_id: "osmosis-1".to_string(),
+                denom: output_denom.to_string(),
+                min_amount: Uint128::new(min_output),
+                limit_price: limit_price.to_string(),
+                recipient: "osmo1recipient".to_string(),
+            },
+            fill_config: FillConfig::default(),
+            constraints: ExecutionConstraints::new(9999999999),
+            signature: Binary::from(vec![1, 2, 3]),
+            public_key: Binary::from(vec![4, 5, 6]),
+            created_at: 1000,
+            expires_at: 9999999999,
+        }
+    }
+
+    fn make_context(remaining: u128) -> SolveContext {
+        SolveContext {
+            matched_amount: Uint128::zero(),
+            remaining: Uint128::new(remaining),
+            oracle_price: "10.5".to_string(),
+        }
+    }
+
+    fn make_solver(liquidity: u128, fee_rate: f64) -> DexRoutingSolver {
+        let client = Arc::new(MockDexClient::new("osmosis", liquidity, fee_rate));
+        DexRoutingSolver::new("test-solver", vec![client])
+    }
+
+    // ═══════════════════════════════════════════════════════════════════
+    // SOLVER TRAIT BASICS
+    // ═══════════════════════════════════════════════════════════════════
+
+    #[test]
+    fn test_solver_id() {
+        let solver = make_solver(10_000_000, 0.003);
+        assert_eq!(solver.id(), "test-solver");
+    }
+
+    #[test]
+    fn test_supported_pairs() {
+        let solver = make_solver(10_000_000, 0.003);
+        let pairs = solver.supported_pairs();
+        assert_eq!(pairs.len(), 3);
+        assert!(pairs.contains(&TradingPair::new("uatom", "uusdc")));
+        assert!(pairs.contains(&TradingPair::new("uosmo", "uusdc")));
+        assert!(pairs.contains(&TradingPair::new("uatom", "uosmo")));
+    }
+
+    #[test]
+    fn test_capabilities() {
+        let solver = make_solver(10_000_000, 0.003);
+        let caps = solver.capabilities();
+        assert!(caps.dex_routing);
+        assert!(!caps.intent_matching);
+        assert!(!caps.cex_backstop);
+        assert!(!caps.cross_ecosystem);
+        assert_eq!(caps.max_fill_size_usd, 500_000);
+    }
+
+    // ═══════════════════════════════════════════════════════════════════
+    // SOLVE TESTS
+    // ═══════════════════════════════════════════════════════════════════
+
+    #[tokio::test]
+    async fn test_solve_success() {
+        let solver = make_solver(10_000_000, 0.003);
+        // uatom -> uusdc: supported pair
+        let intent = make_intent("uatom", "uusdc", 1_000_000, 9_000_000, "10.0");
+        let ctx = make_context(1_000_000);
+
+        let result = solver.solve(&intent, &ctx).await;
+        assert!(result.is_ok());
+
+        let solution = result.unwrap();
+        assert_eq!(solution.solver_id, "test-solver");
+        assert_eq!(solution.intent_id, "test-1");
+        assert_eq!(solution.fill.input_amount, Uint128::new(1_000_000));
+        // Output should be > 0 and <= mock output (1_000_000 * 0.997 * 10.5 = 10_468_500)
+        assert!(solution.fill.output_amount > Uint128::zero());
+        assert!(solution.fill.output_amount <= Uint128::new(10_468_500));
+    }
+
+    #[tokio::test]
+    async fn test_solve_unsupported_pair() {
+        let solver = make_solver(10_000_000, 0.003);
+        let intent = make_intent("ufoo", "ubar", 1_000_000, 100, "1.0");
+        let ctx = make_context(1_000_000);
+
+        let result = solver.solve(&intent, &ctx).await;
+        assert!(result.is_err());
+        assert!(matches!(result.unwrap_err(), SolveError::NoViableRoute));
+    }
+
+    #[tokio::test]
+    async fn test_solve_insufficient_liquidity_no_quote() {
+        // Liquidity of 100 but requesting 1_000_000
+        let solver = make_solver(100, 0.003);
+        let intent = make_intent("uatom", "uusdc", 1_000_000, 100, "10.0");
+        let ctx = make_context(1_000_000);
+
+        let result = solver.solve(&intent, &ctx).await;
+        assert!(result.is_err());
+        assert!(matches!(result.unwrap_err(), SolveError::NoViableRoute));
+    }
+
+    #[tokio::test]
+    async fn test_solve_output_below_min_amount() {
+        let solver = make_solver(10_000_000, 0.003);
+        // Set min_amount very high so the mock quote can't satisfy it
+        let intent = make_intent("uatom", "uusdc", 1_000_000, 999_000_000, "10.0");
+        let ctx = make_context(1_000_000);
+
+        let result = solver.solve(&intent, &ctx).await;
+        assert!(result.is_err());
+        assert!(matches!(result.unwrap_err(), SolveError::NoViableRoute));
+    }
+
+    // ═══════════════════════════════════════════════════════════════════
+    // FEE CALCULATION TESTS
+    // ═══════════════════════════════════════════════════════════════════
+
+    #[tokio::test]
+    async fn test_solve_fee_is_ten_pct_of_surplus() {
+        let solver = make_solver(10_000_000, 0.003);
+        // limit_price = 10.0, so user expects 10_000_000 output for 1_000_000 input
+        // Mock gives ~10_468_500, surplus ~468_500, fee ~46_850
+        let intent = make_intent("uatom", "uusdc", 1_000_000, 9_000_000, "10.0");
+        let ctx = make_context(1_000_000);
+
+        let solution = solver.solve(&intent, &ctx).await.unwrap();
+
+        // Raw output from DEX: 1_000_000 * 0.997 * 10.5 = 10_468_500
+        let raw_output = 10_468_500u128;
+        let user_min = 10_000_000u128; // 1_000_000 * 10.0
+        let expected_surplus = raw_output - user_min; // 468_500
+        let expected_fee = expected_surplus / 10; // 46_850
+        let expected_output = raw_output - expected_fee; // 10_421_650
+
+        assert_eq!(solution.fill.output_amount, Uint128::new(expected_output));
+    }
+
+    #[tokio::test]
+    async fn test_solve_max_solver_fee_bps_rejection() {
+        let solver = make_solver(10_000_000, 0.003);
+        let mut intent = make_intent("uatom", "uusdc", 1_000_000, 9_000_000, "10.0");
+        // Set extremely restrictive fee limit (1 bps = 0.01%)
+        intent.constraints.max_solver_fee_bps = Some(1);
+        let ctx = make_context(1_000_000);
+
+        let result = solver.solve(&intent, &ctx).await;
+        assert!(result.is_err());
+        assert!(matches!(result.unwrap_err(), SolveError::NoViableRoute));
+    }
+
+    #[tokio::test]
+    async fn test_solve_fee_bps_within_limit() {
+        let solver = make_solver(10_000_000, 0.003);
+        let mut intent = make_intent("uatom", "uusdc", 1_000_000, 9_000_000, "10.0");
+        // Fee is ~44.75 bps, set limit to 100 bps
+        intent.constraints.max_solver_fee_bps = Some(100);
+        let ctx = make_context(1_000_000);
+
+        let result = solver.solve(&intent, &ctx).await;
+        assert!(result.is_ok());
+    }
+
+    // ═══════════════════════════════════════════════════════════════════
+    // BOND CALCULATION TESTS
+    // ═══════════════════════════════════════════════════════════════════
+
+    #[test]
+    fn test_calculate_bond() {
+        let solver = make_solver(10_000_000, 0.003);
+        let bond = solver.calculate_bond(Uint128::new(1_000_000));
+        assert_eq!(bond, Uint128::new(1_500_000)); // 1.5x
+    }
+
+    #[test]
+    fn test_calculate_bond_rounding() {
+        let solver = make_solver(10_000_000, 0.003);
+        // 7 * 15 / 10 = 10 (integer division: 105/10 = 10)
+        let bond = solver.calculate_bond(Uint128::new(7));
+        assert_eq!(bond, Uint128::new(10));
+    }
+
+    #[tokio::test]
+    async fn test_solve_bond_is_1_5x_input() {
+        let solver = make_solver(10_000_000, 0.003);
+        let intent = make_intent("uatom", "uusdc", 1_000_000, 9_000_000, "10.0");
+        let ctx = make_context(1_000_000);
+
+        let solution = solver.solve(&intent, &ctx).await.unwrap();
+        assert_eq!(solution.bond, Uint128::new(1_500_000));
+    }
+
+    // ═══════════════════════════════════════════════════════════════════
+    // CAPACITY TESTS
+    // ═══════════════════════════════════════════════════════════════════
+
+    #[tokio::test]
+    async fn test_capacity_supported_pair() {
+        let solver = make_solver(10_000_000, 0.003);
+        let pair = TradingPair::new("uatom", "uusdc");
+
+        let result = solver.capacity(&pair).await;
+        assert!(result.is_ok());
+
+        let capacity = result.unwrap();
+        // max_immediate = liquidity / 10 = 1_000_000
+        assert_eq!(capacity.max_immediate, Uint128::new(1_000_000));
+        // available_liquidity = min(liquidity_a, liquidity_b) = min(10M, 100M) = 10M
+        assert_eq!(capacity.available_liquidity, Uint128::new(10_000_000));
+        assert_eq!(capacity.estimated_time_ms, 3000);
+    }
+
+    #[tokio::test]
+    async fn test_capacity_unsupported_pair() {
+        let solver = make_solver(10_000_000, 0.003);
+        let pair = TradingPair::new("ufoo", "ubar");
+
+        let result = solver.capacity(&pair).await;
+        assert!(result.is_err());
+        assert!(matches!(result.unwrap_err(), SolveError::NoViableRoute));
+    }
+
+    // ═══════════════════════════════════════════════════════════════════
+    // MULTI-DEX TESTS
+    // ═══════════════════════════════════════════════════════════════════
+
+    #[tokio::test]
+    async fn test_solve_picks_best_quote_from_multiple_dexes() {
+        let client1 = Arc::new(MockDexClient::new("osmosis", 10_000_000, 0.003));
+        let client2 = Arc::new(MockDexClient::new("astroport", 10_000_000, 0.001)); // lower fee = better quote
+        let solver = DexRoutingSolver::new("multi-solver", vec![client1, client2]);
+
+        let intent = make_intent("uatom", "uusdc", 1_000_000, 9_000_000, "10.0");
+        let ctx = make_context(1_000_000);
+
+        let solution = solver.solve(&intent, &ctx).await.unwrap();
+
+        // Astroport (0.1% fee) gives better output than Osmosis (0.3% fee)
+        // Osmosis: 1M * 0.997 * 10.5 = 10,468,500
+        // Astroport: 1M * 0.999 * 10.5 = 10,489,500
+        // Should pick astroport's higher output
+        assert!(solution.fill.output_amount > Uint128::zero());
+
+        match &solution.execution {
+            ExecutionPlan::DexRoute { steps } => {
+                assert_eq!(steps.len(), 1);
+                assert_eq!(steps[0].venue, "astroport");
+            }
+            _ => panic!("Expected DexRoute execution plan"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_capacity_aggregates_multiple_dexes() {
+        let client1 = Arc::new(MockDexClient::new("osmosis", 5_000_000, 0.003));
+        let client2 = Arc::new(MockDexClient::new("astroport", 3_000_000, 0.001));
+        let solver = DexRoutingSolver::new("multi-solver", vec![client1, client2]);
+
+        let pair = TradingPair::new("uatom", "uusdc");
+        let capacity = solver.capacity(&pair).await.unwrap();
+
+        // Total liquidity from pool min(a, b) for each: 5M + 3M = 8M
+        assert_eq!(capacity.available_liquidity, Uint128::new(8_000_000));
+        // Max immediate = 10% of total = 800_000
+        assert_eq!(capacity.max_immediate, Uint128::new(800_000));
+    }
+
+    // ═══════════════════════════════════════════════════════════════════
+    // EXECUTION PLAN TESTS
+    // ═══════════════════════════════════════════════════════════════════
+
+    #[tokio::test]
+    async fn test_solve_produces_dex_route_execution_plan() {
+        let solver = make_solver(10_000_000, 0.003);
+        let intent = make_intent("uatom", "uusdc", 1_000_000, 9_000_000, "10.0");
+        let ctx = make_context(1_000_000);
+
+        let solution = solver.solve(&intent, &ctx).await.unwrap();
+        match solution.execution {
+            ExecutionPlan::DexRoute { steps } => {
+                assert!(!steps.is_empty());
+                assert_eq!(steps[0].venue, "osmosis");
+                assert_eq!(steps[0].input_denom, "uatom");
+                assert_eq!(steps[0].output_denom, "uusdc");
+            }
+            _ => panic!("Expected DexRoute execution plan"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_solve_validity_is_short() {
+        let solver = make_solver(10_000_000, 0.003);
+        let intent = make_intent("uatom", "uusdc", 1_000_000, 9_000_000, "10.0");
+        let ctx = make_context(1_000_000);
+
+        let before = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+
+        let solution = solver.solve(&intent, &ctx).await.unwrap();
+
+        let after = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+
+        // valid_until should be ~5 seconds from now
+        assert!(solution.valid_until >= before + 5);
+        assert!(solution.valid_until <= after + 6);
+    }
+}
