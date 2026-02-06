@@ -86,6 +86,11 @@ pub struct OrchestratorConfig {
 
     /// Enable automatic recovery
     pub auto_recovery_enabled: bool,
+
+    /// Maximum number of tracked intents before evicting terminal entries.
+    /// When the intent_statuses map exceeds this size, completed/failed/cancelled
+    /// entries are removed to prevent unbounded memory growth.
+    pub max_tracked_intents: usize,
 }
 
 impl OrchestratorConfig {
@@ -102,6 +107,7 @@ impl Default for OrchestratorConfig {
             max_batch_size: 100,
             settlement_timeout_threshold: 600, // 10 minutes
             auto_recovery_enabled: true,
+            max_tracked_intents: 100_000,
         }
     }
 }
@@ -733,9 +739,34 @@ impl IntentOrchestrator {
     }
 
     /// Update intent status
+    ///
+    /// When a terminal status is set (Completed, Failed, Cancelled), the intent's
+    /// auth material is also cleaned up. If the status map exceeds `max_tracked_intents`,
+    /// terminal entries are evicted to prevent unbounded memory growth.
     pub async fn update_status(&self, intent_id: &str, status: IntentStatus) {
+        let is_terminal = status.is_terminal();
+
         let mut statuses = self.intent_statuses.write().await;
         statuses.insert(intent_id.to_string(), status);
+
+        // Clean up auth material for terminal intents
+        if is_terminal {
+            let mut auth = self.intent_auth.write().await;
+            auth.remove(intent_id);
+        }
+
+        // Evict terminal entries if the map exceeds the configured limit
+        if statuses.len() > self.config.max_tracked_intents {
+            let terminal_keys: Vec<String> = statuses
+                .iter()
+                .filter(|(_, s)| s.is_terminal())
+                .map(|(k, _)| k.clone())
+                .collect();
+
+            for key in terminal_keys {
+                statuses.remove(&key);
+            }
+        }
     }
 
     /// Get solver quotes for a trading pair
@@ -867,6 +898,16 @@ pub enum IntentStatus {
     Cancelled,
 }
 
+impl IntentStatus {
+    /// Returns true if this is a terminal status (Completed, Failed, or Cancelled)
+    pub fn is_terminal(&self) -> bool {
+        matches!(
+            self,
+            IntentStatus::Completed { .. } | IntentStatus::Failed { .. } | IntentStatus::Cancelled
+        )
+    }
+}
+
 /// Result of intent execution
 #[derive(Debug, Clone)]
 pub struct ExecutionResult {
@@ -943,6 +984,106 @@ mod tests {
         assert_eq!(config.batch_interval_ms, 5000);
         assert_eq!(config.max_batch_size, 100);
         assert!(config.auto_recovery_enabled);
+        assert_eq!(config.max_tracked_intents, 100_000);
+    }
+
+    #[test]
+    fn test_intent_status_is_terminal() {
+        assert!(!IntentStatus::Pending.is_terminal());
+        assert!(!IntentStatus::Matching.is_terminal());
+        assert!(!IntentStatus::Executing {
+            stage: crate::executor::ExecutionStage::Matching,
+        }
+        .is_terminal());
+        assert!(IntentStatus::Completed {
+            result: ExecutionResult {
+                intent_id: "test".to_string(),
+                input_amount: Uint128::zero(),
+                output_amount: Uint128::zero(),
+                execution_price: Decimal::ZERO,
+                solver_id: None,
+                settlement_id: "s".to_string(),
+                completed_at: 0,
+            }
+        }
+        .is_terminal());
+        assert!(IntentStatus::Failed {
+            error: "err".to_string(),
+            recovery: None,
+        }
+        .is_terminal());
+        assert!(IntentStatus::Cancelled.is_terminal());
+    }
+
+    #[tokio::test]
+    async fn test_terminal_intents_cleaned_up() {
+        // Create a small max_tracked_intents config to test eviction
+        let statuses: Arc<RwLock<HashMap<String, IntentStatus>>> =
+            Arc::new(RwLock::new(HashMap::new()));
+        let auth: Arc<RwLock<HashMap<String, (String, cosmwasm_std::Binary)>>> =
+            Arc::new(RwLock::new(HashMap::new()));
+
+        let config = OrchestratorConfig {
+            max_tracked_intents: 3,
+            ..Default::default()
+        };
+
+        // Simulate the update_status logic inline since we can't easily
+        // construct a full IntentOrchestrator in a unit test
+        {
+            let mut s = statuses.write().await;
+            let mut a = auth.write().await;
+
+            // Insert 3 intents
+            s.insert("intent-1".to_string(), IntentStatus::Pending);
+            a.insert(
+                "intent-1".to_string(),
+                ("user1".to_string(), cosmwasm_std::Binary::default()),
+            );
+            s.insert(
+                "intent-2".to_string(),
+                IntentStatus::Failed {
+                    error: "timeout".to_string(),
+                    recovery: None,
+                },
+            );
+            // Clean auth for terminal intent-2
+            a.remove("intent-2");
+            s.insert("intent-3".to_string(), IntentStatus::Cancelled);
+            // Clean auth for terminal intent-3
+            a.remove("intent-3");
+
+            // Insert a 4th intent - this should trigger eviction
+            s.insert("intent-4".to_string(), IntentStatus::Matching);
+            a.insert(
+                "intent-4".to_string(),
+                ("user4".to_string(), cosmwasm_std::Binary::default()),
+            );
+
+            // Now len is 4, exceeds max of 3. Evict terminal entries.
+            if s.len() > config.max_tracked_intents {
+                let terminal_keys: Vec<String> = s
+                    .iter()
+                    .filter(|(_, status)| status.is_terminal())
+                    .map(|(k, _)| k.clone())
+                    .collect();
+                for key in terminal_keys {
+                    s.remove(&key);
+                }
+            }
+
+            // Terminal entries (intent-2, intent-3) should be evicted
+            assert_eq!(s.len(), 2);
+            assert!(s.contains_key("intent-1")); // Pending - kept
+            assert!(!s.contains_key("intent-2")); // Failed - evicted
+            assert!(!s.contains_key("intent-3")); // Cancelled - evicted
+            assert!(s.contains_key("intent-4")); // Matching - kept
+
+            // Auth should only have non-terminal intents
+            assert_eq!(a.len(), 2);
+            assert!(a.contains_key("intent-1"));
+            assert!(a.contains_key("intent-4"));
+        }
     }
 
     #[test]

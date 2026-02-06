@@ -56,3 +56,6 @@ pub const ESCROWS: Map<&str, Escrow> = Map::new("escrows");
 pub const USER_ESCROWS: Map<(&Addr, &str), bool> = Map::new("user_escrows");
 /// Index: intent_id -> escrow_id (prevents duplicate escrows per intent)
 pub const ESCROWS_BY_INTENT: Map<&str, String> = Map::new("escrows_by_intent");
+/// Temporary storage for the escrow ID of a pending IBC refund SubMsg.
+/// Stored before sending the SubMsg so the reply handler can identify which escrow failed.
+pub const PENDING_REFUND_ESCROW: Item<String> = Item::new("pending_refund_escrow");

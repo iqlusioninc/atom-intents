@@ -41,13 +41,14 @@ pub fn query_settlement_by_intent(deps: Deps, intent_id: String) -> StdResult<Se
 
 pub fn query_solvers(
     deps: Deps,
-    _start_after: Option<String>,
+    start_after: Option<String>,
     limit: Option<u32>,
 ) -> StdResult<SolversResponse> {
     let limit = limit.unwrap_or(30).min(100) as usize;
+    let start = start_after.as_deref().map(Bound::exclusive);
 
     let solvers: Vec<SolverResponse> = SOLVERS
-        .range(deps.storage, None, None, cosmwasm_std::Order::Ascending)
+        .range(deps.storage, start, None, cosmwasm_std::Order::Ascending)
         .take(limit)
         .filter_map(|r| r.ok())
         .map(|(_, solver)| solver_to_response(solver))
@@ -59,13 +60,14 @@ pub fn query_solvers(
 pub fn query_settlements_by_solver(
     deps: Deps,
     solver_id: String,
-    _start_after: Option<String>,
+    start_after: Option<String>,
     limit: Option<u32>,
 ) -> StdResult<SettlementsResponse> {
     let limit = limit.unwrap_or(30).min(100) as usize;
+    let start = start_after.as_deref().map(Bound::exclusive);
 
     let settlements: Vec<SettlementResponse> = SETTLEMENTS
-        .range(deps.storage, None, None, cosmwasm_std::Order::Ascending)
+        .range(deps.storage, start, None, cosmwasm_std::Order::Ascending)
         .filter_map(|r| r.ok())
         .filter(|(_, s)| s.solver_id == solver_id)
         .take(limit)

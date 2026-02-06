@@ -164,6 +164,7 @@ impl SolutionAggregator {
         &self,
         intent: &Intent,
         matched_amount: Uint128,
+        current_time: u64,
     ) -> Result<OptimalFillPlan, SolveError> {
         let remaining = intent
             .input
@@ -200,6 +201,7 @@ impl SolutionAggregator {
         let mut solutions: Vec<Solution> = results
             .into_iter()
             .filter_map(|r| r.ok())
+            .filter(|solution| solution.valid_until >= current_time)
             .filter(|solution| Self::solution_respects_constraints(intent, solution))
             .collect();
 
@@ -526,5 +528,61 @@ mod tests {
 
         // Health check should still show healthy for a while due to last success time
         // (This test would need time manipulation for proper testing of staleness)
+    }
+
+    #[tokio::test]
+    async fn test_expired_solution_filtered() {
+        use atom_intents_types::{
+            Asset, ExecutionConstraints, FillConfig, Intent, OutputSpec,
+        };
+        use cosmwasm_std::{Binary, Uint128};
+
+        let mock_client = Arc::new(MockDexClient::new("osmosis", 1_000_000_000_000, 0.003));
+        let solver = Arc::new(DexRoutingSolver::new("dex-solver-1", vec![mock_client]));
+
+        let oracle = Arc::new(MockOracle::new("test-oracle"));
+        let pair = TradingPair::new("uatom", "uusdc");
+        oracle
+            .set_price(
+                &pair,
+                Decimal::from_str("10.0").unwrap(),
+                Decimal::from_str("0.01").unwrap(),
+            )
+            .await
+            .unwrap();
+
+        let aggregator = SolutionAggregator::new(vec![solver], oracle);
+
+        let intent = Intent {
+            id: "test-intent".to_string(),
+            version: "1.0".to_string(),
+            nonce: 1,
+            user: "cosmos1test".to_string(),
+            input: Asset {
+                chain_id: "osmosis-1".to_string(),
+                denom: "uatom".to_string(),
+                amount: Uint128::new(1_000_000),
+            },
+            output: OutputSpec {
+                chain_id: "osmosis-1".to_string(),
+                denom: "uusdc".to_string(),
+                min_amount: Uint128::new(1_000_000),
+                limit_price: "1.0".to_string(),
+                recipient: "cosmos1test".to_string(),
+            },
+            fill_config: FillConfig::default(),
+            constraints: ExecutionConstraints::default(),
+            signature: Binary::default(),
+            public_key: Binary::default(),
+            created_at: 0,
+            expires_at: u64::MAX,
+        };
+
+        // Use a current_time far in the future so all solver quotes are expired
+        let result = aggregator
+            .aggregate(&intent, Uint128::zero(), u64::MAX)
+            .await;
+        // Solutions should be filtered out because their valid_until is in the past relative to u64::MAX
+        assert!(result.is_err());
     }
 }

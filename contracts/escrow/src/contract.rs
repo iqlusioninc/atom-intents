@@ -1,13 +1,19 @@
 use cosmwasm_std::{
-    entry_point, to_json_binary, BankMsg, Binary, Coin, CosmosMsg, Deps, DepsMut, Env,
-    IbcMsg, IbcTimeout, MessageInfo, Response, StdResult,
+    entry_point, to_json_binary, BankMsg, Binary, Coin, Deps, DepsMut, Env, IbcMsg, IbcTimeout,
+    MessageInfo, Reply, Response, StdResult, SubMsg,
 };
 
 use crate::error::ContractError;
 use crate::msg::{
     ConfigResponse, EscrowResponse, EscrowsResponse, ExecuteMsg, InstantiateMsg, QueryMsg,
 };
-use crate::state::{Config, Escrow, EscrowStatus, CONFIG, ESCROWS, ESCROWS_BY_INTENT, USER_ESCROWS};
+use crate::state::{
+    Config, Escrow, EscrowStatus, CONFIG, ESCROWS, ESCROWS_BY_INTENT, PENDING_REFUND_ESCROW,
+    USER_ESCROWS,
+};
+
+/// Reply ID for IBC refund SubMsg failures
+const REPLY_IBC_REFUND: u64 = 1;
 
 #[entry_point]
 pub fn instantiate(
@@ -66,6 +72,33 @@ pub fn execute(
             settlement_contract,
             ibc_hook_sender,
         } => execute_update_config(deps, info, admin, settlement_contract, ibc_hook_sender),
+    }
+}
+
+#[entry_point]
+pub fn reply(deps: DepsMut, _env: Env, msg: Reply) -> Result<Response, ContractError> {
+    match msg.id {
+        REPLY_IBC_REFUND => {
+            // IBC refund SubMsg failed - transition escrow to RefundFailed
+            let escrow_id = PENDING_REFUND_ESCROW.load(deps.storage)?;
+            PENDING_REFUND_ESCROW.remove(deps.storage);
+
+            let mut escrow = ESCROWS.load(deps.storage, &escrow_id).map_err(|_| {
+                ContractError::EscrowNotFound {
+                    id: escrow_id.clone(),
+                }
+            })?;
+
+            escrow.status = EscrowStatus::RefundFailed;
+            ESCROWS.save(deps.storage, &escrow_id, &escrow)?;
+
+            Ok(Response::new()
+                .add_attribute("action", "ibc_refund_failed")
+                .add_attribute("escrow_id", escrow_id))
+        }
+        id => Err(ContractError::Std(cosmwasm_std::StdError::generic_err(
+            format!("unknown reply id: {id}"),
+        ))),
     }
 }
 
@@ -296,52 +329,61 @@ fn execute_refund(
     }
 
     // Determine refund method based on whether this is a cross-chain escrow
-    let (refund_msg, refund_type): (CosmosMsg, &str) =
-        if let (Some(source_channel), Some(source_address)) =
-            (&escrow.source_channel, &escrow.owner_source_address)
-        {
-            // Cross-chain refund via IBC
-            escrow.status = EscrowStatus::Refunding;
+    if let (Some(source_channel), Some(source_address)) =
+        (&escrow.source_channel, &escrow.owner_source_address)
+    {
+        // Cross-chain refund via IBC
+        escrow.status = EscrowStatus::Refunding;
+        ESCROWS.save(deps.storage, &escrow_id, &escrow)?;
 
-            let ibc_msg = IbcMsg::Transfer {
-                channel_id: source_channel.clone(),
-                to_address: source_address.clone(),
-                amount: Coin {
-                    denom: escrow.denom.clone(),
-                    amount: escrow.amount,
-                },
-                timeout: IbcTimeout::with_timestamp(env.block.time.plus_seconds(600)),
-                memo: Some(format!(
-                    "{{\"refund\":{{\"escrow_id\":\"{}\",\"intent_id\":\"{}\"}}}}",
-                    escrow.id, escrow.intent_id
-                )),
-            };
+        // Store the escrow ID so the reply handler can identify which escrow failed
+        PENDING_REFUND_ESCROW.save(deps.storage, &escrow_id)?;
 
-            (ibc_msg.into(), "ibc_refund")
-        } else {
-            // Local refund via bank send
-            escrow.status = EscrowStatus::Refunded;
-
-            let bank_msg = BankMsg::Send {
-                to_address: escrow.owner.to_string(),
-                amount: vec![Coin {
-                    denom: escrow.denom.clone(),
-                    amount: escrow.amount,
-                }],
-            };
-
-            (bank_msg.into(), "local_refund")
+        let ibc_msg = IbcMsg::Transfer {
+            channel_id: source_channel.clone(),
+            to_address: source_address.clone(),
+            amount: Coin {
+                denom: escrow.denom.clone(),
+                amount: escrow.amount,
+            },
+            timeout: IbcTimeout::with_timestamp(env.block.time.plus_seconds(600)),
+            memo: Some(format!(
+                "{{\"refund\":{{\"escrow_id\":\"{}\",\"intent_id\":\"{}\"}}}}",
+                escrow.id, escrow.intent_id
+            )),
         };
 
-    ESCROWS.save(deps.storage, &escrow_id, &escrow)?;
+        // Use SubMsg::reply_on_error so we can transition to RefundFailed on failure
+        let sub_msg = SubMsg::reply_on_error(ibc_msg, REPLY_IBC_REFUND);
 
-    Ok(Response::new()
-        .add_message(refund_msg)
-        .add_attribute("action", "refund")
-        .add_attribute("refund_type", refund_type)
-        .add_attribute("escrow_id", escrow_id)
-        .add_attribute("owner", escrow.owner)
-        .add_attribute("amount", escrow.amount))
+        Ok(Response::new()
+            .add_submessage(sub_msg)
+            .add_attribute("action", "refund")
+            .add_attribute("refund_type", "ibc_refund")
+            .add_attribute("escrow_id", escrow_id)
+            .add_attribute("owner", escrow.owner)
+            .add_attribute("amount", escrow.amount))
+    } else {
+        // Local refund via bank send
+        escrow.status = EscrowStatus::Refunded;
+        ESCROWS.save(deps.storage, &escrow_id, &escrow)?;
+
+        let bank_msg = BankMsg::Send {
+            to_address: escrow.owner.to_string(),
+            amount: vec![Coin {
+                denom: escrow.denom.clone(),
+                amount: escrow.amount,
+            }],
+        };
+
+        Ok(Response::new()
+            .add_message(bank_msg)
+            .add_attribute("action", "refund")
+            .add_attribute("refund_type", "local_refund")
+            .add_attribute("escrow_id", escrow_id)
+            .add_attribute("owner", escrow.owner)
+            .add_attribute("amount", escrow.amount))
+    }
 }
 
 /// Retry a failed IBC refund
@@ -387,7 +429,10 @@ fn execute_retry_refund(
     escrow.status = EscrowStatus::Refunding;
     ESCROWS.save(deps.storage, &escrow_id, &escrow)?;
 
-    // Retry IBC transfer
+    // Store the escrow ID so the reply handler can identify which escrow failed
+    PENDING_REFUND_ESCROW.save(deps.storage, &escrow_id)?;
+
+    // Retry IBC transfer with SubMsg::reply_on_error
     let ibc_msg = IbcMsg::Transfer {
         channel_id: source_channel.clone(),
         to_address: source_address.clone(),
@@ -402,8 +447,10 @@ fn execute_retry_refund(
         )),
     };
 
+    let sub_msg = SubMsg::reply_on_error(ibc_msg, REPLY_IBC_REFUND);
+
     Ok(Response::new()
-        .add_message(ibc_msg)
+        .add_submessage(sub_msg)
         .add_attribute("action", "retry_refund")
         .add_attribute("escrow_id", escrow_id)
         .add_attribute("destination", source_address)
@@ -1381,6 +1428,91 @@ mod tests {
         .unwrap_err();
 
         assert!(matches!(err, ContractError::Unauthorized {}));
+    }
+
+    // ==================== REPLY HANDLER TESTS ====================
+
+    #[test]
+    fn test_ibc_refund_failure_sets_refund_failed() {
+        let (mut deps, mut env, addrs) = setup_contract();
+
+        // Lock a cross-chain escrow via IBC hooks
+        let info = message_info(
+            &addrs.ibc_hook_sender,
+            &[Coin::new(100_000u128, "ibc/27394FB092D2ECCD56123C74F36E4C1F926001CEADA9CA97EA622B25F41E5EB2")],
+        );
+        execute(
+            deps.as_mut(),
+            env.clone(),
+            info,
+            ExecuteMsg::LockFromIbc {
+                intent_id: "intent-ibc-1".to_string(),
+                expires_at: env.block.time.seconds() + 3600,
+                user_source_address: "cosmos1sourceaddr".to_string(),
+                source_chain_id: "cosmoshub-4".to_string(),
+                source_channel: "channel-0".to_string(),
+            },
+        )
+        .unwrap();
+
+        let escrow_id = "esc_intent-ibc-1";
+
+        // Fast forward past expiration
+        env.block.time = Timestamp::from_seconds(env.block.time.seconds() + 7200);
+
+        // Initiate refund (this sets status to Refunding and stores PENDING_REFUND_ESCROW)
+        let info = message_info(&addrs.admin, &[]);
+        let res = execute(
+            deps.as_mut(),
+            env.clone(),
+            info,
+            ExecuteMsg::Refund {
+                escrow_id: escrow_id.to_string(),
+            },
+        )
+        .unwrap();
+
+        // Should have a submessage (not a direct message)
+        assert_eq!(res.messages.len(), 1);
+        assert_eq!(res.messages[0].id, 1); // REPLY_IBC_REFUND
+
+        // Verify escrow is in Refunding state
+        let escrow: EscrowResponse = from_json(
+            query(
+                deps.as_ref(),
+                env.clone(),
+                QueryMsg::Escrow {
+                    escrow_id: escrow_id.to_string(),
+                },
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(escrow.status, "refunding");
+
+        // Simulate the IBC transfer failing by calling the reply handler with an error
+        let reply_msg = Reply {
+            id: 1,
+            payload: Binary::default(),
+            gas_used: 0,
+            result: cosmwasm_std::SubMsgResult::Err("IBC transfer failed: channel not found".to_string()),
+        };
+        let reply_res = reply(deps.as_mut(), env.clone(), reply_msg).unwrap();
+        assert_eq!(reply_res.attributes[0].value, "ibc_refund_failed");
+
+        // Verify escrow transitioned to RefundFailed
+        let escrow: EscrowResponse = from_json(
+            query(
+                deps.as_ref(),
+                env,
+                QueryMsg::Escrow {
+                    escrow_id: escrow_id.to_string(),
+                },
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(escrow.status, "refund_failed");
     }
 
     #[test]

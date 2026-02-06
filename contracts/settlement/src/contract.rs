@@ -140,10 +140,10 @@ pub fn execute(
             success,
         } => execute_handle_ibc_ack(deps, info, settlement_id, success),
         ExecuteMsg::UpdateReputation { solver_id } => {
-            execute_update_reputation(deps, env, solver_id)
+            execute_update_reputation(deps, env, info, solver_id)
         }
         ExecuteMsg::DecayReputation { start_after, limit } => {
-            execute_decay_reputation(deps, env, start_after, limit)
+            execute_decay_reputation(deps, env, info, start_after, limit)
         }
 
         // ═══════════════════════════════════════════════════════════════════════════
@@ -572,6 +572,33 @@ mod tests {
         .unwrap();
     }
 
+    /// Helper to mark solver locked with the correct funds attached.
+    /// Uses the standard settlement output: 1_000_000 uusdc.
+    fn mark_solver_locked(
+        deps: &mut cosmwasm_std::OwnedDeps<
+            cosmwasm_std::MemoryStorage,
+            cosmwasm_std::testing::MockApi,
+            cosmwasm_std::testing::MockQuerier,
+        >,
+        env: &Env,
+        addrs: &TestAddrs,
+        settlement_id: &str,
+    ) {
+        let info = message_info(
+            &addrs.solver_operator,
+            &[Coin::new(1_000_000u128, "uusdc")],
+        );
+        execute(
+            deps.as_mut(),
+            env.clone(),
+            info,
+            ExecuteMsg::MarkSolverLocked {
+                settlement_id: settlement_id.to_string(),
+            },
+        )
+        .unwrap();
+    }
+
     // ==================== INSTANTIATION TESTS ====================
 
     #[test]
@@ -828,16 +855,7 @@ mod tests {
         .unwrap();
 
         // UserLocked -> SolverLocked
-        let info = message_info(&addrs.solver_operator, &[]);
-        execute(
-            deps.as_mut(),
-            env.clone(),
-            info,
-            ExecuteMsg::MarkSolverLocked {
-                settlement_id: "settlement-1".to_string(),
-            },
-        )
-        .unwrap();
+        mark_solver_locked(&mut deps, &env, &addrs, "settlement-1");
 
         // SolverLocked -> Executing
         let info = message_info(&addrs.admin, &[]);
@@ -890,6 +908,79 @@ mod tests {
         assert_eq!(solver.total_settlements, 1);
     }
 
+    // ==================== SOLVER FUND VERIFICATION TESTS ====================
+
+    #[test]
+    fn test_mark_solver_locked_requires_funds() {
+        let (mut deps, env, addrs) = setup_contract();
+        register_solver(&mut deps, &env, &addrs, "solver-1", 2_000_000);
+        create_settlement(&mut deps, &env, &addrs, "settlement-1", "solver-1");
+
+        // Mark user locked first
+        let info = message_info(&addrs.escrow, &[]);
+        execute(
+            deps.as_mut(),
+            env.clone(),
+            info,
+            ExecuteMsg::MarkUserLocked {
+                settlement_id: "settlement-1".to_string(),
+                escrow_id: "escrow-123".to_string(),
+            },
+        )
+        .unwrap();
+
+        // Try to mark solver locked WITHOUT funds - should fail
+        let info = message_info(&addrs.solver_operator, &[]);
+        let err = execute(
+            deps.as_mut(),
+            env.clone(),
+            info,
+            ExecuteMsg::MarkSolverLocked {
+                settlement_id: "settlement-1".to_string(),
+            },
+        )
+        .unwrap_err();
+        assert!(matches!(err, ContractError::InsufficientFunds { .. }));
+
+        // Try with wrong denom - should fail
+        let info = message_info(&addrs.solver_operator, &[Coin::new(1_000_000u128, "uatom")]);
+        let err = execute(
+            deps.as_mut(),
+            env.clone(),
+            info,
+            ExecuteMsg::MarkSolverLocked {
+                settlement_id: "settlement-1".to_string(),
+            },
+        )
+        .unwrap_err();
+        assert!(matches!(err, ContractError::InsufficientFunds { .. }));
+
+        // Try with insufficient amount - should fail
+        let info = message_info(&addrs.solver_operator, &[Coin::new(999_999u128, "uusdc")]);
+        let err = execute(
+            deps.as_mut(),
+            env.clone(),
+            info,
+            ExecuteMsg::MarkSolverLocked {
+                settlement_id: "settlement-1".to_string(),
+            },
+        )
+        .unwrap_err();
+        assert!(matches!(err, ContractError::InsufficientFunds { .. }));
+
+        // Try with correct funds - should succeed
+        let info = message_info(&addrs.solver_operator, &[Coin::new(1_000_000u128, "uusdc")]);
+        execute(
+            deps.as_mut(),
+            env,
+            info,
+            ExecuteMsg::MarkSolverLocked {
+                settlement_id: "settlement-1".to_string(),
+            },
+        )
+        .unwrap();
+    }
+
     // ==================== EXECUTE SETTLEMENT TESTS ====================
 
     #[test]
@@ -911,16 +1002,7 @@ mod tests {
         )
         .unwrap();
 
-        let info = message_info(&addrs.solver_operator, &[]);
-        execute(
-            deps.as_mut(),
-            env.clone(),
-            info,
-            ExecuteMsg::MarkSolverLocked {
-                settlement_id: "settlement-1".to_string(),
-            },
-        )
-        .unwrap();
+        mark_solver_locked(&mut deps, &env, &addrs, "settlement-1");
 
         // Execute settlement
         let info = message_info(&addrs.admin, &[]);
@@ -990,16 +1072,7 @@ mod tests {
         )
         .unwrap();
 
-        let info = message_info(&addrs.solver_operator, &[]);
-        execute(
-            deps.as_mut(),
-            env.clone(),
-            info,
-            ExecuteMsg::MarkSolverLocked {
-                settlement_id: "settlement-1".to_string(),
-            },
-        )
-        .unwrap();
+        mark_solver_locked(&mut deps, &env, &addrs, "settlement-1");
 
         // Fast forward time past expiry
         env.block.time = Timestamp::from_seconds(env.block.time.seconds() + 7200);
@@ -1040,16 +1113,7 @@ mod tests {
         )
         .unwrap();
 
-        let info = message_info(&addrs.solver_operator, &[]);
-        execute(
-            deps.as_mut(),
-            env.clone(),
-            info,
-            ExecuteMsg::MarkSolverLocked {
-                settlement_id: "settlement-1".to_string(),
-            },
-        )
-        .unwrap();
+        mark_solver_locked(&mut deps, &env, &addrs, "settlement-1");
 
         let info = message_info(&addrs.admin, &[]);
         execute(
@@ -1130,16 +1194,7 @@ mod tests {
         )
         .unwrap();
 
-        let info = message_info(&addrs.solver_operator, &[]);
-        execute(
-            deps.as_mut(),
-            env.clone(),
-            info,
-            ExecuteMsg::MarkSolverLocked {
-                settlement_id: "settlement-1".to_string(),
-            },
-        )
-        .unwrap();
+        mark_solver_locked(&mut deps, &env, &addrs, "settlement-1");
 
         let info = message_info(&addrs.admin, &[]);
         execute(
@@ -1199,16 +1254,7 @@ mod tests {
         )
         .unwrap();
 
-        let info = message_info(&addrs.solver_operator, &[]);
-        execute(
-            deps.as_mut(),
-            env.clone(),
-            info,
-            ExecuteMsg::MarkSolverLocked {
-                settlement_id: "settlement-1".to_string(),
-            },
-        )
-        .unwrap();
+        mark_solver_locked(&mut deps, &env, &addrs, "settlement-1");
 
         let info = message_info(&addrs.admin, &[]);
         execute(
@@ -1459,16 +1505,7 @@ mod tests {
         )
         .unwrap();
 
-        let info = message_info(&addrs.solver_operator, &[]);
-        execute(
-            deps.as_mut(),
-            env.clone(),
-            info,
-            ExecuteMsg::MarkSolverLocked {
-                settlement_id: "settlement-1".to_string(),
-            },
-        )
-        .unwrap();
+        mark_solver_locked(&mut deps, &env, &addrs, "settlement-1");
 
         let info = message_info(&addrs.admin, &[]);
         execute(
@@ -1550,16 +1587,7 @@ mod tests {
             )
             .unwrap();
 
-            let info = message_info(&addrs.solver_operator, &[]);
-            execute(
-                deps.as_mut(),
-                env.clone(),
-                info,
-                ExecuteMsg::MarkSolverLocked {
-                    settlement_id: format!("settlement-{}", i),
-                },
-            )
-            .unwrap();
+            mark_solver_locked(&mut deps, &env, &addrs, &format!("settlement-{}", i));
 
             let info = message_info(&addrs.admin, &[]);
             execute(
@@ -2059,16 +2087,7 @@ mod tests {
         )
         .unwrap();
 
-        let info = message_info(&addrs.solver_operator, &[]);
-        execute(
-            deps.as_mut(),
-            env.clone(),
-            info,
-            ExecuteMsg::MarkSolverLocked {
-                settlement_id: "settlement-1".to_string(),
-            },
-        )
-        .unwrap();
+        mark_solver_locked(&mut deps, &env, &addrs, "settlement-1");
 
         let info = message_info(&addrs.admin, &[]);
         execute(
@@ -2126,16 +2145,7 @@ mod tests {
         )
         .unwrap();
 
-        let info = message_info(&addrs.solver_operator, &[]);
-        execute(
-            deps.as_mut(),
-            env.clone(),
-            info,
-            ExecuteMsg::MarkSolverLocked {
-                settlement_id: "settlement-1".to_string(),
-            },
-        )
-        .unwrap();
+        mark_solver_locked(&mut deps, &env, &addrs, "settlement-1");
 
         let info = message_info(&addrs.admin, &[]);
         execute(
@@ -2191,16 +2201,7 @@ mod tests {
         )
         .unwrap();
 
-        let info = message_info(&addrs.solver_operator, &[]);
-        execute(
-            deps.as_mut(),
-            env.clone(),
-            info,
-            ExecuteMsg::MarkSolverLocked {
-                settlement_id: "settlement-1".to_string(),
-            },
-        )
-        .unwrap();
+        mark_solver_locked(&mut deps, &env, &addrs, "settlement-1");
 
         let info = message_info(&addrs.admin, &[]);
         execute(
@@ -2681,16 +2682,7 @@ mod tests {
         )
         .unwrap();
 
-        let info = message_info(&addrs.solver_operator, &[]);
-        execute(
-            deps.as_mut(),
-            env.clone(),
-            info,
-            ExecuteMsg::MarkSolverLocked {
-                settlement_id: "settlement-1".to_string(),
-            },
-        )
-        .unwrap();
+        mark_solver_locked(&mut deps, &env, &addrs, "settlement-1");
 
         let info = message_info(&addrs.admin, &[]);
         execute(
@@ -2766,16 +2758,7 @@ mod tests {
         )
         .unwrap();
 
-        let info = message_info(&addrs.solver_operator, &[]);
-        execute(
-            deps.as_mut(),
-            env.clone(),
-            info,
-            ExecuteMsg::MarkSolverLocked {
-                settlement_id: "settlement-1".to_string(),
-            },
-        )
-        .unwrap();
+        mark_solver_locked(&mut deps, &env, &addrs, "settlement-1");
 
         // Execute local settlement with correct funds
         let info = message_info(&addrs.solver_operator, &[Coin::new(1_000_000u128, "uusdc")]);
@@ -2830,16 +2813,7 @@ mod tests {
         )
         .unwrap();
 
-        let info = message_info(&addrs.solver_operator, &[]);
-        execute(
-            deps.as_mut(),
-            env.clone(),
-            info,
-            ExecuteMsg::MarkSolverLocked {
-                settlement_id: "settlement-1".to_string(),
-            },
-        )
-        .unwrap();
+        mark_solver_locked(&mut deps, &env, &addrs, "settlement-1");
 
         // Try to execute local settlement with insufficient funds
         let info = message_info(&addrs.solver_operator, &[Coin::new(500_000u128, "uusdc")]);
@@ -2875,16 +2849,7 @@ mod tests {
         )
         .unwrap();
 
-        let info = message_info(&addrs.solver_operator, &[]);
-        execute(
-            deps.as_mut(),
-            env.clone(),
-            info,
-            ExecuteMsg::MarkSolverLocked {
-                settlement_id: "settlement-1".to_string(),
-            },
-        )
-        .unwrap();
+        mark_solver_locked(&mut deps, &env, &addrs, "settlement-1");
 
         // Try to execute local settlement with wrong denom
         let info = message_info(&addrs.solver_operator, &[Coin::new(1_000_000u128, "uatom")]);
@@ -2941,16 +2906,7 @@ mod tests {
         )
         .unwrap();
 
-        let info = message_info(&addrs.solver_operator, &[]);
-        execute(
-            deps.as_mut(),
-            env.clone(),
-            info,
-            ExecuteMsg::MarkSolverLocked {
-                settlement_id: "settlement-1".to_string(),
-            },
-        )
-        .unwrap();
+        mark_solver_locked(&mut deps, &env, &addrs, "settlement-1");
 
         // Fast forward time past expiry
         env.block.time = Timestamp::from_seconds(env.block.time.seconds() + 7200);
@@ -2989,16 +2945,7 @@ mod tests {
         )
         .unwrap();
 
-        let info = message_info(&addrs.solver_operator, &[]);
-        execute(
-            deps.as_mut(),
-            env.clone(),
-            info,
-            ExecuteMsg::MarkSolverLocked {
-                settlement_id: "settlement-1".to_string(),
-            },
-        )
-        .unwrap();
+        mark_solver_locked(&mut deps, &env, &addrs, "settlement-1");
 
         // Try to execute local settlement from unauthorized user
         let info = message_info(&addrs.random_user, &[Coin::new(1_000_000u128, "uusdc")]);
@@ -3034,16 +2981,7 @@ mod tests {
         )
         .unwrap();
 
-        let info = message_info(&addrs.solver_operator, &[]);
-        execute(
-            deps.as_mut(),
-            env.clone(),
-            info,
-            ExecuteMsg::MarkSolverLocked {
-                settlement_id: "settlement-1".to_string(),
-            },
-        )
-        .unwrap();
+        mark_solver_locked(&mut deps, &env, &addrs, "settlement-1");
 
         // Admin can also execute local settlement
         let info = message_info(&addrs.admin, &[Coin::new(1_000_000u128, "uusdc")]);
@@ -3121,16 +3059,7 @@ mod tests {
         )
         .unwrap();
 
-        let info = message_info(&addrs.solver_operator, &[]);
-        execute(
-            deps.as_mut(),
-            env.clone(),
-            info,
-            ExecuteMsg::MarkSolverLocked {
-                settlement_id: "settlement-1".to_string(),
-            },
-        )
-        .unwrap();
+        mark_solver_locked(&mut deps, &env, &addrs, "settlement-1");
 
         // Execute local settlement
         let info = message_info(&addrs.solver_operator, &[Coin::new(1_000_000u128, "uusdc")]);
@@ -3158,5 +3087,143 @@ mod tests {
         .unwrap();
         assert_eq!(solver.total_settlements, 1);
         assert_eq!(solver.failed_settlements, 0);
+    }
+
+    #[test]
+    fn test_reputation_update_requires_admin() {
+        let (mut deps, env, addrs) = setup_contract();
+        register_solver(&mut deps, &env, &addrs, "solver-1", 1_000_000);
+
+        // Non-admin tries to update reputation -- should fail
+        let info = message_info(&addrs.random_user, &[]);
+        let result = execute(
+            deps.as_mut(),
+            env.clone(),
+            info,
+            ExecuteMsg::UpdateReputation {
+                solver_id: "solver-1".to_string(),
+            },
+        );
+        assert!(result.is_err());
+        assert!(matches!(
+            result.unwrap_err(),
+            ContractError::Unauthorized {}
+        ));
+
+        // Admin can update reputation
+        let info = message_info(&addrs.admin, &[]);
+        let result = execute(
+            deps.as_mut(),
+            env.clone(),
+            info,
+            ExecuteMsg::UpdateReputation {
+                solver_id: "solver-1".to_string(),
+            },
+        );
+        assert!(result.is_ok());
+
+        // Non-admin tries to decay reputation -- should fail
+        let info = message_info(&addrs.random_user, &[]);
+        let result = execute(
+            deps.as_mut(),
+            env.clone(),
+            info,
+            ExecuteMsg::DecayReputation {
+                start_after: None,
+                limit: None,
+            },
+        );
+        assert!(result.is_err());
+        assert!(matches!(
+            result.unwrap_err(),
+            ContractError::Unauthorized {}
+        ));
+
+        // Admin can decay reputation
+        let info = message_info(&addrs.admin, &[]);
+        let result = execute(
+            deps.as_mut(),
+            env,
+            info,
+            ExecuteMsg::DecayReputation {
+                start_after: None,
+                limit: None,
+            },
+        );
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_solver_query_pagination() {
+        let (mut deps, env, addrs) = setup_contract();
+
+        // Register 5 solvers
+        for i in 1..=5 {
+            let solver_id = format!("solver-{}", i);
+            let info = message_info(&addrs.solver_operator, &[Coin::new(1_000_000u128, "uatom")]);
+            execute(
+                deps.as_mut(),
+                env.clone(),
+                info,
+                ExecuteMsg::RegisterSolver {
+                    solver_id: solver_id.clone(),
+                },
+            )
+            .unwrap();
+        }
+
+        // Query first page (limit 2)
+        let result: SolversResponse = from_json(
+            query(
+                deps.as_ref(),
+                env.clone(),
+                QueryMsg::Solvers {
+                    start_after: None,
+                    limit: Some(2),
+                },
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(result.solvers.len(), 2);
+        let first_page_last = result.solvers.last().unwrap().id.clone();
+
+        // Query second page using start_after
+        let result2: SolversResponse = from_json(
+            query(
+                deps.as_ref(),
+                env.clone(),
+                QueryMsg::Solvers {
+                    start_after: Some(first_page_last.clone()),
+                    limit: Some(2),
+                },
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(result2.solvers.len(), 2);
+
+        // Verify no overlap between pages
+        let page1_ids: Vec<_> = result.solvers.iter().map(|s| &s.id).collect();
+        let page2_ids: Vec<_> = result2.solvers.iter().map(|s| &s.id).collect();
+        for id in &page2_ids {
+            assert!(!page1_ids.contains(id), "Overlap found: {}", id);
+        }
+
+        // Third page should have 1 remaining
+        let last_of_page2 = result2.solvers.last().unwrap().id.clone();
+        let result3: SolversResponse = from_json(
+            query(
+                deps.as_ref(),
+                env,
+                QueryMsg::Solvers {
+                    start_after: Some(last_of_page2),
+                    limit: Some(2),
+                },
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(result3.solvers.len(), 1);
     }
 }

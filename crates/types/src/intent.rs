@@ -13,6 +13,97 @@ fn hash_string(hasher: &mut Sha256, s: &str) {
     hasher.update(s.as_bytes());
 }
 
+/// Compute the canonical signing hash from intent fields.
+///
+/// SECURITY: This is the single source of truth for signing hash computation.
+/// Both `Intent::signing_hash()` and `UnsignedIntent::signing_hash()` delegate here
+/// to prevent divergence that could silently break signature verification.
+fn compute_signing_hash(
+    version: &str,
+    nonce: u64,
+    user: &str,
+    input: &Asset,
+    output: &OutputSpec,
+    fill_config: &FillConfig,
+    constraints: &ExecutionConstraints,
+    created_at: u64,
+    expires_at: u64,
+) -> [u8; 32] {
+    let mut hasher = Sha256::new();
+
+    // Core identification
+    hash_string(&mut hasher, version);
+    hasher.update(nonce.to_le_bytes());
+    hash_string(&mut hasher, user);
+
+    // Input asset
+    hash_string(&mut hasher, &input.chain_id);
+    hash_string(&mut hasher, &input.denom);
+    hasher.update(input.amount.u128().to_le_bytes());
+
+    // Output specification
+    hash_string(&mut hasher, &output.chain_id);
+    hash_string(&mut hasher, &output.denom);
+    hasher.update(output.min_amount.u128().to_le_bytes());
+    hash_string(&mut hasher, &output.limit_price);
+    hash_string(&mut hasher, &output.recipient);
+
+    // Fill configuration - ALL fields affect execution
+    hasher.update([fill_config.allow_partial as u8]);
+    hasher.update(fill_config.min_fill_amount.u128().to_le_bytes());
+    hash_string(&mut hasher, &fill_config.min_fill_pct);
+    hasher.update(fill_config.aggregation_window_ms.to_le_bytes());
+
+    // Fill strategy (serialize as JSON for deterministic representation)
+    let strategy_json = serde_json::to_string(&fill_config.strategy)
+        .unwrap_or_else(|_| "null".to_string());
+    hash_string(&mut hasher, &strategy_json);
+
+    // Execution constraints - ALL fields
+    hasher.update(constraints.deadline.to_le_bytes());
+
+    // max_hops (Option<u32>)
+    if let Some(max_hops) = constraints.max_hops {
+        hasher.update([1u8]); // Some marker
+        hasher.update(max_hops.to_le_bytes());
+    } else {
+        hasher.update([0u8]); // None marker
+    }
+
+    // excluded_venues (sorted for determinism)
+    let mut excluded_venues = constraints.excluded_venues.clone();
+    excluded_venues.sort();
+    hasher.update((excluded_venues.len() as u32).to_le_bytes());
+    for venue in excluded_venues {
+        hash_string(&mut hasher, &venue);
+    }
+
+    // max_solver_fee_bps (Option<u32>)
+    if let Some(fee_bps) = constraints.max_solver_fee_bps {
+        hasher.update([1u8]); // Some marker
+        hasher.update(fee_bps.to_le_bytes());
+    } else {
+        hasher.update([0u8]); // None marker
+    }
+
+    // allow_cross_ecosystem
+    hasher.update([constraints.allow_cross_ecosystem as u8]);
+
+    // max_bridge_time_secs (Option<u64>)
+    if let Some(bridge_time) = constraints.max_bridge_time_secs {
+        hasher.update([1u8]); // Some marker
+        hasher.update(bridge_time.to_le_bytes());
+    } else {
+        hasher.update([0u8]); // None marker
+    }
+
+    // Timestamps - MUST be signed to prevent expiry manipulation
+    hasher.update(created_at.to_le_bytes());
+    hasher.update(expires_at.to_le_bytes());
+
+    hasher.finalize().into()
+}
+
 /// A user's expression of desired trade outcome
 #[cw_serde]
 pub struct Intent {
@@ -115,79 +206,17 @@ impl Intent {
     /// to prevent signature bypass attacks. Variable-length string fields
     /// use length-prefixed encoding to prevent collision attacks.
     pub fn signing_hash(&self) -> [u8; 32] {
-        let mut hasher = Sha256::new();
-
-        // Core identification
-        hash_string(&mut hasher, &self.version);
-        hasher.update(self.nonce.to_le_bytes());
-        hash_string(&mut hasher, &self.user);
-
-        // Input asset
-        hash_string(&mut hasher, &self.input.chain_id);
-        hash_string(&mut hasher, &self.input.denom);
-        hasher.update(self.input.amount.u128().to_le_bytes());
-
-        // Output specification
-        hash_string(&mut hasher, &self.output.chain_id);
-        hash_string(&mut hasher, &self.output.denom);
-        hasher.update(self.output.min_amount.u128().to_le_bytes());
-        hash_string(&mut hasher, &self.output.limit_price);
-        hash_string(&mut hasher, &self.output.recipient);
-
-        // Fill configuration - ALL fields affect execution
-        hasher.update([self.fill_config.allow_partial as u8]);
-        hasher.update(self.fill_config.min_fill_amount.u128().to_le_bytes());
-        hash_string(&mut hasher, &self.fill_config.min_fill_pct);
-        hasher.update(self.fill_config.aggregation_window_ms.to_le_bytes());
-
-        // Fill strategy (serialize as JSON for deterministic representation)
-        let strategy_json = serde_json::to_string(&self.fill_config.strategy)
-            .unwrap_or_else(|_| "null".to_string());
-        hash_string(&mut hasher, &strategy_json);
-
-        // Execution constraints - ALL fields
-        hasher.update(self.constraints.deadline.to_le_bytes());
-
-        // max_hops (Option<u32>)
-        if let Some(max_hops) = self.constraints.max_hops {
-            hasher.update([1u8]); // Some marker
-            hasher.update(max_hops.to_le_bytes());
-        } else {
-            hasher.update([0u8]); // None marker
-        }
-
-        // excluded_venues (sorted for determinism)
-        let mut excluded_venues = self.constraints.excluded_venues.clone();
-        excluded_venues.sort();
-        hasher.update((excluded_venues.len() as u32).to_le_bytes());
-        for venue in excluded_venues {
-            hash_string(&mut hasher, &venue);
-        }
-
-        // max_solver_fee_bps (Option<u32>)
-        if let Some(fee_bps) = self.constraints.max_solver_fee_bps {
-            hasher.update([1u8]); // Some marker
-            hasher.update(fee_bps.to_le_bytes());
-        } else {
-            hasher.update([0u8]); // None marker
-        }
-
-        // allow_cross_ecosystem
-        hasher.update([self.constraints.allow_cross_ecosystem as u8]);
-
-        // max_bridge_time_secs (Option<u64>)
-        if let Some(bridge_time) = self.constraints.max_bridge_time_secs {
-            hasher.update([1u8]); // Some marker
-            hasher.update(bridge_time.to_le_bytes());
-        } else {
-            hasher.update([0u8]); // None marker
-        }
-
-        // Timestamps - MUST be signed to prevent expiry manipulation
-        hasher.update(self.created_at.to_le_bytes());
-        hasher.update(self.expires_at.to_le_bytes());
-
-        hasher.finalize().into()
+        compute_signing_hash(
+            &self.version,
+            self.nonce,
+            &self.user,
+            &self.input,
+            &self.output,
+            &self.fill_config,
+            &self.constraints,
+            self.created_at,
+            self.expires_at,
+        )
     }
 
     /// Verify the signature on this intent
@@ -312,79 +341,17 @@ impl UnsignedIntent {
     /// SECURITY: This MUST match Intent::signing_hash() exactly to ensure
     /// the same bytes are signed and verified.
     fn signing_hash(&self) -> [u8; 32] {
-        let mut hasher = Sha256::new();
-
-        // Core identification
-        hash_string(&mut hasher, &self.version);
-        hasher.update(self.nonce.to_le_bytes());
-        hash_string(&mut hasher, &self.user);
-
-        // Input asset
-        hash_string(&mut hasher, &self.input.chain_id);
-        hash_string(&mut hasher, &self.input.denom);
-        hasher.update(self.input.amount.u128().to_le_bytes());
-
-        // Output specification
-        hash_string(&mut hasher, &self.output.chain_id);
-        hash_string(&mut hasher, &self.output.denom);
-        hasher.update(self.output.min_amount.u128().to_le_bytes());
-        hash_string(&mut hasher, &self.output.limit_price);
-        hash_string(&mut hasher, &self.output.recipient);
-
-        // Fill configuration - ALL fields affect execution
-        hasher.update([self.fill_config.allow_partial as u8]);
-        hasher.update(self.fill_config.min_fill_amount.u128().to_le_bytes());
-        hash_string(&mut hasher, &self.fill_config.min_fill_pct);
-        hasher.update(self.fill_config.aggregation_window_ms.to_le_bytes());
-
-        // Fill strategy (serialize as JSON for deterministic representation)
-        let strategy_json = serde_json::to_string(&self.fill_config.strategy)
-            .unwrap_or_else(|_| "null".to_string());
-        hash_string(&mut hasher, &strategy_json);
-
-        // Execution constraints - ALL fields
-        hasher.update(self.constraints.deadline.to_le_bytes());
-
-        // max_hops (Option<u32>)
-        if let Some(max_hops) = self.constraints.max_hops {
-            hasher.update([1u8]); // Some marker
-            hasher.update(max_hops.to_le_bytes());
-        } else {
-            hasher.update([0u8]); // None marker
-        }
-
-        // excluded_venues (sorted for determinism)
-        let mut excluded_venues = self.constraints.excluded_venues.clone();
-        excluded_venues.sort();
-        hasher.update((excluded_venues.len() as u32).to_le_bytes());
-        for venue in excluded_venues {
-            hash_string(&mut hasher, &venue);
-        }
-
-        // max_solver_fee_bps (Option<u32>)
-        if let Some(fee_bps) = self.constraints.max_solver_fee_bps {
-            hasher.update([1u8]); // Some marker
-            hasher.update(fee_bps.to_le_bytes());
-        } else {
-            hasher.update([0u8]); // None marker
-        }
-
-        // allow_cross_ecosystem
-        hasher.update([self.constraints.allow_cross_ecosystem as u8]);
-
-        // max_bridge_time_secs (Option<u64>)
-        if let Some(bridge_time) = self.constraints.max_bridge_time_secs {
-            hasher.update([1u8]); // Some marker
-            hasher.update(bridge_time.to_le_bytes());
-        } else {
-            hasher.update([0u8]); // None marker
-        }
-
-        // Timestamps - MUST be signed to prevent expiry manipulation
-        hasher.update(self.created_at.to_le_bytes());
-        hasher.update(self.expires_at.to_le_bytes());
-
-        hasher.finalize().into()
+        compute_signing_hash(
+            &self.version,
+            self.nonce,
+            &self.user,
+            &self.input,
+            &self.output,
+            &self.fill_config,
+            &self.constraints,
+            self.created_at,
+            self.expires_at,
+        )
     }
 
     /// Sign the intent with a private key

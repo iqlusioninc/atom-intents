@@ -190,6 +190,11 @@ impl<S: SettlementStore> SettlementManager<S> {
             ),
         };
 
+        // Idempotent: if already in the target state, return success (handles duplicate events from network retries)
+        if old_status == new_status {
+            return Ok(settlement);
+        }
+
         // SECURITY FIX (ST-H1): Validate state transition before applying
         if !old_status.can_transition_to(&new_status) {
             return Err(SettlementManagerError::InvalidStateTransition(format!(
@@ -543,6 +548,43 @@ mod tests {
             }
             _ => panic!("Expected Failed status"),
         }
+    }
+
+    #[tokio::test]
+    async fn test_duplicate_event_idempotent() {
+        let store = Arc::new(InMemoryStore::new());
+        let manager = SettlementManager::new(store.clone(), SettlementConfig::default());
+
+        let intent = create_test_intent();
+        let solver = create_test_solver();
+
+        let settlement = manager.start_settlement(&intent, &solver).await.unwrap();
+
+        // Advance to UserLocked
+        let updated = manager
+            .advance_settlement(
+                &settlement.id,
+                SettlementEvent::UserLocked {
+                    escrow_id: "escrow-1".to_string(),
+                    tx_hash: None,
+                },
+            )
+            .await
+            .unwrap();
+        assert_eq!(updated.status, SettlementStatus::UserLocked);
+
+        // Send same event again (duplicate) - should return Ok, not error
+        let duplicate_result = manager
+            .advance_settlement(
+                &settlement.id,
+                SettlementEvent::UserLocked {
+                    escrow_id: "escrow-1".to_string(),
+                    tx_hash: None,
+                },
+            )
+            .await;
+        assert!(duplicate_result.is_ok());
+        assert_eq!(duplicate_result.unwrap().status, SettlementStatus::UserLocked);
     }
 
     #[tokio::test]
