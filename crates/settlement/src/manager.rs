@@ -190,6 +190,14 @@ impl<S: SettlementStore> SettlementManager<S> {
             ),
         };
 
+        // SECURITY FIX (ST-H1): Validate state transition before applying
+        if !old_status.can_transition_to(&new_status) {
+            return Err(SettlementManagerError::InvalidStateTransition(format!(
+                "{:?} -> {:?}",
+                old_status, new_status
+            )));
+        }
+
         settlement.status = new_status.clone();
         settlement.updated_at = chrono::Utc::now().timestamp() as u64;
 

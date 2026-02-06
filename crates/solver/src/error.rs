@@ -31,6 +31,9 @@ pub enum SolveError {
 
     #[error("internal error: {0}")]
     Internal(String),
+
+    #[error("numeric overflow")]
+    Overflow,
 }
 
 #[derive(Debug, Error)]

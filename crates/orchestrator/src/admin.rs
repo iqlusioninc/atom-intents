@@ -114,6 +114,19 @@ impl IntoResponse for AdminApiError {
     }
 }
 
+/// SECURITY FIX (O-C3): Constant-time comparison to prevent timing attacks
+/// on admin token authentication.
+fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
+    if a.len() != b.len() {
+        return false;
+    }
+    let mut diff = 0u8;
+    for (x, y) in a.iter().zip(b.iter()) {
+        diff |= x ^ y;
+    }
+    diff == 0
+}
+
 async fn require_admin_auth(
     State(state): State<Arc<AdminState>>,
     req: Request<Body>,
@@ -124,7 +137,11 @@ async fn require_admin_auth(
         .get("x-admin-token")
         .and_then(|value| value.to_str().ok());
 
-    if token != Some(state.auth_token.as_str()) {
+    let matches = token
+        .map(|t| constant_time_eq(t.as_bytes(), state.auth_token.as_bytes()))
+        .unwrap_or(false);
+
+    if !matches {
         return Err(StatusCode::UNAUTHORIZED);
     }
 

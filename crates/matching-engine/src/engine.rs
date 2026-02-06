@@ -7,8 +7,8 @@ use std::collections::{HashMap, HashSet};
 use std::str::FromStr;
 
 use crate::{
-    MatchingError, OrderBook, MAX_ORACLE_CONFIDENCE, MAX_ORACLE_DEVIATION, MAX_QUOTES_PER_AUCTION,
-    MAX_SAFE_AMOUNT,
+    safe_decimal_to_uint128, MatchingError, OrderBook, MAX_ORACLE_CONFIDENCE,
+    MAX_ORACLE_DEVIATION, MAX_QUOTES_PER_AUCTION, MAX_SAFE_AMOUNT,
 };
 
 /// SECURITY FIX (1.4): Nonce registry for replay protection
@@ -296,25 +296,42 @@ impl MatchingEngine {
         let mut buy_idx = 0;
         let mut sell_idx = 0;
 
-        let mut buy_remaining: Vec<Uint128> = buys.iter().map(|i| i.input.amount).collect();
-        let mut sell_remaining: Vec<Uint128> = sells.iter().map(|i| i.input.amount).collect();
+        // SECURITY FIX (ME-H1): Sort intents by price to prevent MEV extraction
+        // via submission order manipulation. Best-priced intents match first.
+        let mut sorted_buys: Vec<&Intent> = buys.to_vec();
+        sorted_buys.sort_by(|a, b| {
+            let pa = a.output.limit_price_decimal().unwrap_or(Decimal::ZERO);
+            let pb = b.output.limit_price_decimal().unwrap_or(Decimal::ZERO);
+            // Higher buy limit price = willing to pay more = better buyer = first
+            pb.cmp(&pa)
+        });
+        let mut sorted_sells: Vec<&Intent> = sells.to_vec();
+        sorted_sells.sort_by(|a, b| {
+            let pa = a.output.limit_price_decimal().unwrap_or(Decimal::MAX);
+            let pb = b.output.limit_price_decimal().unwrap_or(Decimal::MAX);
+            // Lower sell limit price = willing to accept less = better seller = first
+            pa.cmp(&pb)
+        });
+
+        let mut buy_remaining: Vec<Uint128> = sorted_buys.iter().map(|i| i.input.amount).collect();
+        let mut sell_remaining: Vec<Uint128> = sorted_sells.iter().map(|i| i.input.amount).collect();
 
         // Parse max deviation for sanity check
         let max_deviation = Decimal::from_str(MAX_ORACLE_DEVIATION).unwrap_or(Decimal::ONE);
 
         // Safety: track iterations to prevent infinite loops
-        let max_iterations = (buys.len() + sells.len()) * 2 + 10;
+        let max_iterations = (sorted_buys.len() + sorted_sells.len()) * 2 + 10;
         let mut iterations = 0;
 
-        while buy_idx < buys.len() && sell_idx < sells.len() {
+        while buy_idx < sorted_buys.len() && sell_idx < sorted_sells.len() {
             iterations += 1;
             if iterations > max_iterations {
                 // Safety exit - should never happen with correct logic
                 break;
             }
 
-            let buy = buys[buy_idx];
-            let sell = sells[sell_idx];
+            let buy = sorted_buys[buy_idx];
+            let sell = sorted_sells[sell_idx];
 
             let buy_amount = buy_remaining[buy_idx];
             let sell_amount = sell_remaining[sell_idx];
@@ -382,13 +399,57 @@ impl MatchingEngine {
             }
 
             // Convert to common units using the derived execution price
-            let buy_in_base = self.quote_to_base(buy_amount, execution_price);
+            let buy_in_base = self.quote_to_base(buy_amount, execution_price)?;
             let sell_in_base = sell_amount;
 
             let match_base = std::cmp::min(buy_in_base, sell_in_base);
-            let match_quote = self.base_to_quote(match_base, execution_price);
+            let match_quote = self.base_to_quote(match_base, execution_price)?;
 
             if !match_base.is_zero() {
+                // SECURITY FIX (ME-H2): Check fill constraints for both parties
+                let buy_fully_filled = match_quote >= buy_remaining[buy_idx];
+                let sell_fully_filled = match_base >= sell_remaining[sell_idx];
+
+                // Check buy-side fill constraints
+                if !buy_fully_filled && buy.fill_config.allow_partial {
+                    if !buy.fill_config.min_fill_amount.is_zero()
+                        && match_quote < buy.fill_config.min_fill_amount
+                    {
+                        sell_idx += 1;
+                        continue;
+                    }
+                    if let Ok(min_pct) = Decimal::from_str(&buy.fill_config.min_fill_pct) {
+                        if min_pct > Decimal::ZERO && !buy.input.amount.is_zero() {
+                            let fill_ratio = Decimal::from(match_quote.u128())
+                                / Decimal::from(buy.input.amount.u128());
+                            if fill_ratio < min_pct {
+                                sell_idx += 1;
+                                continue;
+                            }
+                        }
+                    }
+                }
+
+                // Check sell-side fill constraints
+                if !sell_fully_filled && sell.fill_config.allow_partial {
+                    if !sell.fill_config.min_fill_amount.is_zero()
+                        && match_base < sell.fill_config.min_fill_amount
+                    {
+                        sell_idx += 1;
+                        continue;
+                    }
+                    if let Ok(min_pct) = Decimal::from_str(&sell.fill_config.min_fill_pct) {
+                        if min_pct > Decimal::ZERO && !sell.input.amount.is_zero() {
+                            let fill_ratio = Decimal::from(match_base.u128())
+                                / Decimal::from(sell.input.amount.u128());
+                            if fill_ratio < min_pct {
+                                sell_idx += 1;
+                                continue;
+                            }
+                        }
+                    }
+                }
+
                 fills.push(AuctionFill {
                     intent_id: buy.id.clone(),
                     counterparty: sell.id.clone(),
@@ -410,7 +471,7 @@ impl MatchingEngine {
                 if buy_remaining[buy_idx].is_zero() {
                     buy_idx += 1;
                 }
-                if sell_idx < sells.len() && sell_remaining[sell_idx].is_zero() {
+                if sell_idx < sorted_sells.len() && sell_remaining[sell_idx].is_zero() {
                     sell_idx += 1;
                 }
             } else {
@@ -537,21 +598,21 @@ impl MatchingEngine {
         }
     }
 
-    fn quote_to_base(&self, quote_amount: Uint128, price: Decimal) -> Uint128 {
+    /// SECURITY FIX (ME-C3): Returns Result instead of silently returning 0 on overflow.
+    fn quote_to_base(&self, quote_amount: Uint128, price: Decimal) -> Result<Uint128, MatchingError> {
         if price.is_zero() {
-            return Uint128::zero();
+            return Ok(Uint128::zero());
         }
         let amount_dec = Decimal::from(quote_amount.u128());
         let base = amount_dec / price;
-        // Truncate to integer
-        Uint128::new(base.trunc().to_string().parse::<u128>().unwrap_or(0))
+        safe_decimal_to_uint128(base)
     }
 
-    fn base_to_quote(&self, base_amount: Uint128, price: Decimal) -> Uint128 {
+    /// SECURITY FIX (ME-C3): Returns Result instead of silently returning 0 on overflow.
+    fn base_to_quote(&self, base_amount: Uint128, price: Decimal) -> Result<Uint128, MatchingError> {
         let amount_dec = Decimal::from(base_amount.u128());
         let quote = amount_dec * price;
-        // Truncate to integer
-        Uint128::new(quote.trunc().to_string().parse::<u128>().unwrap_or(0))
+        safe_decimal_to_uint128(quote)
     }
 }
 
@@ -884,11 +945,11 @@ mod tests {
         let price = Decimal::from_str("10.0").unwrap();
 
         // 100 quote at price 10 = 10 base
-        let base = engine.quote_to_base(Uint128::new(100), price);
+        let base = engine.quote_to_base(Uint128::new(100), price).unwrap();
         assert_eq!(base, Uint128::new(10));
 
         // 50 quote at price 10 = 5 base
-        let base2 = engine.quote_to_base(Uint128::new(50), price);
+        let base2 = engine.quote_to_base(Uint128::new(50), price).unwrap();
         assert_eq!(base2, Uint128::new(5));
     }
 
@@ -898,11 +959,11 @@ mod tests {
         let price = Decimal::from_str("10.0").unwrap();
 
         // 10 base at price 10 = 100 quote
-        let quote = engine.base_to_quote(Uint128::new(10), price);
+        let quote = engine.base_to_quote(Uint128::new(10), price).unwrap();
         assert_eq!(quote, Uint128::new(100));
 
         // 5 base at price 10 = 50 quote
-        let quote2 = engine.base_to_quote(Uint128::new(5), price);
+        let quote2 = engine.base_to_quote(Uint128::new(5), price).unwrap();
         assert_eq!(quote2, Uint128::new(50));
     }
 

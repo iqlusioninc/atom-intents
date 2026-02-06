@@ -612,6 +612,14 @@ impl Solver for CexBackstopSolver {
                 })?;
 
         let remaining_dec = Decimal::from(ctx.remaining.u128());
+
+        // SECURITY FIX (S-C1): Guard against division by zero when remaining is zero
+        if remaining_dec.is_zero() {
+            return Err(SolveError::InvalidIntent {
+                reason: "zero remaining amount".into(),
+            });
+        }
+
         let user_min_output_dec = remaining_dec * limit_price;
         let output_amount_dec = Decimal::from(output_amount);
         let surplus_dec = (output_amount_dec - user_min_output_dec).max(Decimal::ZERO);
@@ -626,13 +634,29 @@ impl Solver for CexBackstopSolver {
         let output_to_user_dec = Decimal::from(output_to_user);
         let effective_price = output_to_user_dec / remaining_dec;
 
+        // SECURITY FIX (S-H7): Enforce max_solver_fee_bps in CEX solver (parity with DEX)
+        if let Some(max_fee_bps) = intent.constraints.max_solver_fee_bps {
+            if !output_amount_dec.is_zero() {
+                let fee_bps =
+                    (solver_fee_dec / output_amount_dec) * Decimal::from(10_000u32);
+                if fee_bps > Decimal::from(max_fee_bps) {
+                    return Err(SolveError::NoViableRoute);
+                }
+            }
+        }
+
+        // SECURITY FIX (S-C3): Use checked conversion instead of silent overflow
+        let remaining_i128 = i128::try_from(ctx.remaining.u128()).map_err(|_| {
+            SolveError::Overflow
+        })?;
+
         // SECURITY FIX (1.2): Update inventory with pending tracking for rollback
         // Use intent_id as the pending key - orchestrator will call confirm or rollback
         self.update_inventory_with_pending(
             &intent.id,
             &intent.input.denom,
             &intent.output.denom,
-            ctx.remaining.u128() as i128,
+            remaining_i128,
         );
 
         let current_time = std::time::SystemTime::now()

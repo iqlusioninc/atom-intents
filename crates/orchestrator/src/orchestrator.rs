@@ -565,13 +565,23 @@ impl IntentOrchestrator {
             // Get solver quotes for this pair
             let solver_quotes = self.get_solver_quotes(&pair).await;
 
-            // SECURITY FIX (1.1): Get oracle price with confidence
-            let (oracle_price, oracle_confidence) = self
+            // SECURITY FIX (O-C2): Skip auction when oracle is unavailable instead
+            // of using a hardcoded fallback price that could cause mispricing.
+            let (oracle_price, oracle_confidence) = match self
                 .solution_aggregator
                 .get_oracle_price_with_confidence(&pair)
                 .await
-                .ok()
-                .unwrap_or((Decimal::TEN, Decimal::from_str("0.01").unwrap()));
+            {
+                Ok(result) => result,
+                Err(e) => {
+                    warn!(
+                        pair = ?pair,
+                        error = %e,
+                        "Skipping auction: oracle unavailable"
+                    );
+                    continue;
+                }
+            };
 
             // Get current time for expiration checks
             let current_time = std::time::SystemTime::now()
@@ -730,16 +740,17 @@ impl IntentOrchestrator {
 
     /// Get solver quotes for a trading pair
     async fn get_solver_quotes(&self, pair: &TradingPair) -> Vec<SolverQuote> {
-        // Get oracle price for the pair
+        // SECURITY FIX (O-C2): Return empty quotes when oracle is unavailable
+        // instead of using a hardcoded fallback price.
         let oracle_price = match self.solution_aggregator.get_oracle_price(pair).await {
             Ok(price) => price,
             Err(e) => {
                 warn!(
                     pair = ?pair,
                     error = %e,
-                    "Failed to get oracle price for solver quotes, using default"
+                    "Skipping solver quotes: oracle unavailable"
                 );
-                Decimal::TEN
+                return Vec::new();
             }
         };
 
