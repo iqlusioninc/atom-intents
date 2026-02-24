@@ -20,6 +20,8 @@ The most urgent categories of findings are:
 
 **Overall Assessment:** The architecture is well-designed with strong security concepts (two-phase commit, solver bonds, reputation). However, implementation gaps between the design and the code create exploitable vulnerabilities. The system is **not ready for mainnet deployment** without addressing the Critical and High findings.
 
+**Formal Verification (added 2026-02-24):** A Quint formal specification (2024 lines, 21 actions, 17 invariants) was verified using Apalache bounded model checking (depth 5, exhaustive) and randomized simulation (1,000 traces × 50 steps). All invariants hold, confirming that the *design-level* state machine preserves fund safety, prevents double settlements/releases, and enforces solver bond non-negativity. See [Section 10](#10-formal-verification-quint--apalache) for details.
+
 ---
 
 ## Table of Contents
@@ -33,6 +35,7 @@ The most urgent categories of findings are:
 7. [Test Coverage Gaps](#7-test-coverage-gaps)
 8. [Dependencies & Supply Chain](#8-dependencies--supply-chain)
 9. [Prioritized Remediation Plan](#9-prioritized-remediation-plan)
+10. [Formal Verification (Quint / Apalache)](#10-formal-verification-quint--apalache)
 
 ---
 
@@ -347,6 +350,136 @@ The most urgent categories of findings are:
 | Medium | 7 | 8 | 7 | 6 | 7 | 9 | 9 | 6 | **59** |
 | Low/Info | 9 | 10 | 8 | 9 | 8 | 10 | 7 | 7 | **68** |
 | **Total** | **28** | **29** | **24** | **22** | **25** | **28** | **26** | **20** | **202** |
+
+---
+
+---
+
+## 10. Formal Verification (Quint / Apalache)
+
+**Specification:** `quint/atom_intents.qnt` (2024 lines)
+**Date of verification run:** 2026-02-24
+
+### Methodology
+
+The system was modeled as a state machine in [Quint](https://github.com/informalsystems/quint) (Informal Systems), covering the settlement contract, escrow contract, on-chain order fallback, and solver reputation subsystems. Verification used two complementary techniques:
+
+1. **Bounded model checking (Apalache)** — Exhaustive exploration of all reachable states up to depth 5 using the Apalache SMT-based model checker. Every interleaving of the 21 nondeterministic actions is checked against all 17 invariants.
+2. **Randomized simulation** — 1,000 random traces of 50 steps each, providing broader (but non-exhaustive) coverage of deeper state spaces.
+
+### Coverage
+
+**21 actions modeled** (mapping to Rust handlers in `contracts/settlement/src/handlers.rs` and `contracts/escrow/src/contract.rs`):
+
+| # | Action | Contract Handler |
+|---|--------|-----------------|
+| 1 | `registerSolver` | `execute_register_solver` |
+| 2 | `deregisterSolver` | `execute_deregister_solver` |
+| 3 | `createSettlement` | `execute_create_settlement` |
+| 4 | `markUserLocked` | `execute_mark_user_locked` |
+| 5 | `markSolverLocked` | `execute_mark_solver_locked` |
+| 6 | `markExecuting` | `execute_mark_executing` |
+| 7 | `markCompleted` | `execute_mark_completed` |
+| 8 | `executeSettlementLocal` | `execute_settlement` (same-chain path) |
+| 9 | `handleTimeout` | `execute_handle_timeout` |
+| 10 | `slashSolver` | `execute_slash_solver` |
+| 11 | `ibcRefundSucceeds` | escrow `execute_refund` (IBC ack success) |
+| 12 | `ibcRefundFails` | escrow `execute_refund` (IBC ack failure) |
+| 13 | `retryRefund` | escrow `execute_retry_refund` |
+| 14 | `submitOrder` | `execute_submit_order` |
+| 15 | `fillOrder` | `execute_fill_order` |
+| 16 | `refundExpiredOrder` | `execute_refund_expired_order` |
+| 17 | `cancelOrder` | `execute_cancel_order` |
+| 18 | `updateReputation` | `execute_update_reputation` |
+| 19 | `decayReputation` | `execute_decay_reputation` |
+| 20 | `advanceTime` | (environment / block time progression) |
+| 21 | `step` | (nondeterministic choice over all above) |
+
+**11 state variables** tracked: `solvers`, `settlements`, `escrows`, `orders`, `reputations`, `currentTime`, `ghostTotalLocked`, `ghostEscrowAmounts`, `ghostReleased`, `ghostRefunded`, `ghostOrderLocked`.
+
+### Invariants Verified
+
+All 17 invariants passed both bounded model checking (depth 5, exhaustive) and simulation (1,000 × 50 steps):
+
+| ID | Name | Property | Related Audit Findings |
+|----|------|----------|----------------------|
+| INV-1 | `validStatusInvariants` | Completed settlements are properly escrow-linked | ST-H1 |
+| INV-2 | `noDoubleSettlement` | Each intent maps to at most one settlement | ST-H2 |
+| INV-3 | `escrowConservation` | Sum of held escrow amounts = ghost tracker (no fund leakage) | ST-C1, ST-C2 |
+| INV-4 | `noDoubleRelease` | Each escrow exits to Released/Refunded at most once | ST-C4 |
+| INV-5 | `timeoutOrderingHolds` | `escrow_timeout > ibc_timeout + safety_buffer` | SC-C4 |
+| INV-6 | `fundSafety` | Completed → Released; Failed/Slashed → Refunded/Refunding/RefundFailed | ST-C1, ST-C2, SC-C4 |
+| INV-7 | `constraintSatisfied` | Completed output >= user's `minOutputAmount` | ME-H2 |
+| INV-8 | `solverBondNonNegative` | Slashing never drives a bond below zero | — |
+| INV-9 | `escrowIdPopulated` | Active post-lock settlements have a linked escrow | SC-C3 |
+| INV-10 | `oneEscrowPerIntent` | Each `intentId` has at most one escrow | ST-H3 |
+| INV-11 | `refundingImpliesCrossChain` | Only cross-chain escrows enter Refunding/RefundFailed | SC-H5 |
+| INV-12 | `activeSettlementHasSolver` | Active settlements reference a registered solver | SC-C2 |
+| INV-13 | `orderFundSafety` | Open/Cancelled/Expired orders have correct fund accounting | — |
+| INV-14 | `noDoubleFill` | Each order is filled at most once | — |
+| INV-15 | `filledOrderHasSolver` | Filled orders reference a non-empty solver ID | — |
+| INV-16 | `reputationScoreBounded` | Reputation scores stay in `[0, 10000]` bps | — |
+| INV-17 | `reputationConsistency` | `totalSettlements = successfulSettlements + failedSettlements` | — |
+
+### Test Suite
+
+21 unit tests covering happy paths, failure modes, and edge cases:
+
+| # | Test | Validates |
+|---|------|-----------|
+| 1 | `happyPathTest` | Full settlement lifecycle: create → lock → execute → complete |
+| 2 | `timeoutRecoveryTest` | IBC timeout triggers refund path |
+| 3 | `earlyFailureTest` | Pre-lock failure refunds user escrow |
+| 4 | `solverSlashTest` | Slash deducts bond, settlement marked Slashed |
+| 5 | `noDoubleSettlementTest` | Second settlement for same intent rejected |
+| 6 | `twoIntentsConcurrentTest` | Two independent settlements interleave correctly |
+| 7 | `deregisterSolverTest` | Solver deregistration recovers full bond |
+| 8 | `deregisterBlockedTest` | Deregistration blocked while settlement active |
+| 9 | `localSettlementTest` | Same-chain atomic settlement |
+| 10 | `crossChainRefundLifecycleTest` | Full IBC refund lifecycle including retry |
+| 11 | `orderHappyPathTest` | Submit order → fill → settlement created |
+| 12 | `orderExpiryTest` | Expired order refunded correctly |
+| 13 | `orderCancelTest` | Owner cancels open order |
+| 14 | `orderCancelUnauthorizedTest` | Non-owner cancel rejected |
+| 15 | `noDoubleFillTest` | Second fill on same order rejected |
+| 16 | `cannotFillExpiredOrderTest` | Fill on expired order rejected |
+| 17 | `duplicateOrderTest` | Duplicate order ID rejected |
+| 18 | `reputationSuccessTest` | Successful settlement increases reputation score |
+| 19 | `reputationSlashTest` | Slashing event decreases reputation score |
+| 20 | `reputationDecayTest` | Time-based reputation decay applied correctly |
+| 21 | `mixedSettlementAndOrderTest` | Settlement and order systems operate without interference |
+
+### Results
+
+```
+$ npx quint test quint/atom_intents.qnt
+  21 passing (3s)
+
+$ npx quint run --invariant allInvariants --max-samples 1000 --max-steps 50 quint/atom_intents.qnt
+  [ok] No violation found (1000 traces × 50 steps)
+
+$ npx quint verify --invariant allInvariants --max-steps 5 quint/atom_intents.qnt
+  [ok] No violation found (72s, Apalache bounded model checking, depth 5)
+```
+
+### Findings Confirmed by Formal Verification
+
+The following audit findings are directly addressed by Quint invariants that hold under exhaustive verification:
+
+| Audit Finding | Invariant | Status |
+|---------------|-----------|--------|
+| SC-C2 (deregistration escapes slashing) | INV-12 `activeSettlementHasSolver` | **Modeled guard holds**: deregistration blocked while any settlement is active |
+| SC-C4 (expiry boundary race) | INV-5 `timeoutOrderingHolds`, INV-6 `fundSafety` | **Safety proven**: timeout ordering prevents double-spend at boundary |
+| ST-C1, ST-C2 (non-atomic rollback) | INV-3 `escrowConservation`, INV-6 `fundSafety` | **Fund safety proven** at model level; implementation atomicity still requires code-level fix |
+| ST-C4 (IBC ack not validated) | INV-4 `noDoubleRelease` | **No double release** proven; ack validation still needed at implementation level |
+| ST-H1 (no state machine validation) | INV-1 `validStatusInvariants` | **State machine transitions validated** in model |
+
+### Limitations
+
+1. **Bounded depth** — Apalache verification is exhaustive only up to 5 steps. Deeper bugs (requiring 6+ transitions) are covered only by simulation, not proof.
+2. **Abstraction gap** — The Quint model abstracts over IBC packet mechanics, CosmWasm execution semantics, and gas limits. Invariants proven at the model level must still be validated against the Rust implementation.
+3. **Numeric precision** — The model uses unbounded integers. Rust `Uint128` overflow and decimal rounding behaviors are not captured.
+4. **Concurrency** — The model uses sequential nondeterminism (one action per step). True concurrent message delivery on-chain is not modeled.
 
 ---
 
