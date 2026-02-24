@@ -138,7 +138,7 @@ pub fn execute(
         ExecuteMsg::HandleIbcAck {
             settlement_id,
             success,
-        } => execute_handle_ibc_ack(deps, info, settlement_id, success),
+        } => execute_handle_ibc_ack(deps, env, info, settlement_id, success),
         ExecuteMsg::UpdateReputation { solver_id } => {
             execute_update_reputation(deps, env, info, solver_id)
         }
@@ -3225,5 +3225,57 @@ mod tests {
         )
         .unwrap();
         assert_eq!(result3.solvers.len(), 1);
+    }
+
+    #[test]
+    fn test_handle_ibc_ack_expired_settlement() {
+        let (mut deps, mut env, addrs) = setup_contract();
+        register_solver(&mut deps, &env, &addrs, "solver-1", 2_000_000);
+        create_settlement(&mut deps, &env, &addrs, "settlement-1", "solver-1");
+
+        // Move to Executing state
+        let info = message_info(&addrs.escrow, &[]);
+        execute(
+            deps.as_mut(),
+            env.clone(),
+            info,
+            ExecuteMsg::MarkUserLocked {
+                settlement_id: "settlement-1".to_string(),
+                escrow_id: "escrow-123".to_string(),
+            },
+        )
+        .unwrap();
+
+        mark_solver_locked(&mut deps, &env, &addrs, "settlement-1");
+
+        let info = message_info(&addrs.admin, &[]);
+        execute(
+            deps.as_mut(),
+            env.clone(),
+            info,
+            ExecuteMsg::ExecuteSettlement {
+                settlement_id: "settlement-1".to_string(),
+                ibc_channel: "channel-0".to_string(),
+            },
+        )
+        .unwrap();
+
+        // Fast forward time past expiry
+        env.block.time = Timestamp::from_seconds(env.block.time.seconds() + 7200);
+
+        // Handle IBC ack after expiry should fail
+        let info = message_info(&addrs.admin, &[]);
+        let err = execute(
+            deps.as_mut(),
+            env,
+            info,
+            ExecuteMsg::HandleIbcAck {
+                settlement_id: "settlement-1".to_string(),
+                success: true,
+            },
+        )
+        .unwrap_err();
+
+        assert!(matches!(err, ContractError::SettlementExpired {}));
     }
 }

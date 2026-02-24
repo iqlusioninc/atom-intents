@@ -411,13 +411,6 @@ pub fn execute_slash_solver(
         return Err(ContractError::Unauthorized {});
     }
 
-    let mut solver =
-        SOLVERS
-            .load(deps.storage, &solver_id)
-            .map_err(|_| ContractError::SolverNotRegistered {
-                id: solver_id.clone(),
-            })?;
-
     let mut settlement = SETTLEMENTS
         .load(deps.storage, &settlement_id)
         .map_err(|_| ContractError::SettlementNotFound {
@@ -435,18 +428,22 @@ pub fn execute_slash_solver(
         });
     }
 
-    // Calculate slash amount (base_slash_bps of settlement value)
-    let calculated_slash = settlement.user_input_amount * Uint128::from(config.base_slash_bps)
-        / Uint128::from(10000u64);
-
-    // SECURITY FIX (1.7): Apply minimum slash threshold to prevent dust attacks
-    let slash_with_minimum = std::cmp::max(calculated_slash, Uint128::new(MIN_SLASH_AMOUNT));
-
-    // Cap at solver's bond amount
-    let actual_slash = std::cmp::min(slash_with_minimum, solver.bond_amount);
-
-    solver.bond_amount = solver.bond_amount.saturating_sub(actual_slash);
-    SOLVERS.save(deps.storage, &solver_id, &solver)?;
+    // Atomic read-modify-write to prevent TOCTOU on solver bond
+    let mut actual_slash = Uint128::zero();
+    SOLVERS.update(deps.storage, &solver_id, |maybe_solver| -> Result<_, ContractError> {
+        let mut solver = maybe_solver.ok_or_else(|| ContractError::SolverNotRegistered {
+            id: solver_id.clone(),
+        })?;
+        // Calculate slash amount (base_slash_bps of settlement value)
+        let calculated_slash = settlement.user_input_amount * Uint128::from(config.base_slash_bps)
+            / Uint128::from(10000u64);
+        // SECURITY FIX (1.7): Apply minimum slash threshold to prevent dust attacks
+        let slash_with_minimum = std::cmp::max(calculated_slash, Uint128::new(MIN_SLASH_AMOUNT));
+        // Cap at solver's bond amount
+        actual_slash = std::cmp::min(slash_with_minimum, solver.bond_amount);
+        solver.bond_amount = solver.bond_amount.saturating_sub(actual_slash);
+        Ok(solver)
+    })?;
 
     // Update settlement status
     settlement.status = SettlementStatus::Slashed {
@@ -773,6 +770,7 @@ pub fn execute_handle_timeout(
 
 pub fn execute_handle_ibc_ack(
     deps: DepsMut,
+    env: Env,
     info: MessageInfo,
     settlement_id: String,
     success: bool,
@@ -810,6 +808,11 @@ pub fn execute_handle_ibc_ack(
                 from: "Executing".to_string(),
                 to: "No escrow_id found".to_string(),
             })?;
+
+    // SC-C4: Block completion after settlement expiry
+    if env.block.time.seconds() >= settlement.expires_at {
+        return Err(ContractError::SettlementExpired {});
+    }
 
     if success {
         // Update solver stats
