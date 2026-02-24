@@ -33,3 +33,7 @@ demo/testnet/testnet.env
 
 # Git worktrees
 .worktrees/
+
+# Apalache model checker output
+_apalache-out/
+**/ITF/

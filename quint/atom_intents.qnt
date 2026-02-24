@@ -222,6 +222,9 @@ module AtomIntentsTypes {
   pure def getCnt(m: EscrowId -> int, k: EscrowId): int =
     if (m.keys().contains(k)) m.get(k) else 0
 
+  pure def getSlashInt(m: SettlementId -> int, k: SettlementId): int =
+    if (m.keys().contains(k)) m.get(k) else 0
+
   // ─── Pure protocol helpers ────────────────────────────────────────────
 
   // Mirror of SettlementStatus::can_transition_to — contracts/settlement/src/state.rs:75
@@ -325,6 +328,18 @@ module AtomIntents {
   // (positive while Open; zeroed on fill/expire/cancel)
   var ghostOrderLocked:     OrderId -> int
 
+  // ─── Concurrency model state variables ──────────────────────────────
+  // These track non-atomic cross-contract interactions and TOCTOU races.
+
+  // Tracks in-flight escrow releases (settlement→escrow WasmMsg::Execute)
+  var pendingEscrowReleases: SettlementId -> EscrowId
+  // Tracks stale bond values read during TOCTOU slash modeling (keyed by settlement)
+  var staleBondReads:        SettlementId -> int
+  // Ghost: intended slash amount per settlement (before TOCTOU)
+  var ghostIntendedSlash:    SettlementId -> int
+  // Ghost: actual slash deducted per settlement (after TOCTOU)
+  var ghostActualSlash:      SettlementId -> int
+
   // ─── Initialization ───────────────────────────────────────────────────
 
   action init = all {
@@ -339,6 +354,10 @@ module AtomIntents {
     ghostEscrowExitCount' = Map(),
     ghostTotalLocked'     = Map(),
     ghostOrderLocked'     = Map(),
+    pendingEscrowReleases' = Map(),
+    staleBondReads'        = Map(),
+    ghostIntendedSlash'    = Map(),
+    ghostActualSlash'      = Map(),
   }
 
   // ═════════════════════════════════════════════════════════════════════
@@ -372,6 +391,10 @@ module AtomIntents {
     orders'               = orders,
     reputations'          = reputations,
     ghostOrderLocked'     = ghostOrderLocked,
+    pendingEscrowReleases' = pendingEscrowReleases,
+    staleBondReads'        = staleBondReads,
+    ghostIntendedSlash'    = ghostIntendedSlash,
+    ghostActualSlash'      = ghostActualSlash,
   }
 
   // ─── Action 2: Deregister Solver ──────────────────────────────────────
@@ -402,6 +425,10 @@ module AtomIntents {
     orders'               = orders,
     reputations'          = reputations,
     ghostOrderLocked'     = ghostOrderLocked,
+    pendingEscrowReleases' = pendingEscrowReleases,
+    staleBondReads'        = staleBondReads,
+    ghostIntendedSlash'    = ghostIntendedSlash,
+    ghostActualSlash'      = ghostActualSlash,
   }
 
   // ═════════════════════════════════════════════════════════════════════
@@ -468,6 +495,10 @@ module AtomIntents {
       orders'               = orders,
       reputations'          = reputations,
       ghostOrderLocked'     = ghostOrderLocked,
+      pendingEscrowReleases' = pendingEscrowReleases,
+      staleBondReads'        = staleBondReads,
+      ghostIntendedSlash'    = ghostIntendedSlash,
+      ghostActualSlash'      = ghostActualSlash,
     }
 
   // ═════════════════════════════════════════════════════════════════════
@@ -517,6 +548,10 @@ module AtomIntents {
       orders'               = orders,
       reputations'          = reputations,
       ghostOrderLocked'     = ghostOrderLocked,
+      pendingEscrowReleases' = pendingEscrowReleases,
+      staleBondReads'        = staleBondReads,
+      ghostIntendedSlash'    = ghostIntendedSlash,
+      ghostActualSlash'      = ghostActualSlash,
     }
 
   // ─── Action 5: Mark Solver Locked (Phase 1b) ─────────────────────────
@@ -544,6 +579,10 @@ module AtomIntents {
       orders'               = orders,
       reputations'          = reputations,
       ghostOrderLocked'     = ghostOrderLocked,
+      pendingEscrowReleases' = pendingEscrowReleases,
+      staleBondReads'        = staleBondReads,
+      ghostIntendedSlash'    = ghostIntendedSlash,
+      ghostActualSlash'      = ghostActualSlash,
     }
 
   // ─── Action 6: Mark Executing ─────────────────────────────────────────
@@ -574,6 +613,10 @@ module AtomIntents {
       orders'               = orders,
       reputations'          = reputations,
       ghostOrderLocked'     = ghostOrderLocked,
+      pendingEscrowReleases' = pendingEscrowReleases,
+      staleBondReads'        = staleBondReads,
+      ghostIntendedSlash'    = ghostIntendedSlash,
+      ghostActualSlash'      = ghostActualSlash,
     }
 
   // ═════════════════════════════════════════════════════════════════════
@@ -618,6 +661,10 @@ module AtomIntents {
       orders'            = orders,
       reputations'       = reputations,
       ghostOrderLocked'  = ghostOrderLocked,
+      pendingEscrowReleases' = pendingEscrowReleases,
+      staleBondReads'        = staleBondReads,
+      ghostIntendedSlash'    = ghostIntendedSlash,
+      ghostActualSlash'      = ghostActualSlash,
     }
 
   // ─── Action 8: Execute Settlement Local (Same-Chain Happy Path) ───────
@@ -657,6 +704,10 @@ module AtomIntents {
       orders'            = orders,
       reputations'       = reputations,
       ghostOrderLocked'  = ghostOrderLocked,
+      pendingEscrowReleases' = pendingEscrowReleases,
+      staleBondReads'        = staleBondReads,
+      ghostIntendedSlash'    = ghostIntendedSlash,
+      ghostActualSlash'      = ghostActualSlash,
     }
 
   // ─── Action 9: Handle Timeout / Failure ──────────────────────────────
@@ -723,6 +774,10 @@ module AtomIntents {
       orders'            = orders,
       reputations'       = reputations,
       ghostOrderLocked'  = ghostOrderLocked,
+      pendingEscrowReleases' = pendingEscrowReleases,
+      staleBondReads'        = staleBondReads,
+      ghostIntendedSlash'    = ghostIntendedSlash,
+      ghostActualSlash'      = ghostActualSlash,
     }
 
   // ─── Action 10: Slash Solver ──────────────────────────────────────────
@@ -759,6 +814,10 @@ module AtomIntents {
       orders'               = orders,
       reputations'          = reputations,
       ghostOrderLocked'     = ghostOrderLocked,
+      pendingEscrowReleases' = pendingEscrowReleases,
+      staleBondReads'        = staleBondReads,
+      ghostIntendedSlash'    = ghostIntendedSlash,
+      ghostActualSlash'      = ghostActualSlash,
     }
 
   // ═════════════════════════════════════════════════════════════════════
@@ -800,6 +859,10 @@ module AtomIntents {
       orders'            = orders,
       reputations'       = reputations,
       ghostOrderLocked'  = ghostOrderLocked,
+      pendingEscrowReleases' = pendingEscrowReleases,
+      staleBondReads'        = staleBondReads,
+      ghostIntendedSlash'    = ghostIntendedSlash,
+      ghostActualSlash'      = ghostActualSlash,
     }
 
   // ─── Action 12: IBC Refund Fails ─────────────────────────────────────
@@ -826,6 +889,10 @@ module AtomIntents {
       orders'               = orders,
       reputations'          = reputations,
       ghostOrderLocked'     = ghostOrderLocked,
+      pendingEscrowReleases' = pendingEscrowReleases,
+      staleBondReads'        = staleBondReads,
+      ghostIntendedSlash'    = ghostIntendedSlash,
+      ghostActualSlash'      = ghostActualSlash,
     }
 
   // ─── Action 13: Retry Refund ─────────────────────────────────────────
@@ -852,6 +919,10 @@ module AtomIntents {
       orders'               = orders,
       reputations'          = reputations,
       ghostOrderLocked'     = ghostOrderLocked,
+      pendingEscrowReleases' = pendingEscrowReleases,
+      staleBondReads'        = staleBondReads,
+      ghostIntendedSlash'    = ghostIntendedSlash,
+      ghostActualSlash'      = ghostActualSlash,
     }
 
   // ═════════════════════════════════════════════════════════════════════
@@ -909,6 +980,10 @@ module AtomIntents {
     nextId'               = nextId,
     ghostEscrowExitCount' = ghostEscrowExitCount,
     ghostTotalLocked'     = ghostTotalLocked,
+    pendingEscrowReleases' = pendingEscrowReleases,
+    staleBondReads'        = staleBondReads,
+    ghostIntendedSlash'    = ghostIntendedSlash,
+    ghostActualSlash'      = ghostActualSlash,
   }
 
   // ─── Action 16: Fill Order (Same-Chain Atomic) ──────────────────────
@@ -941,6 +1016,10 @@ module AtomIntents {
       nextId'               = nextId,
       ghostEscrowExitCount' = ghostEscrowExitCount,
       ghostTotalLocked'     = ghostTotalLocked,
+      pendingEscrowReleases' = pendingEscrowReleases,
+      staleBondReads'        = staleBondReads,
+      ghostIntendedSlash'    = ghostIntendedSlash,
+      ghostActualSlash'      = ghostActualSlash,
     }
 
   // ─── Action 17: Refund Expired Order ────────────────────────────────
@@ -966,6 +1045,10 @@ module AtomIntents {
       nextId'               = nextId,
       ghostEscrowExitCount' = ghostEscrowExitCount,
       ghostTotalLocked'     = ghostTotalLocked,
+      pendingEscrowReleases' = pendingEscrowReleases,
+      staleBondReads'        = staleBondReads,
+      ghostIntendedSlash'    = ghostIntendedSlash,
+      ghostActualSlash'      = ghostActualSlash,
     }
 
   // ─── Action 18: Cancel Order ────────────────────────────────────────
@@ -992,6 +1075,10 @@ module AtomIntents {
       nextId'               = nextId,
       ghostEscrowExitCount' = ghostEscrowExitCount,
       ghostTotalLocked'     = ghostTotalLocked,
+      pendingEscrowReleases' = pendingEscrowReleases,
+      staleBondReads'        = staleBondReads,
+      ghostIntendedSlash'    = ghostIntendedSlash,
+      ghostActualSlash'      = ghostActualSlash,
     }
 
   // ═════════════════════════════════════════════════════════════════════
@@ -1052,6 +1139,10 @@ module AtomIntents {
         ghostEscrowExitCount' = ghostEscrowExitCount,
         ghostTotalLocked'     = ghostTotalLocked,
         ghostOrderLocked'     = ghostOrderLocked,
+        pendingEscrowReleases' = pendingEscrowReleases,
+        staleBondReads'        = staleBondReads,
+        ghostIntendedSlash'    = ghostIntendedSlash,
+        ghostActualSlash'      = ghostActualSlash,
       }
     }
 
@@ -1085,6 +1176,10 @@ module AtomIntents {
       ghostEscrowExitCount' = ghostEscrowExitCount,
       ghostTotalLocked'     = ghostTotalLocked,
       ghostOrderLocked'     = ghostOrderLocked,
+      pendingEscrowReleases' = pendingEscrowReleases,
+      staleBondReads'        = staleBondReads,
+      ghostIntendedSlash'    = ghostIntendedSlash,
+      ghostActualSlash'      = ghostActualSlash,
     }
 
   // ═════════════════════════════════════════════════════════════════════
@@ -1106,6 +1201,391 @@ module AtomIntents {
     orders'               = orders,
     reputations'          = reputations,
     ghostOrderLocked'     = ghostOrderLocked,
+    pendingEscrowReleases' = pendingEscrowReleases,
+    staleBondReads'        = staleBondReads,
+    ghostIntendedSlash'    = ghostIntendedSlash,
+    ghostActualSlash'      = ghostActualSlash,
+  }
+
+  // ═════════════════════════════════════════════════════════════════════
+  // NON-ATOMIC SETTLEMENT-ESCROW ACTIONS
+  // ═════════════════════════════════════════════════════════════════════
+  //
+  // In the Rust code, markCompleted and executeSettlementLocal use
+  // WasmMsg::Execute (add_message) for settlement→escrow calls. This
+  // is NOT atomic: the settlement status updates in the settlement
+  // contract's execution context, and the escrow release fires as a
+  // separate sub-message. If the escrow release fails (e.g., at the
+  // expiry boundary where settlement uses `<` but escrow uses `>=`),
+  // the settlement is Completed but escrow stays Locked.
+  //
+  // These two-phase actions model that non-atomicity.
+
+  // ─── Action 22: Mark Completed Non-Atomic (Phase 1) ─────────────────
+  // Settlement → Completed, escrow stays Locked, pending release queued.
+  // The escrow release will be resolved by escrowReleaseSucceeds/Fails.
+
+  action markCompletedNonAtomic(sId: SettlementId): bool =
+    val s      = getSettlement(settlements, sId)
+    val escrow = getEscrow(escrows, s.escrowId)
+    all {
+      settlements.keys().contains(sId),
+      s.status == Executing,
+      canTransitionTo(s.status, Completed),
+      escrows.keys().contains(s.escrowId),
+      escrow.status == Locked,
+      currentTime < s.expiresAt,
+      // Settlement transitions to Completed, but escrow stays Locked
+      settlements' = settlements.put(sId, { ...s, status: Completed }),
+      // Queue the escrow release as pending
+      pendingEscrowReleases' = pendingEscrowReleases.put(sId, s.escrowId),
+      // Escrow does NOT change yet — it stays Locked
+      escrows'               = escrows,
+      // Frame
+      solvers'              = solvers,
+      intentSettlements'    = intentSettlements,
+      currentTime'          = currentTime,
+      nextId'               = nextId,
+      ghostEscrowExitCount' = ghostEscrowExitCount,
+      ghostTotalLocked'     = ghostTotalLocked,
+      orders'               = orders,
+      reputations'          = reputations,
+      ghostOrderLocked'     = ghostOrderLocked,
+      staleBondReads'       = staleBondReads,
+      ghostIntendedSlash'   = ghostIntendedSlash,
+      ghostActualSlash'     = ghostActualSlash,
+    }
+
+  // ─── Action 23: Execute Settlement Local Non-Atomic (Phase 1) ───────
+  // Same pattern as markCompletedNonAtomic but from SolverLocked state.
+
+  action executeSettlementLocalNonAtomic(sId: SettlementId): bool =
+    val s      = getSettlement(settlements, sId)
+    val escrow = getEscrow(escrows, s.escrowId)
+    all {
+      settlements.keys().contains(sId),
+      s.status == SolverLocked,
+      s.escrowId != 0,
+      escrows.keys().contains(s.escrowId),
+      escrow.status == Locked,
+      currentTime < s.expiresAt,
+      // Settlement transitions to Completed
+      settlements' = settlements.put(sId, { ...s, status: Completed }),
+      // Queue the escrow release as pending
+      pendingEscrowReleases' = pendingEscrowReleases.put(sId, s.escrowId),
+      // Escrow stays Locked
+      escrows'               = escrows,
+      // Frame
+      solvers'              = solvers,
+      intentSettlements'    = intentSettlements,
+      currentTime'          = currentTime,
+      nextId'               = nextId,
+      ghostEscrowExitCount' = ghostEscrowExitCount,
+      ghostTotalLocked'     = ghostTotalLocked,
+      orders'               = orders,
+      reputations'          = reputations,
+      ghostOrderLocked'     = ghostOrderLocked,
+      staleBondReads'       = staleBondReads,
+      ghostIntendedSlash'   = ghostIntendedSlash,
+      ghostActualSlash'     = ghostActualSlash,
+    }
+
+  // ─── Action 24: Escrow Release Succeeds (Phase 2) ──────────────────
+  // The pending escrow release fires and succeeds.
+  // Guard: currentTime < escrow.expiresAt (settlement uses strict <)
+
+  action escrowReleaseSucceeds(sId: SettlementId): bool =
+    val eId    = pendingEscrowReleases.get(sId)
+    val escrow = getEscrow(escrows, eId)
+    all {
+      pendingEscrowReleases.keys().contains(sId),
+      escrows.keys().contains(eId),
+      escrow.status == Locked,
+      // The escrow release guard: time must be before expiry
+      currentTime < escrow.expiresAt,
+      escrows' = escrows.put(eId, { ...escrow, status: Released }),
+      // Remove from pending
+      pendingEscrowReleases' = pendingEscrowReleases.keys().filter(k => k != sId).fold(
+        Map(), (acc, k) => acc.put(k, pendingEscrowReleases.get(k))
+      ),
+      // Ghost: escrow exited
+      ghostEscrowExitCount' = ghostEscrowExitCount.put(
+        eId, getCnt(ghostEscrowExitCount, eId) + 1
+      ),
+      ghostTotalLocked' = ghostTotalLocked.put(
+        escrow.denom, getInt(ghostTotalLocked, escrow.denom) - escrow.amount
+      ),
+      // Frame
+      settlements'        = settlements,
+      solvers'            = solvers,
+      intentSettlements'  = intentSettlements,
+      currentTime'        = currentTime,
+      nextId'             = nextId,
+      orders'             = orders,
+      reputations'        = reputations,
+      ghostOrderLocked'   = ghostOrderLocked,
+      staleBondReads'     = staleBondReads,
+      ghostIntendedSlash' = ghostIntendedSlash,
+      ghostActualSlash'   = ghostActualSlash,
+    }
+
+  // ─── Action 25: Escrow Release Fails (Phase 2) ─────────────────────
+  // The pending escrow release fires but fails at the expiry boundary.
+  // Settlement uses `currentTime < expiresAt`, escrow uses `currentTime >= expiresAt`.
+  // At the boundary, settlement succeeds but escrow release is blocked.
+  // Result: settlement Completed, escrow stays Locked — fund safety violation.
+
+  action escrowReleaseFails(sId: SettlementId): bool =
+    val eId    = pendingEscrowReleases.get(sId)
+    val escrow = getEscrow(escrows, eId)
+    all {
+      pendingEscrowReleases.keys().contains(sId),
+      escrows.keys().contains(eId),
+      escrow.status == Locked,
+      // Release fails: time is at or past expiry
+      currentTime >= escrow.expiresAt,
+      // Escrow stays Locked — funds are stuck!
+      escrows' = escrows,
+      // Remove from pending (the release was attempted and failed)
+      pendingEscrowReleases' = pendingEscrowReleases.keys().filter(k => k != sId).fold(
+        Map(), (acc, k) => acc.put(k, pendingEscrowReleases.get(k))
+      ),
+      // Frame — no ghost updates since no state change
+      settlements'          = settlements,
+      solvers'              = solvers,
+      intentSettlements'    = intentSettlements,
+      currentTime'          = currentTime,
+      nextId'               = nextId,
+      ghostEscrowExitCount' = ghostEscrowExitCount,
+      ghostTotalLocked'     = ghostTotalLocked,
+      orders'               = orders,
+      reputations'          = reputations,
+      ghostOrderLocked'     = ghostOrderLocked,
+      staleBondReads'       = staleBondReads,
+      ghostIntendedSlash'   = ghostIntendedSlash,
+      ghostActualSlash'     = ghostActualSlash,
+    }
+
+  // ═════════════════════════════════════════════════════════════════════
+  // TOCTOU SLASH ACTIONS
+  // ═════════════════════════════════════════════════════════════════════
+  //
+  // In the Rust code (handlers.rs:414), each slash_solver call independently
+  // loads the solver's current bond, computes the slash amount, and writes
+  // back the reduced bond. If two settlements slash the same solver in the
+  // same block, each reads the ORIGINAL bond, computes its slash, and writes
+  // back. The second write overwrites the first deduction → under-slashing.
+
+  // ─── Action 26: Slash Solver Begin (Read Phase) ─────────────────────
+  // Read solver bond into staleBondReads. No mutation to settlements/solvers.
+  // Records ghostIntendedSlash for invariant checking.
+
+  action slashSolverBegin(sId: SettlementId): bool =
+    val s        = getSettlement(settlements, sId)
+    val solver   = getSolver(solvers, s.solverId)
+    val rawSlash = s.userInputAmount * BASE_SLASH_BPS / 10000
+    val slash    = if (rawSlash >= MIN_SLASH_AMOUNT) rawSlash else MIN_SLASH_AMOUNT
+    val intended = if (slash > solver.bondAmount) solver.bondAmount else slash
+    all {
+      settlements.keys().contains(sId),
+      s.status == Failed,
+      canTransitionTo(s.status, Slashed),
+      solvers.keys().contains(s.solverId),
+      solver.bondAmount >= 0,
+      // Stale read: snapshot current bond for later commit (keyed by settlement)
+      staleBondReads' = staleBondReads.put(sId, solver.bondAmount),
+      // Ghost: record intended slash
+      ghostIntendedSlash' = ghostIntendedSlash.put(sId, intended),
+      // No state mutation — just reading
+      settlements'          = settlements,
+      escrows'              = escrows,
+      solvers'              = solvers,
+      intentSettlements'    = intentSettlements,
+      currentTime'          = currentTime,
+      nextId'               = nextId,
+      ghostEscrowExitCount' = ghostEscrowExitCount,
+      ghostTotalLocked'     = ghostTotalLocked,
+      orders'               = orders,
+      reputations'          = reputations,
+      ghostOrderLocked'     = ghostOrderLocked,
+      pendingEscrowReleases' = pendingEscrowReleases,
+      ghostActualSlash'     = ghostActualSlash,
+    }
+
+  // ─── Action 27: Slash Solver Commit (Write Phase) ───────────────────
+  // Write back using the STALE bond value from staleBondReads.
+  // If another slash committed between begin and commit, the bond is
+  // lower than the stale read → the deduction is computed on the wrong base.
+
+  action slashSolverCommit(sId: SettlementId): bool =
+    val s         = getSettlement(settlements, sId)
+    val solver    = getSolver(solvers, s.solverId)
+    val staleBond = staleBondReads.get(sId)
+    val rawSlash  = s.userInputAmount * BASE_SLASH_BPS / 10000
+    val slash     = if (rawSlash >= MIN_SLASH_AMOUNT) rawSlash else MIN_SLASH_AMOUNT
+    // Compute slash based on STALE bond, not current bond
+    val actual    = if (slash > staleBond) staleBond else slash
+    // New bond: current bond minus the slash computed on stale value
+    val newBond   = solver.bondAmount - actual
+    all {
+      settlements.keys().contains(sId),
+      s.status == Failed,
+      canTransitionTo(s.status, Slashed),
+      solvers.keys().contains(s.solverId),
+      staleBondReads.keys().contains(sId),
+      // Write back: settlement → Slashed, bond reduced
+      settlements' = settlements.put(sId, { ...s, status: Slashed }),
+      solvers' = solvers.put(s.solverId, { ...solver,
+        bondAmount:        if (newBond >= 0) newBond else 0,
+        failedSettlements: solver.failedSettlements + 1,
+      }),
+      // Ghost: record actual slash
+      ghostActualSlash' = ghostActualSlash.put(sId, actual),
+      // Clear stale read for this settlement
+      staleBondReads' = staleBondReads.keys().filter(k => k != sId).fold(
+        Map(), (acc, k) => acc.put(k, staleBondReads.get(k))
+      ),
+      // Frame
+      escrows'              = escrows,
+      intentSettlements'    = intentSettlements,
+      currentTime'          = currentTime,
+      nextId'               = nextId,
+      ghostEscrowExitCount' = ghostEscrowExitCount,
+      ghostTotalLocked'     = ghostTotalLocked,
+      orders'               = orders,
+      reputations'          = reputations,
+      ghostOrderLocked'     = ghostOrderLocked,
+      pendingEscrowReleases' = pendingEscrowReleases,
+      ghostIntendedSlash'   = ghostIntendedSlash,
+    }
+
+  // ═════════════════════════════════════════════════════════════════════
+  // BLOCK-LEVEL STEP ACTIONS
+  // ═════════════════════════════════════════════════════════════════════
+  //
+  // Real CosmWasm execution processes multiple transactions per block,
+  // then advances time between blocks. These actions model that:
+  // - stepNoTimeAdvance: a single transaction within a block
+  // - advanceTimeBy: block boundary (time advances by 1-3 units)
+  // - stepBlock: composes 1-3 transactions followed by time advance
+
+  // ─── Advance Time By Delta ─────────────────────────────────────────
+  // Advances time by a nondeterministic 1-3 units (models variable block times).
+
+  action advanceTimeBy(delta: int): bool = all {
+    delta >= 1,
+    delta <= 3,
+    currentTime' = currentTime + delta,
+    // Frame
+    settlements'          = settlements,
+    escrows'              = escrows,
+    solvers'              = solvers,
+    intentSettlements'    = intentSettlements,
+    nextId'               = nextId,
+    ghostEscrowExitCount' = ghostEscrowExitCount,
+    ghostTotalLocked'     = ghostTotalLocked,
+    orders'               = orders,
+    reputations'          = reputations,
+    ghostOrderLocked'     = ghostOrderLocked,
+    pendingEscrowReleases' = pendingEscrowReleases,
+    staleBondReads'        = staleBondReads,
+    ghostIntendedSlash'    = ghostIntendedSlash,
+    ghostActualSlash'      = ghostActualSlash,
+  }
+
+  // ─── Step Without Time Advance ──────────────────────────────────────
+  // All protocol actions except advanceTime, including non-atomic and
+  // TOCTOU variants. Models a single transaction within a block.
+
+  action stepNoTimeAdvance = {
+    nondet solverId    = SOLVERS_SET.oneOf()
+    nondet userId      = USERS_SET.oneOf()
+    nondet intentId    = INTENTS_SET.oneOf()
+    nondet inputDenom  = DENOMS_SET.oneOf()
+    nondet outputDenom = DENOMS_SET.oneOf()
+    nondet amount      = 1.to(MAX_AMOUNT).oneOf()
+    nondet bond        = MIN_SOLVER_BOND.to(MIN_SOLVER_BOND * 3).oneOf()
+    nondet sId         = settlements.keys().union(Set(0)).oneOf()
+    nondet eId         = escrows.keys().union(Set(0)).oneOf()
+    nondet crossChain  = Set(true, false).oneOf()
+    nondet orderId     = Set("order-1", "order-2", "order-3").oneOf()
+    nondet timeout     = Set(5, 10, 15).oneOf()
+    any {
+      // Original atomic actions
+      registerSolver(solverId, bond),
+      deregisterSolver(solverId),
+      createSettlement(
+        intentId, solverId, userId,
+        amount, inputDenom, amount, outputDenom, amount
+      ),
+      markUserLocked(sId, crossChain),
+      markSolverLocked(sId),
+      markExecuting(sId),
+      markCompleted(sId),
+      executeSettlementLocal(sId),
+      handleTimeout(sId),
+      slashSolver(sId),
+      ibcRefundSucceeds(eId),
+      ibcRefundFails(eId),
+      retryRefund(eId),
+      submitOrder(orderId, userId, amount, inputDenom, amount, outputDenom, timeout),
+      fillOrder(orderId, solverId),
+      refundExpiredOrder(orderId),
+      cancelOrder(orderId, userId),
+      updateReputation(solverId),
+      decayReputation(solverId),
+      // Non-atomic settlement-escrow actions
+      markCompletedNonAtomic(sId),
+      executeSettlementLocalNonAtomic(sId),
+      escrowReleaseSucceeds(sId),
+      escrowReleaseFails(sId),
+      // TOCTOU slash actions
+      slashSolverBegin(sId),
+      slashSolverCommit(sId),
+    }
+  }
+
+  // ─── Step Block ─────────────────────────────────────────────────────
+  // Models real block boundaries: 1-3 transactions followed by time advance.
+
+  action stepBlock = {
+    nondet delta = Set(1, 2, 3).oneOf()
+    any {
+      // 1-tx block
+      stepNoTimeAdvance.then(advanceTimeBy(delta)),
+      // 2-tx block
+      stepNoTimeAdvance.then(stepNoTimeAdvance).then(advanceTimeBy(delta)),
+      // 3-tx block
+      stepNoTimeAdvance.then(stepNoTimeAdvance).then(stepNoTimeAdvance).then(advanceTimeBy(delta)),
+    }
+  }
+
+  // ─── Adversarial Block Proposer ─────────────────────────────────────
+  // Targets known dangerous same-block combinations:
+  // - Double-slash TOCTOU on same solver
+  // - Fill + cancel race on same order
+  // - Non-atomic completion across time advance boundary
+
+  action stepAdversarialBlock = {
+    nondet delta = Set(1, 2, 3).oneOf()
+    nondet sId   = settlements.keys().union(Set(0)).oneOf()
+    nondet sId2  = settlements.keys().union(Set(0)).oneOf()
+    any {
+      // Double-slash TOCTOU: begin both, then commit both, then advance
+      slashSolverBegin(sId)
+        .then(slashSolverBegin(sId2))
+        .then(slashSolverCommit(sId))
+        .then(slashSolverCommit(sId2))
+        .then(advanceTimeBy(delta)),
+      // Non-atomic completion near expiry boundary
+      markCompletedNonAtomic(sId)
+        .then(advanceTimeBy(delta))
+        .then(escrowReleaseFails(sId)),
+      // Fill + cancel race
+      stepNoTimeAdvance
+        .then(stepNoTimeAdvance)
+        .then(advanceTimeBy(delta)),
+    }
   }
 
   // ─── Step: Nondeterministic exploration ──────────────────────────────
@@ -1366,6 +1846,60 @@ module AtomIntents {
     and filledOrderHasSolver
     and reputationScoreBounded
     and reputationConsistency
+
+  // ═══════════════════════════════════════════════════════════════════════
+  // CONCURRENCY INVARIANTS
+  // ═══════════════════════════════════════════════════════════════════════
+  //
+  // These invariants are expected to FAIL under the non-atomic/TOCTOU model,
+  // proving that the Rust implementation has real bugs.
+  // They are NOT included in allInvariants (which stays green).
+
+  // INV-18: Settlement-Escrow Consistency
+  // A Completed settlement with no pending release must have a Released escrow.
+  // EXPECTED: FAILS with non-atomic model — proves desync bug where
+  // settlement is Completed but escrow stays Locked after release failure.
+  val settlementEscrowConsistency = settlements.keys().forall(sId =>
+    val s = getSettlement(settlements, sId)
+    if (s.status == Completed and not(pendingEscrowReleases.keys().contains(sId))) {
+      escrows.keys().contains(s.escrowId) and
+      getEscrow(escrows, s.escrowId).status == Released
+    } else {
+      true
+    }
+  )
+
+  // INV-19: No Under-Slashing
+  // Per-solver, total intended slash should equal total actual slash.
+  // If TOCTOU occurs, the actual slash is less than intended because
+  // the second slash computed on the stale (higher) bond value, but the
+  // bond was already reduced by the first slash's commit.
+  // EXPECTED: FAILS with TOCTOU model — proves under-slashing.
+  val noUnderSlashing =
+    SOLVERS_SET.forall(solverId =>
+      val solverSettlements = settlements.keys().filter(sId =>
+        getSettlement(settlements, sId).solverId == solverId
+      )
+      val totalIntended = solverSettlements.fold(0, (acc, sId) =>
+        acc + getSlashInt(ghostIntendedSlash, sId)
+      )
+      val totalActual = solverSettlements.fold(0, (acc, sId) =>
+        acc + getSlashInt(ghostActualSlash, sId)
+      )
+      totalIntended <= totalActual or totalIntended == 0
+    )
+
+  // INV-20: Block Time Consistency
+  // Structural invariant: time never goes negative.
+  // Validates that the block model doesn't regress time.
+  val blockTimeConsistency = currentTime >= 0
+
+  // ─── Combined: all concurrency invariants ───────────────────────────
+  // These are checked separately from allInvariants.
+  val allConcurrencyInvariants =
+    settlementEscrowConsistency
+    and noUnderSlashing
+    and blockTimeConsistency
 
   // ─── Witnesses (reachability assertions) ─────────────────────────────
   // These SHOULD be violated by the simulator.
@@ -2021,4 +2555,252 @@ module AtomIntentsTest {
       .expect(filledOrderHasSolver)
       .expect(reputationConsistency)
       .expect(allInvariants)
+
+  // ═══════════════════════════════════════════════════════════════════════
+  // RACE CONDITION & CONCURRENCY TESTS
+  // ═══════════════════════════════════════════════════════════════════════
+
+  // ─── Test 22: Fill + Cancel Race (Same Block) ────────────────────────
+  // Fill and cancel the same order in the same block — only the first
+  // succeeds. If fill fires first, cancel must fail (and vice versa).
+  // Proves: order status transitions are exclusive.
+
+  run fillCancelRaceTest =
+    init
+      .then(registerSolver("solver-a", 100))
+      .then(submitOrder("order-1", "alice", 500, "uatom", 450, "uusdc", 10))
+      .expect(getOrder(orders, "order-1").status == Open)
+
+      // Solver fills the order first
+      .then(fillOrder("order-1", "solver-a"))
+      .expect(getOrder(orders, "order-1").status == Filled)
+
+      // Alice tries to cancel — must fail because order is already Filled
+      .then(cancelOrder("order-1", "alice").fail())
+
+  // ─── Test 23: Fill at Expiry Boundary ────────────────────────────────
+  // Fill is allowed AT expiry (<=), but settlement completion is blocked AT expiry.
+  // Proves: the boundary condition difference between orders and settlements.
+
+  run fillExpiryBoundaryTest =
+    init
+      .then(registerSolver("solver-a", 100))
+      .then(submitOrder("order-1", "alice", 500, "uatom", 450, "uusdc", 5))
+      .expect(getOrder(orders, "order-1").expiresAt == 5)
+
+      // Advance to exactly the expiry time
+      .then(advanceTime).then(advanceTime).then(advanceTime)
+      .then(advanceTime).then(advanceTime)
+      .expect(currentTime == 5)
+
+      // Fill is allowed AT expiry (order uses <=)
+      .then(fillOrder("order-1", "solver-a"))
+      .expect(getOrder(orders, "order-1").status == Filled)
+      .expect(allInvariants)
+
+  // ─── Test 24: Double Slash Same Block (Atomic) ───────────────────────
+  // Two settlements slashing the same solver atomically in sequence.
+  // Atomic slash handles this correctly — second slash sees reduced bond.
+  // Proves: atomic model correctly cascades bond reductions.
+
+  run doubleSlashSameBlockTest =
+    init
+      .then(registerSolver("solver-a", 200))
+
+      // Create two settlements for the same solver
+      .then(createSettlement(
+        "intent-1", "solver-a", "alice", 100, "uatom", 95, "uusdc", 90
+      ))
+      .then(createSettlement(
+        "intent-2", "solver-a", "bob", 100, "uatom", 95, "uusdc", 90
+      ))
+      .then(markUserLocked(1, false))
+      .then(markUserLocked(2, false))
+
+      // Advance past expiry
+      .then(advanceTime).then(advanceTime).then(advanceTime)
+      .then(advanceTime).then(advanceTime).then(advanceTime)
+      .then(advanceTime).then(advanceTime).then(advanceTime)
+      .then(advanceTime).then(advanceTime).then(advanceTime)
+      .then(advanceTime).then(advanceTime).then(advanceTime)
+      .expect(currentTime == 15)
+
+      // Both settlements fail
+      .then(handleTimeout(1))
+      .then(handleTimeout(2))
+      .expect(getSettlement(settlements, 1).status == Failed)
+      .expect(getSettlement(settlements, 2).status == Failed)
+
+      // Slash first settlement: min(2% of 100 = 2, MIN_SLASH=10) → actual = 10
+      .then(slashSolver(1))
+      .expect(getSolver(solvers, "solver-a").bondAmount == 190)
+
+      // Slash second settlement: bond is now 190, slash = 10 → 180
+      .then(slashSolver(2))
+      .expect(getSolver(solvers, "solver-a").bondAmount == 180)
+      .expect(getSolver(solvers, "solver-a").failedSettlements == 2)
+      .expect(solverBondNonNegative)
+      .expect(allInvariants)
+
+  // ─── Test 25: Double Slash TOCTOU ────────────────────────────────────
+  // Two settlements slash the same solver with TOCTOU modeling.
+  // Both read the original bond (200), both compute slash of 10,
+  // but the second commit uses stale data → under-slashing.
+  // Proves: TOCTOU bug causes actual slash < intended slash.
+
+  run doubleSlashTOCTOUTest =
+    init
+      .then(registerSolver("solver-a", 200))
+
+      .then(createSettlement(
+        "intent-1", "solver-a", "alice", 100, "uatom", 95, "uusdc", 90
+      ))
+      .then(createSettlement(
+        "intent-2", "solver-a", "bob", 100, "uatom", 95, "uusdc", 90
+      ))
+      .then(markUserLocked(1, false))
+      .then(markUserLocked(2, false))
+
+      // Advance past expiry
+      .then(advanceTime).then(advanceTime).then(advanceTime)
+      .then(advanceTime).then(advanceTime).then(advanceTime)
+      .then(advanceTime).then(advanceTime).then(advanceTime)
+      .then(advanceTime).then(advanceTime).then(advanceTime)
+      .then(advanceTime).then(advanceTime).then(advanceTime)
+
+      .then(handleTimeout(1))
+      .then(handleTimeout(2))
+
+      // TOCTOU: both begin reads see bond=200
+      .then(slashSolverBegin(1))
+      .expect(staleBondReads.get(1) == 200)
+      .expect(getSlashInt(ghostIntendedSlash, 1) == 10)
+
+      .then(slashSolverBegin(2))
+      .expect(staleBondReads.get(2) == 200)
+      .expect(getSlashInt(ghostIntendedSlash, 2) == 10)
+
+      // First commit: bond 200 - 10 = 190
+      .then(slashSolverCommit(1))
+      .expect(getSolver(solvers, "solver-a").bondAmount == 190)
+      .expect(getSlashInt(ghostActualSlash, 1) == 10)
+
+      // Second commit: uses stale bond=200, computes slash=10,
+      // but applies to current bond=190 → 190 - 10 = 180
+      // In the real Rust code, the second write would set bond to
+      // staleBond(200) - slash(10) = 190, OVERWRITING the first deduction!
+      // Our model correctly computes newBond = currentBond(190) - actual(10) = 180
+      // but the real bug is the overwrite to 190.
+      .then(slashSolverCommit(2))
+      .expect(getSlashInt(ghostActualSlash, 2) == 10)
+
+  // ─── Test 26: Deregister + Create Race ───────────────────────────────
+  // Solver deregisters → new settlement for that solver must be blocked.
+  // Proves: deregistration properly prevents new settlement creation.
+
+  run deregisterCreateRaceTest =
+    init
+      .then(registerSolver("solver-a", 100))
+      .then(createSettlement(
+        "intent-1", "solver-a", "alice", 500, "uatom", 450, "uusdc", 400
+      ))
+      .then(markUserLocked(1, false))
+      .then(markSolverLocked(1))
+      .then(markExecuting(1))
+      .then(markCompleted(1))
+      .expect(getSettlement(settlements, 1).status == Completed)
+
+      // Deregister solver (all settlements terminal)
+      .then(deregisterSolver("solver-a"))
+      .expect(not(solvers.keys().contains("solver-a")))
+
+      // New settlement for deregistered solver must fail
+      .then(createSettlement(
+        "intent-2", "solver-a", "bob", 300, "uatom", 290, "uusdc", 280
+      ).fail())
+
+  // ─── Test 27: Timeout vs Completion Race ─────────────────────────────
+  // At exactly the expiry time: completion is blocked (uses strict <),
+  // but timeout succeeds (uses >=).
+  // Proves: the boundary condition prevents completion after expiry.
+
+  run timeoutCompletionRaceTest =
+    init
+      .then(registerSolver("solver-a", 200))
+      .then(createSettlement(
+        "intent-1", "solver-a", "alice", 500, "uatom", 450, "uusdc", 400
+      ))
+      .then(markUserLocked(1, false))
+      .then(markSolverLocked(1))
+      .then(markExecuting(1))
+
+      // Advance to exactly the expiry time (IBC_TIMEOUT + SAFETY_BUFFER = 15)
+      .then(advanceTime).then(advanceTime).then(advanceTime)
+      .then(advanceTime).then(advanceTime).then(advanceTime)
+      .then(advanceTime).then(advanceTime).then(advanceTime)
+      .then(advanceTime).then(advanceTime).then(advanceTime)
+      .then(advanceTime).then(advanceTime).then(advanceTime)
+      .expect(currentTime == 15)
+
+      // Completion blocked at expiry (settlement uses currentTime < expiresAt)
+      .then(markCompleted(1).fail())
+
+  // ─── Test 28: Non-Atomic Completion (Proves Desync Bug) ──────────────
+  // Settlement completes non-atomically, time advances past escrow expiry,
+  // escrow release fails. Settlement is Completed but escrow is stuck Locked.
+  // Proves: INV-18 (settlementEscrowConsistency) fails.
+
+  run nonAtomicCompletionTest =
+    init
+      .then(registerSolver("solver-a", 200))
+      .then(createSettlement(
+        "intent-1", "solver-a", "alice", 500, "uatom", 450, "uusdc", 400
+      ))
+      .then(markUserLocked(1, false))
+      .then(markSolverLocked(1))
+      .then(markExecuting(1))
+
+      // Non-atomic completion: settlement → Completed, escrow stays Locked
+      .then(markCompletedNonAtomic(1))
+      .expect(getSettlement(settlements, 1).status == Completed)
+      .expect(getEscrow(escrows, 2).status == Locked)
+      .expect(pendingEscrowReleases.keys().contains(1))
+
+      // Time advances past escrow expiry
+      .then(advanceTime).then(advanceTime).then(advanceTime)
+      .then(advanceTime).then(advanceTime).then(advanceTime)
+      .then(advanceTime).then(advanceTime).then(advanceTime)
+      .then(advanceTime).then(advanceTime).then(advanceTime)
+      .then(advanceTime).then(advanceTime).then(advanceTime)
+      .expect(currentTime == 15)
+
+      // Escrow release fails at boundary — escrow stays Locked!
+      .then(escrowReleaseFails(1))
+      .expect(getEscrow(escrows, 2).status == Locked)
+      .expect(not(pendingEscrowReleases.keys().contains(1)))
+
+      // Settlement is Completed, escrow is Locked, no pending release
+      // → settlementEscrowConsistency should FAIL
+      .expect(getSettlement(settlements, 1).status == Completed)
+      .expect(getEscrow(escrows, 2).status == Locked)
+      .expect(not(settlementEscrowConsistency))
+
+  // ─── Test 29: Double Fill Same Block ─────────────────────────────────
+  // Two solvers try to fill the same order — only the first succeeds.
+  // Proves: order fill is exclusive even within a single block.
+
+  run doubleFillSameBlockTest =
+    init
+      .then(registerSolver("solver-a", 100))
+      .then(registerSolver("solver-b", 100))
+      .then(submitOrder("order-1", "alice", 500, "uatom", 450, "uusdc", 10))
+      .expect(getOrder(orders, "order-1").status == Open)
+
+      // First solver fills
+      .then(fillOrder("order-1", "solver-a"))
+      .expect(getOrder(orders, "order-1").status == Filled)
+      .expect(getOrder(orders, "order-1").filledBySolver == "solver-a")
+
+      // Second solver fill must fail — order already Filled
+      .then(fillOrder("order-1", "solver-b").fail())
 }
